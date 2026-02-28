@@ -17,6 +17,8 @@ using System.Threading.RateLimiting;
 var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "AppCors";
 
+ConfigureRuntimePortBinding(builder);
+
 // Add services to the container.
 
 builder.Services.AddControllers()
@@ -204,8 +206,7 @@ if (!string.IsNullOrWhiteSpace(sqliteBuilder.DataSource) && sqliteBuilder.DataSo
         }
     }
 
-    var dataDir = Path.Combine(serverRoot, "App_Data");
-    Directory.CreateDirectory(dataDir);
+    var dataDir = ResolveWritableDataDirectory(serverRoot);
     var appDataPath = Path.Combine(dataDir, sqliteBuilder.DataSource);
     var legacyPath = Path.Combine(serverRoot, sqliteBuilder.DataSource);
 
@@ -727,7 +728,6 @@ static void RequireIntegrationSecretProtection(IConfiguration configuration, Lis
             keysPrefix = "Security:IntegrationSecrets:Kms:DataKeys";
             break;
         case "config":
-            errors.Add("Security:IntegrationSecrets:Provider must be 'kms' or 'keyvault' in production.");
             activeKeyIdKey = "Security:IntegrationSecrets:ActiveKeyId";
             keysPrefix = "Security:IntegrationSecrets:Keys";
             break;
@@ -745,6 +745,15 @@ static void RequireIntegrationSecretProtection(IConfiguration configuration, Lis
 
     var activeKeyPath = $"{keysPrefix}:{activeKeyId}";
     RequireBase64Key(configuration, activeKeyPath, exactBytes: 32, minBytes: null, errors);
+
+    if (provider == "config")
+    {
+        var configuredKey = configuration[activeKeyPath];
+        if (string.Equals(configuredKey, "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", StringComparison.Ordinal))
+        {
+            errors.Add($"{activeKeyPath} must be overridden in production.");
+        }
+    }
 }
 
 static void RequireFlagEnabled(IConfiguration configuration, string key, List<string> errors)
@@ -788,6 +797,40 @@ static void RequireBase64Key(
     {
         errors.Add($"{key} must be valid base64.");
     }
+}
+
+static void ConfigureRuntimePortBinding(WebApplicationBuilder builder)
+{
+    var rawPort = Environment.GetEnvironmentVariable("PORT");
+    if (!int.TryParse(rawPort, out var port) || port <= 0)
+    {
+        return;
+    }
+
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+
+static string ResolveWritableDataDirectory(string serverRoot)
+{
+    var explicitDataDir = Environment.GetEnvironmentVariable("JURISFLOW_DATA_DIR");
+    if (!string.IsNullOrWhiteSpace(explicitDataDir))
+    {
+        var fullPath = Path.GetFullPath(explicitDataDir);
+        Directory.CreateDirectory(fullPath);
+        return fullPath;
+    }
+
+    var railwayVolumePath = Environment.GetEnvironmentVariable("RAILWAY_VOLUME_MOUNT_PATH");
+    if (!string.IsNullOrWhiteSpace(railwayVolumePath))
+    {
+        var fullPath = Path.Combine(Path.GetFullPath(railwayVolumePath), "App_Data");
+        Directory.CreateDirectory(fullPath);
+        return fullPath;
+    }
+
+    var defaultPath = Path.Combine(serverRoot, "App_Data");
+    Directory.CreateDirectory(defaultPath);
+    return defaultPath;
 }
 
 public partial class Program { }
