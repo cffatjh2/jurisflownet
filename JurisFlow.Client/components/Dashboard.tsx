@@ -462,7 +462,7 @@ const Dashboard: React.FC = () => {
                 return (
                   <div key={entry.id} className="flex items-center gap-3 text-sm border-b border-gray-50 last:border-0 pb-2 last:pb-0">
                     <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold text-xs shrink-0">
-                      {matter?.client.name.charAt(0) || '?'}
+                      {matter?.client?.name?.charAt(0) || '?'}
                     </div>
                     <div className="overflow-hidden flex-1">
                       <p className="font-semibold text-slate-800 truncate text-xs">{matter?.name || 'Unknown Matter'}</p>

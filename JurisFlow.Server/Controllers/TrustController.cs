@@ -12,18 +12,20 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class TrustController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
+        private readonly TrustComplianceService _trustComplianceService;
 
-        public TrustController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure)
+        public TrustController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure, TrustComplianceService trustComplianceService)
         {
             _context = context;
             _auditLogger = auditLogger;
             _firmStructure = firmStructure;
+            _trustComplianceService = trustComplianceService;
         }
 
         private async Task<bool> IsPeriodLocked(DateTime date)
@@ -559,6 +561,19 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<IEnumerable<ReconciliationRecord>>> GetReconciliations()
         {
             return await _context.ReconciliationRecords.Include(r => r.TrustAccount).OrderByDescending(r => r.PeriodEnd).ToListAsync();
+        }
+
+        [HttpGet("compliance")]
+        public async Task<ActionResult> GetCompliance([FromQuery] string trustAccountId, [FromQuery] double? bankStatementBalance = null)
+        {
+            if (string.IsNullOrWhiteSpace(trustAccountId))
+            {
+                return BadRequest("Trust account id is required.");
+            }
+
+            var summary = await _trustComplianceService.EvaluateAsync(trustAccountId, bankStatementBalance);
+            if (summary == null) return NotFound("Trust account not found");
+            return Ok(summary);
         }
 
         [HttpPost("reconcile")]

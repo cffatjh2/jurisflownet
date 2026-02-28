@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CalendarEvent } from '../../types';
 import { Clock } from '../Icons';
+import { clientApi } from '../../services/clientApi';
 
 const ClientCalendar: React.FC = () => {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -12,11 +13,7 @@ const ClientCalendar: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const mattersRes = await fetch('/api/client/matters', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const mattersData = await mattersRes.json();
+        const mattersData = await clientApi.fetchJson('/matters');
         setMatters(mattersData);
         
         // Get events from matters - flatten all events from all matters

@@ -273,7 +273,7 @@ const Tasks: React.FC = () => {
   return (
     <div className="h-full flex flex-col bg-gray-50/50 overflow-hidden">
       {/* Header */}
-      <div className="px-8 py-6 bg-white border-b border-gray-200 shrink-0">
+      <div className="px-6 py-4 bg-white border-b border-gray-200 shrink-0">
         <div className="flex justify-between items-center mb-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">{t('tasks_title')}</h1>

@@ -41,12 +41,15 @@ export default function SignatureRequestModal({
         signerEmail: '',
         signerName: '',
         clientId: '',
-        expiresAt: ''
+        expiresAt: '',
+        verificationMethod: 'EmailLink'
     });
+    const [disclosureProvided, setDisclosureProvided] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
             loadData();
+            setDisclosureProvided(false);
             if (documentId) {
                 setFormData(prev => ({ ...prev, documentId }));
             }
@@ -92,7 +95,11 @@ export default function SignatureRequestModal({
                 signerEmail: formData.signerEmail,
                 signerName: formData.signerName || undefined,
                 clientId: formData.clientId || undefined,
-                expiresAt: formData.expiresAt || undefined
+                expiresAt: formData.expiresAt || undefined,
+                verificationMethod: formData.verificationMethod || undefined,
+                requiresKba: formData.verificationMethod === 'Kba',
+                disclosureProvided,
+                disclosureVersion: 'v1'
             });
             onSuccess?.();
             onClose();
@@ -220,6 +227,39 @@ export default function SignatureRequestModal({
                         />
                     </div>
 
+                    {/* Verification Method */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Verification Method
+                        </label>
+                        <select
+                            value={formData.verificationMethod}
+                            onChange={(e) => setFormData(prev => ({ ...prev, verificationMethod: e.target.value }))}
+                            className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        >
+                            <option value="EmailLink">Email Link (Default)</option>
+                            <option value="SmsOtp">SMS One-Time Code</option>
+                            <option value="Kba">Knowledge-Based (KBA)</option>
+                            <option value="None">No Verification</option>
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">
+                            Non-email methods require verification before signing is allowed.
+                        </p>
+                    </div>
+
+                    {/* Disclosure Confirmation */}
+                    <label className="flex items-start gap-2 text-sm text-slate-600">
+                        <input
+                            type="checkbox"
+                            checked={disclosureProvided}
+                            onChange={(e) => setDisclosureProvided(e.target.checked)}
+                            className="mt-1"
+                        />
+                        <span>
+                            I confirm the ESIGN/UETA disclosure has been provided to the signer.
+                        </span>
+                    </label>
+
                     {/* Info Box */}
                     <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
                         <Clock className="w-4 h-4 inline mr-1" />
@@ -237,7 +277,7 @@ export default function SignatureRequestModal({
                     </button>
                     <button
                         onClick={handleSubmit}
-                        disabled={submitting || !formData.documentId || !formData.signerEmail}
+                        disabled={submitting || !formData.documentId || !formData.signerEmail || !disclosureProvided}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition flex items-center gap-2"
                     >
                         {submitting ? (

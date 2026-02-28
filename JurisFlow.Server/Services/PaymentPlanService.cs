@@ -1,3 +1,4 @@
+using System.Text.Json;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.Models;
@@ -8,10 +9,14 @@ namespace JurisFlow.Server.Services
     public class PaymentPlanService
     {
         private readonly JurisFlowDbContext _context;
+        private readonly StripePaymentService _stripePaymentService;
+        private readonly ILogger<PaymentPlanService> _logger;
 
-        public PaymentPlanService(JurisFlowDbContext context)
+        public PaymentPlanService(JurisFlowDbContext context, StripePaymentService stripePaymentService, ILogger<PaymentPlanService> logger)
         {
             _context = context;
+            _stripePaymentService = stripePaymentService;
+            _logger = logger;
         }
 
         public DateTime GetNextRunDate(DateTime from, string frequency)
@@ -43,7 +48,7 @@ namespace JurisFlow.Server.Services
                 return null;
             }
 
-            var amount = Math.Min(plan.InstallmentAmount, plan.RemainingAmount);
+            var amount = Math.Min((decimal)plan.InstallmentAmount, (decimal)plan.RemainingAmount);
             if (amount <= 0)
             {
                 return null;
@@ -56,14 +61,38 @@ namespace JurisFlow.Server.Services
             }
 
             var now = runAt ?? DateTime.UtcNow;
-            var transaction = new PaymentTransaction
+            if (plan.AutoPayEnabled)
+            {
+                if (string.Equals(plan.AutoPayMethod, "Stripe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return await RunStripeAutoPayAsync(plan, invoice, amount, processedBy, payerEmail, payerName, now);
+                }
+
+                var failed = CreateFailedAutoPayTransaction(
+                    plan,
+                    amount,
+                    processedBy,
+                    payerEmail,
+                    payerName,
+                    now,
+                    $"Unsupported AutoPay method: {plan.AutoPayMethod ?? "unknown"}");
+
+                _context.PaymentTransactions.Add(failed);
+                plan.Status = "Past Due";
+                plan.NextRunDate = now.AddDays(1);
+                plan.UpdatedAt = now;
+                await _context.SaveChangesAsync();
+                return failed;
+            }
+
+            var manualTransaction = new PaymentTransaction
             {
                 Id = Guid.NewGuid().ToString(),
                 InvoiceId = plan.InvoiceId,
                 ClientId = plan.ClientId,
                 Amount = amount,
                 Currency = "USD",
-                PaymentMethod = plan.AutoPayEnabled ? "AutoPay (Simulated)" : "Payment Plan",
+                PaymentMethod = "Payment Plan",
                 Status = "Succeeded",
                 PayerEmail = payerEmail,
                 PayerName = payerName,
@@ -71,32 +100,167 @@ namespace JurisFlow.Server.Services
                 ProcessedAt = now,
                 ScheduledFor = plan.NextRunDate,
                 PaymentPlanId = plan.Id,
-                Source = plan.AutoPayEnabled ? "AutoPay" : "Plan",
+                Source = "Plan",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+
+            _context.PaymentTransactions.Add(manualTransaction);
+            ApplyPaymentToInvoice(invoice, amount, now);
+            UpdatePlanAfterSuccess(plan, amount, now);
+
+            await _context.SaveChangesAsync();
+            return manualTransaction;
+        }
+
+        private async Task<PaymentTransaction> RunStripeAutoPayAsync(
+            PaymentPlan plan,
+            Invoice? invoice,
+            decimal amount,
+            string? processedBy,
+            string? payerEmail,
+            string? payerName,
+            DateTime now)
+        {
+            var reference = ParseAutoPayReference(plan.AutoPayReference);
+            if (reference == null || string.IsNullOrWhiteSpace(reference.CustomerId) || string.IsNullOrWhiteSpace(reference.PaymentMethodId))
+            {
+                var failed = CreateFailedAutoPayTransaction(plan, amount, processedBy, payerEmail, payerName, now, "AutoPay payment method is not configured.");
+                _context.PaymentTransactions.Add(failed);
+                plan.Status = "Past Due";
+                plan.NextRunDate = now.AddDays(1);
+                plan.UpdatedAt = now;
+                await _context.SaveChangesAsync();
+                return failed;
+            }
+
+            var transaction = new PaymentTransaction
+            {
+                Id = Guid.NewGuid().ToString(),
+                InvoiceId = plan.InvoiceId,
+                ClientId = plan.ClientId,
+                Amount = amount,
+                Currency = "USD",
+                PaymentMethod = "Stripe",
+                Status = "Processing",
+                PayerEmail = payerEmail,
+                PayerName = payerName,
+                ProcessedBy = processedBy,
+                ScheduledFor = plan.NextRunDate,
+                PaymentPlanId = plan.Id,
+                Source = "AutoPay",
+                ProviderCustomerId = reference.CustomerId,
                 CreatedAt = now,
                 UpdatedAt = now
             };
 
             _context.PaymentTransactions.Add(transaction);
+            await _context.SaveChangesAsync();
 
-            if (invoice != null)
+            try
             {
-                invoice.AmountPaid += amount;
-                invoice.Balance -= amount;
-                if (invoice.Balance < 0) invoice.Balance = 0;
+                var intent = await _stripePaymentService.ChargeSavedPaymentMethodAsync(
+                    amount,
+                    "USD",
+                    reference.CustomerId!,
+                    reference.PaymentMethodId!,
+                    $"AutoPay for {plan.Name}",
+                    new Dictionary<string, string?>
+                    {
+                        ["paymentPlanId"] = plan.Id,
+                        ["clientId"] = plan.ClientId,
+                        ["invoiceId"] = plan.InvoiceId
+                    });
 
-                if (invoice.Balance == 0)
+                transaction.ProviderPaymentIntentId = intent.Id;
+                transaction.ExternalTransactionId = intent.Id;
+                transaction.ProviderCustomerId = intent.CustomerId;
+                transaction.Status = MapStripeStatus(intent.Status);
+                transaction.ProcessedAt = intent.Status == "succeeded" ? now : null;
+                transaction.UpdatedAt = now;
+
+                if (string.Equals(intent.Status, "succeeded", StringComparison.OrdinalIgnoreCase))
                 {
-                    invoice.Status = InvoiceStatus.Paid;
+                    ApplyPaymentToInvoice(invoice, amount, now);
+                    UpdatePlanAfterSuccess(plan, amount, now);
                 }
-                else if (invoice.Status == InvoiceStatus.Sent || invoice.Status == InvoiceStatus.Approved)
+                else
                 {
-                    invoice.Status = InvoiceStatus.PartiallyPaid;
+                    plan.Status = "Past Due";
+                    plan.NextRunDate = now.AddDays(1);
+                    plan.UpdatedAt = now;
+                    transaction.FailureReason = $"Stripe status: {intent.Status}";
                 }
 
-                invoice.UpdatedAt = now;
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Stripe AutoPay failed for plan {PlanId}", plan.Id);
+                transaction.Status = "Failed";
+                transaction.FailureReason = "AutoPay charge failed.";
+                transaction.UpdatedAt = now;
+                plan.Status = "Past Due";
+                plan.NextRunDate = now.AddDays(1);
+                plan.UpdatedAt = now;
+                await _context.SaveChangesAsync();
             }
 
-            plan.RemainingAmount -= amount;
+            return transaction;
+        }
+
+        private static PaymentTransaction CreateFailedAutoPayTransaction(
+            PaymentPlan plan,
+            decimal amount,
+            string? processedBy,
+            string? payerEmail,
+            string? payerName,
+            DateTime now,
+            string reason)
+        {
+            return new PaymentTransaction
+            {
+                Id = Guid.NewGuid().ToString(),
+                InvoiceId = plan.InvoiceId,
+                ClientId = plan.ClientId,
+                Amount = amount,
+                Currency = "USD",
+                PaymentMethod = "Stripe",
+                Status = "Failed",
+                FailureReason = reason,
+                PayerEmail = payerEmail,
+                PayerName = payerName,
+                ProcessedBy = processedBy,
+                ScheduledFor = plan.NextRunDate,
+                PaymentPlanId = plan.Id,
+                Source = "AutoPay",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+        }
+
+        private static void ApplyPaymentToInvoice(Invoice? invoice, decimal amount, DateTime now)
+        {
+            if (invoice == null) return;
+            invoice.AmountPaid += amount;
+            invoice.Balance -= amount;
+            if (invoice.Balance < 0) invoice.Balance = 0;
+
+            if (invoice.Balance == 0)
+            {
+                invoice.Status = InvoiceStatus.Paid;
+            }
+            else if (invoice.Status == InvoiceStatus.Sent || invoice.Status == InvoiceStatus.Approved)
+            {
+                invoice.Status = InvoiceStatus.PartiallyPaid;
+            }
+
+            invoice.UpdatedAt = now;
+        }
+
+        private void UpdatePlanAfterSuccess(PaymentPlan plan, decimal amount, DateTime now)
+        {
+            plan.RemainingAmount -= (double)amount;
             plan.UpdatedAt = now;
             if (plan.RemainingAmount <= 0)
             {
@@ -108,9 +272,47 @@ namespace JurisFlow.Server.Services
             {
                 plan.NextRunDate = GetNextRunDate(plan.NextRunDate, plan.Frequency);
             }
-
-            await _context.SaveChangesAsync();
-            return transaction;
         }
+
+        private static string MapStripeStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return "Processing";
+            var normalized = status.ToLowerInvariant();
+            return normalized switch
+            {
+                "succeeded" => "Succeeded",
+                "requires_action" => "Requires Action",
+                "processing" => "Processing",
+                "requires_payment_method" => "Failed",
+                "canceled" => "Failed",
+                _ => "Processing"
+            };
+        }
+
+        private static AutoPayReferenceData? ParseAutoPayReference(string? reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference)) return null;
+            try
+            {
+                return JsonSerializer.Deserialize<AutoPayReferenceData>(reference);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public static string BuildAutoPayReference(AutoPayReferenceData data)
+        {
+            return JsonSerializer.Serialize(data);
+        }
+    }
+
+    public class AutoPayReferenceData
+    {
+        public string Provider { get; set; } = "stripe";
+        public string? CustomerId { get; set; }
+        public string? PaymentMethodId { get; set; }
+        public string? SetupIntentId { get; set; }
     }
 }

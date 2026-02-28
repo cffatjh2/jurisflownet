@@ -1,26 +1,50 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
+using JurisFlow.Server.Services;
 using System.Text.Json;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Policy = "StaffOnly")]
     public class StaffMessagesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
+        private readonly IWebHostEnvironment _env;
+        private readonly TenantContext _tenantContext;
+        private const int MaxAttachmentCount = 10;
+        private const int MaxAttachmentSizeBytes = 10 * 1024 * 1024;
+        private const int MaxTotalAttachmentSizeBytes = 25 * 1024 * 1024;
+        private static readonly IReadOnlyDictionary<string, string> AllowedMimeToExtension = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["application/pdf"] = ".pdf",
+            ["image/png"] = ".png",
+            ["image/jpeg"] = ".jpg",
+            ["image/webp"] = ".webp",
+            ["application/msword"] = ".doc",
+            ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx",
+            ["application/vnd.ms-excel"] = ".xls",
+            ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = ".xlsx",
+            ["application/vnd.ms-powerpoint"] = ".ppt",
+            ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = ".pptx",
+            ["text/plain"] = ".txt"
+        };
 
-        public StaffMessagesController(JurisFlowDbContext context)
+        public StaffMessagesController(JurisFlowDbContext context, IWebHostEnvironment env, TenantContext tenantContext)
         {
             _context = context;
+            _env = env;
+            _tenantContext = tenantContext;
         }
 
         [HttpGet]
         public async Task<ActionResult<IEnumerable<StaffMessage>>> GetMessages([FromQuery] string? userId)
         {
-            var query = _context.StaffMessages.AsQueryable();
+            var query = _context.StaffMessages.AsNoTracking().AsQueryable();
             if (!string.IsNullOrWhiteSpace(userId))
             {
                 query = query.Where(m => m.SenderId == userId || m.RecipientId == userId);
@@ -43,6 +67,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var thread = await _context.StaffMessages
+                .AsNoTracking()
                 .Where(m => (m.SenderId == userA && m.RecipientId == userB) || (m.SenderId == userB && m.RecipientId == userA))
                 .OrderBy(m => m.CreatedAt)
                 .ToListAsync();
@@ -58,7 +83,15 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(ModelState);
             }
 
-            var attachments = await SaveAttachments(dto.Attachments);
+            List<MessageAttachment> attachments;
+            try
+            {
+                attachments = await SaveAttachments(dto.Attachments);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
 
             var message = new StaffMessage
             {
@@ -124,51 +157,162 @@ namespace JurisFlow.Server.Controllers
             var result = new List<MessageAttachment>();
             if (attachments == null || attachments.Count == 0) return result;
 
-            var root = Path.Combine(Directory.GetCurrentDirectory(), "uploads", "message-attachments");
+            if (attachments.Count > MaxAttachmentCount)
+            {
+                throw new InvalidOperationException($"A maximum of {MaxAttachmentCount} attachments is allowed per message.");
+            }
+
+            var root = GetMessageAttachmentRoot();
             if (!Directory.Exists(root)) Directory.CreateDirectory(root);
 
+            long totalBytes = 0;
             foreach (var att in attachments)
             {
-                if (string.IsNullOrWhiteSpace(att.Data)) continue;
-                var parts = att.Data.Split(',');
-                if (parts.Length != 2) continue;
-                var header = parts[0];
-                var base64 = parts[1];
-                var mime = "application/octet-stream";
-                var mimeSplit = header.Split(';').FirstOrDefault()?.Replace("data:", "");
-                if (!string.IsNullOrWhiteSpace(mimeSplit)) mime = mimeSplit;
+                var (mimeType, base64Payload) = ParseAttachmentData(att);
+                if (!AllowedMimeToExtension.TryGetValue(mimeType, out var ext))
+                {
+                    throw new InvalidOperationException($"Attachment MIME type '{mimeType}' is not allowed.");
+                }
 
-                var bytes = Convert.FromBase64String(base64);
-                var ext = MimeToExt(mime, att.FileName);
-                var fileName = $"{Guid.NewGuid()}{ext}";
+                var bytes = DecodeBase64(base64Payload, MaxAttachmentSizeBytes);
+                totalBytes += bytes.Length;
+                if (totalBytes > MaxTotalAttachmentSizeBytes)
+                {
+                    throw new InvalidOperationException(
+                        $"Total attachment payload exceeds the {(MaxTotalAttachmentSizeBytes / (1024 * 1024)).ToString()} MB limit.");
+                }
+
+                var fileName = $"{Guid.NewGuid():N}{ext}";
                 var savePath = Path.Combine(root, fileName);
                 await System.IO.File.WriteAllBytesAsync(savePath, bytes);
 
                 result.Add(new MessageAttachment
                 {
-                    FileName = att.FileName ?? fileName,
-                    FilePath = $"/uploads/message-attachments/{fileName}",
-                    MimeType = mime,
+                    FileName = NormalizeDisplayFileName(att.FileName, ext),
+                    FilePath = $"/api/files/messages/{fileName}",
+                    MimeType = mimeType,
                     Size = bytes.Length
                 });
             }
             return result;
         }
 
-        private static string MimeToExt(string mime, string? originalName)
+        private string GetMessageAttachmentRoot()
         {
-            if (!string.IsNullOrEmpty(originalName) && Path.HasExtension(originalName))
+            if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
             {
-                return Path.GetExtension(originalName);
+                throw new InvalidOperationException("Tenant context is missing.");
             }
-            return mime switch
+            return Path.Combine(_env.ContentRootPath, "uploads", _tenantContext.TenantId, "message-attachments");
+        }
+
+        private static (string MimeType, string Base64Payload) ParseAttachmentData(AttachmentDto attachment)
+        {
+            if (string.IsNullOrWhiteSpace(attachment.Data))
             {
-                "image/png" => ".png",
-                "image/jpeg" => ".jpg",
-                "application/pdf" => ".pdf",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
-                _ => ".bin"
-            };
+                throw new InvalidOperationException("Attachment data is required.");
+            }
+
+            var rawData = attachment.Data.Trim();
+            if (!rawData.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Attachment payload must be a base64 data URL.");
+            }
+
+            var commaIndex = rawData.IndexOf(',');
+            if (commaIndex <= 5 || commaIndex >= rawData.Length - 1)
+            {
+                throw new InvalidOperationException("Attachment payload is malformed.");
+            }
+
+            var header = rawData.Substring(5, commaIndex - 5);
+            var base64Payload = rawData[(commaIndex + 1)..].Trim();
+            if (string.IsNullOrWhiteSpace(base64Payload))
+            {
+                throw new InvalidOperationException("Attachment payload is empty.");
+            }
+
+            var headerParts = header.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (headerParts.Length == 0 || string.IsNullOrWhiteSpace(headerParts[0]))
+            {
+                throw new InvalidOperationException("Attachment MIME type is required.");
+            }
+
+            if (!headerParts.Any(p => string.Equals(p, "base64", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("Attachment payload must use base64 encoding.");
+            }
+
+            var mimeType = headerParts[0].Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(attachment.Type) &&
+                !string.Equals(attachment.Type.Trim(), mimeType, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Attachment type metadata does not match payload MIME type.");
+            }
+
+            return (mimeType, base64Payload);
+        }
+
+        private static byte[] DecodeBase64(string base64Payload, int maxBytes)
+        {
+            if (base64Payload.Length % 4 != 0)
+            {
+                throw new InvalidOperationException("Attachment payload is not valid base64.");
+            }
+
+            var padding = base64Payload.EndsWith("==", StringComparison.Ordinal)
+                ? 2
+                : base64Payload.EndsWith("=", StringComparison.Ordinal) ? 1 : 0;
+
+            var expectedBytes = ((long)base64Payload.Length / 4L) * 3L - padding;
+            if (expectedBytes <= 0 || expectedBytes > int.MaxValue)
+            {
+                throw new InvalidOperationException("Attachment payload is not valid base64.");
+            }
+
+            if (expectedBytes > maxBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
+            }
+
+            var buffer = new byte[(int)expectedBytes];
+            if (!Convert.TryFromBase64String(base64Payload, buffer, out var bytesWritten))
+            {
+                throw new InvalidOperationException("Attachment payload is not valid base64.");
+            }
+
+            if (bytesWritten <= 0 || bytesWritten > maxBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
+            }
+
+            return bytesWritten == buffer.Length ? buffer : buffer[..bytesWritten];
+        }
+
+        private static string NormalizeDisplayFileName(string? fileName, string extension)
+        {
+            var candidate = Path.GetFileName(fileName ?? string.Empty);
+            var baseName = Path.GetFileNameWithoutExtension(candidate);
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                return $"attachment{extension}";
+            }
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var sanitized = new string(baseName.Where(ch => !invalidChars.Contains(ch)).ToArray());
+            if (string.IsNullOrWhiteSpace(sanitized))
+            {
+                sanitized = "attachment";
+            }
+
+            if (sanitized.Length > 80)
+            {
+                sanitized = sanitized[..80];
+            }
+
+            return $"{sanitized}{extension}";
         }
     }
 }

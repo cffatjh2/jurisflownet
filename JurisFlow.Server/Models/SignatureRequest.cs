@@ -58,6 +58,15 @@ namespace JurisFlow.Server.Models
         public string? SignerUserAgent { get; set; }
         public string? SignerLocation { get; set; }
 
+        // Verification & reminder tracking
+        public string? VerificationMethod { get; set; }
+        public string? VerificationStatus { get; set; }
+        public DateTime? VerificationCompletedAt { get; set; }
+        public string? VerificationNotes { get; set; }
+        public int ReminderCount { get; set; } = 0;
+        public DateTime? LastReminderAt { get; set; }
+        public DateTime? ExpiredAt { get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

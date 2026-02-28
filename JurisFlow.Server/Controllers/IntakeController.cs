@@ -3,19 +3,32 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
+using JurisFlow.Server.Services;
 using System.Text.Json;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Policy = "StaffOnly")]
     public class IntakeController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
+        private readonly OutboundEmailService _outboundEmailService;
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<IntakeController> _logger;
 
-        public IntakeController(JurisFlowDbContext context)
+        public IntakeController(
+            JurisFlowDbContext context,
+            OutboundEmailService outboundEmailService,
+            IConfiguration configuration,
+            ILogger<IntakeController> logger)
         {
             _context = context;
+            _outboundEmailService = outboundEmailService;
+            _configuration = configuration;
+            _logger = logger;
         }
 
         // ========== FORMS MANAGEMENT ==========
@@ -191,8 +204,8 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
 
-            // TODO: Send notification email if configured
-            // TODO: Auto-create lead if configured
+            await QueueSubmissionNotificationAsync(form, submission, ipAddress, userAgent);
+            await AutoCreateLeadIfConfiguredAsync(form, submission);
 
             return Ok(new
             {
@@ -341,6 +354,137 @@ namespace JurisFlow.Server.Controllers
                 .Replace("\"", "")
                 .Replace(".", "")
                 .Replace(",", "");
+        }
+
+        private async Task QueueSubmissionNotificationAsync(IntakeForm form, IntakeSubmission submission, string? ipAddress, string? userAgent)
+        {
+            if (string.IsNullOrWhiteSpace(form.NotifyEmail))
+            {
+                return;
+            }
+
+            try
+            {
+                var subject = $"New intake submission: {form.Name}";
+                var body = $"""
+Submission ID: {submission.Id}
+Form: {form.Name}
+Created At (UTC): {submission.CreatedAt:O}
+IP Address: {ipAddress ?? "Unknown"}
+User Agent: {userAgent ?? "Unknown"}
+
+Payload:
+{submission.DataJson}
+""";
+
+                await _outboundEmailService.QueueAsync(new OutboundEmail
+                {
+                    ToAddress = form.NotifyEmail,
+                    Subject = subject,
+                    BodyText = body,
+                    ScheduledFor = DateTime.UtcNow,
+                    RelatedEntityType = "IntakeSubmission",
+                    RelatedEntityId = submission.Id
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to queue intake notification email for submission {SubmissionId}", submission.Id);
+            }
+        }
+
+        private async Task AutoCreateLeadIfConfiguredAsync(IntakeForm form, IntakeSubmission submission)
+        {
+            var autoCreateLead = _configuration.GetValue("Intake:AutoCreateLeadOnPublicSubmit", false);
+            if (!autoCreateLead || !string.IsNullOrWhiteSpace(submission.LeadId))
+            {
+                return;
+            }
+
+            Dictionary<string, JsonElement>? payload;
+            try
+            {
+                payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(submission.DataJson);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Submission payload is invalid JSON for auto lead conversion. Submission {SubmissionId}", submission.Id);
+                return;
+            }
+
+            var name = GetSubmissionValue(payload, "name", "fullName", "clientName") ?? "Website Intake Lead";
+            var email = GetSubmissionValue(payload, "email");
+            var phone = GetSubmissionValue(payload, "phone", "mobile");
+
+            Lead? lead = null;
+            if (!string.IsNullOrWhiteSpace(email))
+            {
+                lead = await _context.Leads
+                    .FirstOrDefaultAsync(l => l.Email != null && l.Email.ToLower() == email.ToLower());
+            }
+
+            if (lead == null)
+            {
+                lead = new Lead
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Name = name,
+                    Email = email,
+                    Phone = phone,
+                    Source = $"Intake:{form.Slug}",
+                    Status = "New",
+                    PracticeArea = form.PracticeArea,
+                    Notes = $"Auto-created from intake submission {submission.Id}."
+                };
+
+                _context.Leads.Add(lead);
+            }
+            else
+            {
+                lead.Name = string.IsNullOrWhiteSpace(lead.Name) ? name : lead.Name;
+                lead.Phone = string.IsNullOrWhiteSpace(lead.Phone) ? phone : lead.Phone;
+                lead.PracticeArea ??= form.PracticeArea;
+                lead.UpdatedAt = DateTime.UtcNow;
+            }
+
+            submission.LeadId = lead.Id;
+            submission.Status = "Converted";
+            await _context.SaveChangesAsync();
+        }
+
+        private static string? GetSubmissionValue(Dictionary<string, JsonElement>? payload, params string[] keys)
+        {
+            if (payload == null)
+            {
+                return null;
+            }
+
+            foreach (var key in keys)
+            {
+                if (!payload.TryGetValue(key, out var value))
+                {
+                    continue;
+                }
+
+                if (value.ValueKind == JsonValueKind.String)
+                {
+                    var text = value.GetString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return text.Trim();
+                    }
+                }
+                else if (value.ValueKind != JsonValueKind.Null && value.ValueKind != JsonValueKind.Undefined)
+                {
+                    var text = value.ToString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return text.Trim();
+                    }
+                }
+            }
+
+            return null;
         }
     }
 

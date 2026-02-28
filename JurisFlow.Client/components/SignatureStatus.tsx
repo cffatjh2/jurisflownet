@@ -16,6 +16,9 @@ interface SignatureRequest {
     expiresAt?: string;
     declineReason?: string;
     createdAt: string;
+    verificationMethod?: string;
+    verificationStatus?: string;
+    reminderCount?: number;
 }
 
 interface SignatureStatusProps {
@@ -77,6 +80,41 @@ export default function SignatureStatus({ documentId, matterId, showActions = tr
         } finally {
             setActionLoading(null);
         }
+    };
+
+    const handleVerify = async (request: SignatureRequest) => {
+        const method = request.verificationMethod;
+        if (!method) return;
+        if (!confirm('Mark identity verification as completed for this signer?')) return;
+
+        setActionLoading(request.id);
+        try {
+            await api.signatures.verify(request.id, { method, passed: true, notes: 'Verified by staff' });
+            await loadRequests();
+        } catch (error) {
+            console.error('Failed to verify signer:', error);
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const getVerificationLabel = (method?: string) => {
+        if (!method) return 'Email Link';
+        const normalized = method.toLowerCase();
+        if (normalized === 'kba') return 'Knowledge-Based (KBA)';
+        if (normalized === 'smsotp' || normalized === 'sms') return 'SMS One-Time Code';
+        if (normalized === 'none') return 'None';
+        return 'Email Link';
+    };
+
+    const isVerificationRequired = (method?: string) => {
+        const normalized = (method || '').toLowerCase();
+        return normalized !== '' && normalized !== 'none' && normalized !== 'emaillink' && normalized !== 'email';
+    };
+
+    const isVerificationPassed = (status?: string) => {
+        const normalized = (status || '').toLowerCase();
+        return normalized === 'passed' || normalized === 'notrequired';
     };
 
     const getStatusConfig = (status: string) => {
@@ -211,6 +249,8 @@ export default function SignatureStatus({ documentId, matterId, showActions = tr
                     const Icon = config.icon;
                     const canRemind = ['Sent', 'Viewed'].includes(req.status);
                     const canVoid = ['Pending', 'Sent', 'Viewed'].includes(req.status);
+                    const verificationRequired = isVerificationRequired(req.verificationMethod);
+                    const verificationPassed = isVerificationPassed(req.verificationStatus);
 
                     return (
                         <div key={req.id} className="p-4">
@@ -228,6 +268,9 @@ export default function SignatureStatus({ documentId, matterId, showActions = tr
                                             <span>Sent: {formatDate(req.sentAt)}</span>
                                             {req.viewedAt && <span>Viewed: {formatDate(req.viewedAt)}</span>}
                                             {req.signedAt && <span>Signed: {formatDate(req.signedAt)}</span>}
+                                        </div>
+                                        <div className="mt-1 text-xs text-slate-500">
+                                            Verification: {getVerificationLabel(req.verificationMethod)} ({req.verificationStatus || 'Pending'})
                                         </div>
                                         {req.declineReason && (
                                             <p className="mt-2 text-sm text-red-600">
@@ -255,6 +298,15 @@ export default function SignatureStatus({ documentId, matterId, showActions = tr
                                                 className="px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-50 disabled:opacity-50"
                                             >
                                                 {actionLoading === req.id ? '...' : 'Remind'}
+                                            </button>
+                                        )}
+                                        {verificationRequired && !verificationPassed && (
+                                            <button
+                                                onClick={() => handleVerify(req)}
+                                                disabled={actionLoading === req.id}
+                                                className="px-2 py-1 text-xs border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-50 disabled:opacity-50"
+                                            >
+                                                Verify
                                             </button>
                                         )}
                                         {canVoid && (

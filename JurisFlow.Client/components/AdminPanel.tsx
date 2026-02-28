@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, Edit, Trash2, X, Save, Shield, User as UserIcon, AlertCircle, RefreshCw } from './Icons';
 import { api } from '../services/api';
+import { passwordRequirementsText, validatePassword } from '../services/passwordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { useConfirm } from './ConfirmDialog';
 import { AdminAuditLogs } from './AdminAuditLogs';
@@ -263,9 +264,12 @@ const AdminPanel: React.FC = () => {
         toast.error('Password is required for new user');
         return;
       }
-      if (userForm.password && userForm.password.length < 6) {
-        toast.error('Password must be at least 6 characters');
-        return;
+      if (userForm.password) {
+        const result = validatePassword(userForm.password, { email: userForm.email, name: userForm.name });
+        if (!result.isValid) {
+          toast.error(result.message);
+          return;
+        }
       }
 
       if (editingUser) {
@@ -333,30 +337,24 @@ const AdminPanel: React.FC = () => {
         toast.error('Name and email are required');
         return;
       }
-      if (clientForm.password && clientForm.password.length < 6) {
-        toast.error('Password must be at least 6 characters');
+      const enablingPortal = clientForm.portalEnabled && !editingClient?.portalEnabled;
+      if (enablingPortal && !clientForm.password) {
+        toast.error('Portal password is required when enabling access');
         return;
+      }
+      if (clientForm.password) {
+        const result = validatePassword(clientForm.password, { email: clientForm.email, name: clientForm.name });
+        if (!result.isValid) {
+          toast.error(result.message);
+          return;
+        }
       }
 
       if (editingClient) {
         await api.admin.updateClient(editingClient.id, clientForm);
       } else {
         // Create client via regular API
-        await api.createClient({
-          ...clientForm,
-          password: undefined // Regular API doesn't handle password
-        });
-        // Then update with password if provided
-        if (clientForm.password || clientForm.portalEnabled) {
-          const clients = await api.admin.getClients();
-          const newClient = clients.find((c: Client) => c.email === clientForm.email);
-          if (newClient) {
-            await api.admin.updateClient(newClient.id, {
-              password: clientForm.password,
-              portalEnabled: clientForm.portalEnabled
-            });
-          }
-        }
+        await api.createClient(clientForm);
       }
       await loadClients();
       setShowClientModal(false);
@@ -407,7 +405,7 @@ const AdminPanel: React.FC = () => {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-8 py-6 border-b border-gray-200 bg-white">
+      <div className="px-6 py-4 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-3 mb-2">
           <Shield className="w-6 h-6 text-slate-800" />
           <h1 className="text-2xl font-bold text-slate-800">Admin Panel</h1>
@@ -748,8 +746,9 @@ const AdminPanel: React.FC = () => {
                     className="w-full border border-gray-300 rounded-lg p-2 text-sm"
                     value={userForm.password}
                     onChange={e => setUserForm({ ...userForm, password: e.target.value })}
-                    placeholder={editingUser ? 'Enter new password to change' : ''}
+                    placeholder={editingUser ? 'Enter new password to change' : passwordRequirementsText}
                   />
+                  <p className="mt-1 text-xs text-gray-500">{passwordRequirementsText}</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Role *</label>
@@ -1046,8 +1045,9 @@ const AdminPanel: React.FC = () => {
                       className="w-full border border-gray-300 rounded-lg p-2 text-sm"
                       value={clientForm.password}
                       onChange={e => setClientForm({ ...clientForm, password: e.target.value })}
-                      placeholder="At least 6 characters"
+                      placeholder={passwordRequirementsText}
                     />
+                    <p className="mt-1 text-xs text-gray-500">{passwordRequirementsText}</p>
                   </div>
                 )}
               </div>

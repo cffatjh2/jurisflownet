@@ -23,9 +23,6 @@ const CURRENCY_LOCALES: Record<Currency, string> = {
 };
 
 export const LanguageProvider = ({ children }: { children: ReactNode }) => {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LanguageContext.tsx:25',message:'LanguageProvider initialization started',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   const [language, setLanguage] = useState<Language>('en');
   const [currency, setCurrency] = useState<Currency>('USD');
 
@@ -53,10 +50,6 @@ export const LanguageProvider = ({ children }: { children: ReactNode }) => {
         day: 'numeric'
     }).format(date);
   };
-
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LanguageContext.tsx:54',message:'LanguageProvider returning JSX',data:{language,currency},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   return (
     <LanguageContext.Provider value={{ language, setLanguage, currency, setCurrency, t, formatCurrency, formatDate }}>
       {children}

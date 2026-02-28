@@ -293,7 +293,7 @@ const CRM: React.FC = () => {
 
    return (
       <div className="h-full flex flex-col bg-gray-50/50">
-         <div className="px-8 py-6 flex justify-between items-center bg-white border-b border-gray-200">
+         <div className="px-6 py-4 flex justify-between items-center bg-white border-b border-gray-200">
             <div>
                <h1 className="text-2xl font-bold text-slate-800">{t('crm_title')}</h1>
                <p className="text-sm text-gray-500 mt-1">{t('crm_subtitle')}</p>

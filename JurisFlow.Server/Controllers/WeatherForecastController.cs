@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace JurisFlow.Server.Controllers;
 
 [ApiController]
 [Route("[controller]")]
+[Authorize(Policy = "StaffOnly")]
 public class WeatherForecastController : ControllerBase
 {
     private static readonly string[] Summaries =

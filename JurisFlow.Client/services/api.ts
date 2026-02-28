@@ -1,43 +1,146 @@
-import { Matter, Task, TimeEntry, Lead, CalendarEvent, Invoice, TaskStatus, Expense, Employee, IntegrationItem, FirmEntity, Office } from "../types";
+import {
+    Matter,
+    Task,
+    TimeEntry,
+    Lead,
+    CalendarEvent,
+    Invoice,
+    TaskStatus,
+    Expense,
+    Employee,
+    IntegrationItem,
+    IntegrationCatalogItem,
+    FirmEntity,
+    Office,
+    AppDirectoryListing,
+    AppDirectoryOnboardingRequest,
+    AppDirectoryOnboardingResponse,
+    AppDirectoryReviewRequest,
+    AppDirectorySubmission,
+    IntegrationCanonicalContractDescriptor,
+    IntegrationCapabilityMatrixResponse,
+    IntegrationMappingProfile,
+    UpsertIntegrationMappingProfileRequest,
+    RunCanonicalIntegrationActionRequest,
+    CanonicalIntegrationActionResult,
+    IntegrationConflictQueueItem,
+    ResolveIntegrationConflictRequest,
+    IntegrationReviewQueueItem,
+    DecideIntegrationReviewItemRequest,
+    IntegrationInboxEventListItem,
+    ReplayIntegrationInboxEventResponse,
+    IntegrationOutboxEventListItem,
+    ReplayIntegrationOutboxEventResponse,
+    IntegrationRunListItem,
+    ReplayIntegrationRunResponse,
+    IntegrationSecretStoreStatus,
+    RotateIntegrationSecretsResponse,
+    EfilingWorkspaceResponse,
+    EfilingPrecheckResponse,
+    EfilingSubmissionTimelineResponse,
+    EfilingSubmissionTransitionResponse,
+    EfilingDocketAutomationResponse,
+    OutcomeFeePlanDetailResult,
+    OutcomeFeePlanVersion,
+    OutcomeFeePlanVersionCompareResult,
+    OutcomeFeePlanTriggerResult,
+    OutcomeFeePlanPortfolioMetricsResult,
+    OutcomeFeeCalibrationSnapshotsListResult,
+    OutcomeFeeCalibrationEffectiveResult,
+    OutcomeFeeCalibrationJobRunResult,
+    OutcomeFeeOutcomeFeedbackResult
+} from "../types";
 
 // Use relative path when in browser (proxy will handle it), fallback to full URL for SSR
 const API_URL = typeof window !== 'undefined' ? '/api' : 'http://localhost:3001/api';
+const TENANT_STORAGE_KEY = 'tenant_slug';
 
-const fetchJson = async (endpoint: string, options: RequestInit = {}) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:6', message: 'API call started', data: { endpoint, method: options.method || 'GET' }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
+const getTenantSlug = () => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(TENANT_STORAGE_KEY);
+};
+
+const refreshAuthToken = async () => {
+    if (typeof window === 'undefined') return false;
+    const refreshToken = localStorage.getItem('auth_refresh_token');
+    const sessionId = localStorage.getItem('auth_session_id');
+    if (!refreshToken || !sessionId) return false;
+
+    try {
+        const tenantSlug = getTenantSlug();
+        const res = await fetch(`${API_URL}/auth/refresh`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
+            },
+            body: JSON.stringify({ sessionId, refreshToken })
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        if (data?.token) {
+            localStorage.setItem('auth_token', data.token);
+        }
+        if (data?.refreshToken) {
+            localStorage.setItem('auth_refresh_token', data.refreshToken);
+        }
+        if (data?.refreshTokenExpiresAt) {
+            localStorage.setItem('auth_refresh_expires_at', data.refreshTokenExpiresAt);
+        }
+        if (data?.session?.id && data?.session?.expiresAt) {
+            localStorage.setItem('auth_session_id', data.session.id);
+            localStorage.setItem('auth_session_expires_at', data.session.expiresAt);
+        }
+        if (data?.user) {
+            localStorage.setItem('auth_user', JSON.stringify(data.user));
+        }
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const fetchJson = async (endpoint: string, options: RequestInit = {}, allowRefresh: boolean = true) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const tenantSlug = getTenantSlug();
     const res = await fetch(`${API_URL}${endpoint}`, {
         headers: {
             'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
         },
         cache: 'no-store',
         ...options
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:15', message: 'API response received', data: { endpoint, status: res.status, statusText: res.statusText, hasToken: !!token }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
     // Handle 401 Unauthorized gracefully - return null instead of throwing
     if (res.status === 401) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:18', message: 'API 401 Unauthorized', data: { endpoint }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-        // #endregion
+        if (allowRefresh && await refreshAuthToken()) {
+            return fetchJson(endpoint, options, false);
+        }
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('auth:unauthorized', { detail: { endpoint } }));
         }
         return null;
     }
     if (!res.ok) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:22', message: 'API error', data: { endpoint, status: res.status, statusText: res.statusText }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-        // #endregion
-        throw new Error(`API Error: ${res.statusText}`);
+        let errorDetail = '';
+        try {
+            const errorBody = await res.json();
+            if (errorBody?.message) {
+                errorDetail = errorBody.message;
+            } else {
+                errorDetail = JSON.stringify(errorBody);
+            }
+        } catch {
+            try {
+                errorDetail = await res.text();
+            } catch {
+                errorDetail = '';
+            }
+        }
+        const suffix = errorDetail ? ` (${errorDetail})` : '';
+        throw new Error(`API Error: ${res.statusText}${suffix}`);
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:25', message: 'API call succeeded', data: { endpoint }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
     // Handle 204 No Content responses (common for DELETE operations)
     if (res.status === 204 || res.headers.get('content-length') === '0') {
         return null;
@@ -47,9 +150,11 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}) => {
 
 const fetchFile = async (endpoint: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const tenantSlug = getTenantSlug();
     const res = await fetch(`${API_URL}${endpoint}`, {
         headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
         }
     });
     if (res.status === 401) {
@@ -69,6 +174,10 @@ const fetchFile = async (endpoint: string) => {
 };
 
 export const api = {
+    downloadFile: (endpoint: string) => {
+        const normalized = endpoint.startsWith('/api/') ? endpoint.replace('/api', '') : endpoint;
+        return fetchFile(normalized);
+    },
     get: (endpoint: string) => {
         const normalized = endpoint.startsWith('/api/') ? endpoint.replace('/api', '') : endpoint;
         return fetchJson(normalized);
@@ -99,8 +208,454 @@ export const api = {
         getFirm: () => fetchJson('/settings/firm'),
         updateFirm: (data: any) => fetchJson('/settings/firm', { method: 'PUT', body: JSON.stringify(data) }),
         getIntegrations: () => fetchJson('/settings/integrations'),
+        getIntegrationCatalog: () => fetchJson('/settings/integrations/catalog') as Promise<IntegrationCatalogItem[] | null>,
         updateIntegrations: (items: IntegrationItem[]) =>
-            fetchJson('/settings/integrations', { method: 'PUT', body: JSON.stringify({ items }) })
+            fetchJson('/settings/integrations', { method: 'PUT', body: JSON.stringify({ items }) }),
+        connectIntegration: (providerKey: string, payload: Record<string, unknown>) =>
+            fetchJson(`/settings/integrations/${encodeURIComponent(providerKey)}/connect`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<IntegrationItem | null>,
+        validateIntegration: (providerKey: string, payload: Record<string, unknown>) =>
+            fetchJson(`/settings/integrations/${encodeURIComponent(providerKey)}/validate`, { method: 'POST', body: JSON.stringify(payload) }),
+        syncIntegration: (providerKey: string) =>
+            fetchJson(`/settings/integrations/${encodeURIComponent(providerKey)}/sync`, { method: 'POST' }),
+        disconnectIntegration: (providerKey: string) =>
+            fetchJson(`/settings/integrations/${encodeURIComponent(providerKey)}`, { method: 'DELETE' })
+    },
+
+    appDirectory: {
+        listListings: (includeAll: boolean = false) =>
+            fetchJson(`/app-directory/listings${includeAll ? '?includeAll=true' : ''}`) as Promise<AppDirectoryListing[] | null>,
+        getListing: (id: string) =>
+            fetchJson(`/app-directory/listings/${encodeURIComponent(id)}`) as Promise<AppDirectoryListing | null>,
+        getReviewQueue: () =>
+            fetchJson('/app-directory/review-queue') as Promise<AppDirectoryListing[] | null>,
+        submitOnboarding: (payload: AppDirectoryOnboardingRequest) =>
+            fetchJson('/app-directory/onboarding/submit', { method: 'POST', body: JSON.stringify(payload) }) as Promise<AppDirectoryOnboardingResponse | null>,
+        retestListing: (id: string) =>
+            fetchJson(`/app-directory/listings/${encodeURIComponent(id)}/retest`, { method: 'POST' }) as Promise<AppDirectoryOnboardingResponse | null>,
+        reviewListing: (id: string, payload: AppDirectoryReviewRequest) =>
+            fetchJson(`/app-directory/listings/${encodeURIComponent(id)}/review`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<AppDirectoryListing | null>,
+        getSubmissions: (id: string) =>
+            fetchJson(`/app-directory/listings/${encodeURIComponent(id)}/submissions`) as Promise<AppDirectorySubmission[] | null>
+    },
+
+    integrationsOps: {
+        getContract: () =>
+            fetchJson('/integrations/ops/contract') as Promise<IntegrationCanonicalContractDescriptor | null>,
+        getCapabilityMatrix: () =>
+            fetchJson('/integrations/ops/capability-matrix') as Promise<IntegrationCapabilityMatrixResponse | null>,
+        getKpiAnalytics: (params?: { days?: number; bucket?: 'day' | 'week' | 'month' }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            if (params?.bucket) qs.set('bucket', params.bucket);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/analytics/kpis${query}`) as Promise<any | null>;
+        },
+        getMappingProfiles: (connectionId: string) =>
+            fetchJson(`/integrations/ops/connections/${encodeURIComponent(connectionId)}/mapping-profiles`) as Promise<IntegrationMappingProfile[] | null>,
+        upsertMappingProfile: (connectionId: string, profileKey: string, payload: UpsertIntegrationMappingProfileRequest) =>
+            fetchJson(
+                `/integrations/ops/connections/${encodeURIComponent(connectionId)}/mapping-profiles/${encodeURIComponent(profileKey)}`,
+                { method: 'PUT', body: JSON.stringify(payload) }
+            ) as Promise<IntegrationMappingProfile | null>,
+        runCanonicalAction: (connectionId: string, action: string, payload: RunCanonicalIntegrationActionRequest = {}) =>
+            fetchJson(
+                `/integrations/ops/connections/${encodeURIComponent(connectionId)}/actions/${encodeURIComponent(action)}`,
+                { method: 'POST', body: JSON.stringify(payload) }
+            ) as Promise<CanonicalIntegrationActionResult | null>,
+        getConflicts: (params?: { status?: string; providerKey?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/conflicts${query}`) as Promise<IntegrationConflictQueueItem[] | null>;
+        },
+        resolveConflict: (id: string, payload: ResolveIntegrationConflictRequest) =>
+            fetchJson(`/integrations/ops/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<IntegrationConflictQueueItem | null>,
+        getReviewQueue: (params?: { status?: string; providerKey?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/review-queue${query}`) as Promise<IntegrationReviewQueueItem[] | null>;
+        },
+        decideReviewItem: (id: string, payload: DecideIntegrationReviewItemRequest) =>
+            fetchJson(`/integrations/ops/review-queue/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<IntegrationReviewQueueItem | null>,
+        getInboxEvents: (params?: { status?: string; providerKey?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/events/inbox${query}`) as Promise<IntegrationInboxEventListItem[] | null>;
+        },
+        replayInboxEvent: (id: string) =>
+            fetchJson(`/integrations/ops/events/inbox/${encodeURIComponent(id)}/replay`, { method: 'POST' }) as Promise<ReplayIntegrationInboxEventResponse | null>,
+        getOutboxEvents: (params?: { status?: string; providerKey?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/events/outbox${query}`) as Promise<IntegrationOutboxEventListItem[] | null>;
+        },
+        replayOutboxEvent: (id: string) =>
+            fetchJson(`/integrations/ops/events/outbox/${encodeURIComponent(id)}/replay`, { method: 'POST' }) as Promise<ReplayIntegrationOutboxEventResponse | null>,
+        getRuns: (params?: { status?: string; providerKey?: string; connectionId?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (params?.connectionId) qs.set('connectionId', params.connectionId);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/integrations/ops/runs${query}`) as Promise<IntegrationRunListItem[] | null>;
+        },
+        replayRun: (id: string) =>
+            fetchJson(`/integrations/ops/runs/${encodeURIComponent(id)}/replay`, { method: 'POST' }) as Promise<ReplayIntegrationRunResponse | null>,
+        getSecretStoreStatus: () =>
+            fetchJson('/integrations/ops/security/secrets/status') as Promise<IntegrationSecretStoreStatus | null>,
+        rotateSecretsNow: () =>
+            fetchJson('/integrations/ops/security/secrets/rotate', { method: 'POST' }) as Promise<RotateIntegrationSecretsResponse | null>
+    },
+
+    efiling: {
+        getWorkspace: (matterId: string, providerKey?: string) => {
+            const qs = new URLSearchParams();
+            if (providerKey) qs.set('providerKey', providerKey);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/efiling/workspace/${encodeURIComponent(matterId)}${query}`) as Promise<EfilingWorkspaceResponse | null>;
+        },
+        precheckPacket: (payload: {
+            matterId: string;
+            providerKey?: string;
+            packetName?: string;
+            filingType?: string;
+            courtType?: string;
+            triggerDateUtc?: string;
+            documentIds?: string[];
+            metadata?: Record<string, string>;
+        }) =>
+            fetchJson('/efiling/precheck', { method: 'POST', body: JSON.stringify(payload) }) as Promise<EfilingPrecheckResponse | null>,
+        listSubmissions: (params?: { matterId?: string; providerKey?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/efiling/submissions${query}`) as Promise<any[] | null>;
+        },
+        getSubmissionTimeline: (id: string) =>
+            fetchJson(`/efiling/submissions/${encodeURIComponent(id)}/timeline`) as Promise<EfilingSubmissionTimelineResponse | null>,
+        transitionSubmission: (id: string, payload: { targetStatus: string; rejectionReason?: string }) =>
+            fetchJson(`/efiling/submissions/${encodeURIComponent(id)}/transition`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<EfilingSubmissionTransitionResponse | null>,
+        startRepair: (id: string, payload?: { notes?: string }) =>
+            fetchJson(`/efiling/submissions/${encodeURIComponent(id)}/repair`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<EfilingSubmissionTransitionResponse | null>,
+        listDockets: (params?: { matterId?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/efiling/dockets${query}`) as Promise<any[] | null>;
+        },
+        runDocketAutomation: (payload?: { connectionId?: string; providerKey?: string; matterId?: string; limit?: number; docketEntryIds?: string[] }) =>
+            fetchJson('/efiling/dockets/automation', { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<EfilingDocketAutomationResponse | null>
+    },
+
+    jurisdictionRules: {
+        getJurisdictions: (params?: { scope?: string; activeOnly?: boolean }) => {
+            const qs = new URLSearchParams();
+            if (params?.scope) qs.set('scope', params.scope);
+            if (typeof params?.activeOnly === 'boolean') qs.set('activeOnly', String(params.activeOnly));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/jurisdiction-rules-platform/jurisdictions${query}`) as Promise<any[] | null>;
+        },
+        getCoverage: (params?: { jurisdictionCode?: string; supportLevel?: string; caseType?: string; activeOnly?: boolean; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.jurisdictionCode) qs.set('jurisdictionCode', params.jurisdictionCode);
+            if (params?.supportLevel) qs.set('supportLevel', params.supportLevel);
+            if (params?.caseType) qs.set('caseType', params.caseType);
+            if (typeof params?.activeOnly === 'boolean') qs.set('activeOnly', String(params.activeOnly));
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/jurisdiction-rules-platform/coverage${query}`) as Promise<any[] | null>;
+        },
+        resolveCoverage: (params: { jurisdictionCode: string; courtSystem?: string; courtDivision?: string; venue?: string; caseType?: string; filingMethod?: string }) => {
+            const qs = new URLSearchParams();
+            qs.set('jurisdictionCode', params.jurisdictionCode);
+            if (params.courtSystem) qs.set('courtSystem', params.courtSystem);
+            if (params.courtDivision) qs.set('courtDivision', params.courtDivision);
+            if (params.venue) qs.set('venue', params.venue);
+            if (params.caseType) qs.set('caseType', params.caseType);
+            if (params.filingMethod) qs.set('filingMethod', params.filingMethod);
+            return fetchJson(`/jurisdiction-rules-platform/coverage/resolve?${qs.toString()}`) as Promise<any | null>;
+        },
+        getRulePacks: (params?: { jurisdictionCode?: string; status?: string; caseType?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.jurisdictionCode) qs.set('jurisdictionCode', params.jurisdictionCode);
+            if (params?.status) qs.set('status', params.status);
+            if (params?.caseType) qs.set('caseType', params.caseType);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/jurisdiction-rules-platform/rule-packs${query}`) as Promise<any[] | null>;
+        },
+        submitRulePackForReview: (id: string, notes?: string) =>
+            fetchJson(`/jurisdiction-rules-platform/rule-packs/${encodeURIComponent(id)}/submit-review`, { method: 'POST', body: JSON.stringify({ notes: notes || null }) }) as Promise<any | null>,
+        publishRulePack: (id: string, notes?: string) =>
+            fetchJson(`/jurisdiction-rules-platform/rule-packs/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify({ notes: notes || null }) }) as Promise<any | null>,
+        getChanges: (params?: { jurisdictionCode?: string; status?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.jurisdictionCode) qs.set('jurisdictionCode', params.jurisdictionCode);
+            if (params?.status) qs.set('status', params.status);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/jurisdiction-rules-platform/changes${query}`) as Promise<any[] | null>;
+        },
+        getValidationRuns: (params?: { limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/jurisdiction-rules-platform/validation-runs${query}`) as Promise<any[] | null>;
+        },
+        runValidationHarness: (payload?: { jurisdictionCode?: string; courtSystem?: string; caseType?: string; filingMethod?: string; rulePackId?: string; limit?: number }) =>
+            fetchJson('/jurisdiction-rules-platform/validation-harness/run', { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>
+    },
+
+    legalBilling: {
+        getMatterPolicy: (matterId: string) =>
+            fetchJson(`/legal-billing/policies/matter/${encodeURIComponent(matterId)}`) as Promise<any | null>,
+        upsertMatterPolicy: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/policies/matter', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getRateCards: (params?: { scope?: string; clientId?: string; matterId?: string; status?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.scope) qs.set('scope', params.scope);
+            if (params?.clientId) qs.set('clientId', params.clientId);
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (params?.status) qs.set('status', params.status);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/rate-cards${query}`) as Promise<any[] | null>;
+        },
+        upsertRateCard: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/rate-cards', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getRateCardEntries: (rateCardId: string) =>
+            fetchJson(`/legal-billing/rate-cards/${encodeURIComponent(rateCardId)}/entries`) as Promise<any[] | null>,
+        upsertRateCardEntry: (rateCardId: string, payload: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/rate-cards/${encodeURIComponent(rateCardId)}/entries`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        generatePrebill: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/prebills/generate', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getPrebills: (params?: { matterId?: string; clientId?: string; status?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (params?.clientId) qs.set('clientId', params.clientId);
+            if (params?.status) qs.set('status', params.status);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/prebills${query}`) as Promise<any[] | null>;
+        },
+        getPrebill: (prebillId: string) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}`) as Promise<any | null>,
+        submitPrebillForReview: (prebillId: string, notes?: string) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}/submit-review`, { method: 'POST', body: JSON.stringify({ notes: notes || null }) }) as Promise<any | null>,
+        approvePrebill: (prebillId: string, notes?: string) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}/approve`, { method: 'POST', body: JSON.stringify({ notes: notes || null }) }) as Promise<any | null>,
+        rejectPrebill: (prebillId: string, notes?: string) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}/reject`, { method: 'POST', body: JSON.stringify({ notes: notes || null }) }) as Promise<any | null>,
+        finalizePrebill: (prebillId: string, payload: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}/finalize`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        adjustPrebillLine: (prebillLineId: string, payload: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/prebills/lines/${encodeURIComponent(prebillLineId)}/adjust`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getLedesPreview: (prebillId: string) =>
+            fetchJson(`/legal-billing/prebills/${encodeURIComponent(prebillId)}/ledes-preview`) as Promise<any | null>,
+        getLedger: (params?: { ledgerDomain?: string; ledgerBucket?: string; invoiceId?: string; matterId?: string; paymentTransactionId?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.ledgerDomain) qs.set('ledgerDomain', params.ledgerDomain);
+            if (params?.ledgerBucket) qs.set('ledgerBucket', params.ledgerBucket);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (params?.paymentTransactionId) qs.set('paymentTransactionId', params.paymentTransactionId);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/ledger${query}`) as Promise<any[] | null>;
+        },
+        postLedgerAdjustment: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/ledger/adjustment', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        reverseLedgerEntry: (ledgerEntryId: string, payload?: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/ledger/${encodeURIComponent(ledgerEntryId)}/reverse`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        getAllocations: (params?: { paymentTransactionId?: string; invoiceId?: string }) => {
+            const qs = new URLSearchParams();
+            if (params?.paymentTransactionId) qs.set('paymentTransactionId', params.paymentTransactionId);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/allocations${query}`) as Promise<any[] | null>;
+        },
+        applyAllocation: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/allocations', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        reverseAllocation: (allocationId: string, payload?: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/allocations/${encodeURIComponent(allocationId)}/reverse`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        getTrustReconciliation: (params?: { trustAccountId?: string; asOfUtc?: string }) => {
+            const qs = new URLSearchParams();
+            if (params?.trustAccountId) qs.set('trustAccountId', params.trustAccountId);
+            if (params?.asOfUtc) qs.set('asOfUtc', params.asOfUtc);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust/reconciliation${query}`) as Promise<any | null>;
+        },
+        getInvoicePayorStatements: (invoiceId: string, params?: { payorClientId?: string }) => {
+            const qs = new URLSearchParams();
+            if (params?.payorClientId) qs.set('payorClientId', params.payorClientId);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/invoices/${encodeURIComponent(invoiceId)}/payor-statements${query}`) as Promise<any | null>;
+        },
+        getPayorAging: (params?: { asOfUtc?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.asOfUtc) qs.set('asOfUtc', params.asOfUtc);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/collections/payor-aging${query}`) as Promise<any | null>;
+        },
+        getEbillingTransmissions: (params?: { providerKey?: string; invoiceId?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/ebilling/transmissions${query}`) as Promise<any[] | null>;
+        },
+        getEbillingEvents: (params?: { providerKey?: string; invoiceId?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.providerKey) qs.set('providerKey', params.providerKey);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/ebilling/events${query}`) as Promise<any[] | null>;
+        },
+        recordEbillingTransmission: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/ebilling/transmissions', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        recordEbillingEvent: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/ebilling/events', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        repairEbillingTransmission: (transmissionId: string, payload?: Record<string, unknown>) =>
+            fetchJson(`/legal-billing/ebilling/transmissions/${encodeURIComponent(transmissionId)}/repair`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        getTrustRiskPolicy: () =>
+            fetchJson('/legal-billing/trust-risk/policy') as Promise<any | null>,
+        getTrustRiskPolicyVersions: (params?: { limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/policy/versions${query}`) as Promise<any[] | null>;
+        },
+        getTrustRiskPolicyTemplates: () =>
+            fetchJson('/legal-billing/trust-risk/policy/templates') as Promise<any[] | null>,
+        upsertTrustRiskPolicy: (payload: Record<string, unknown>) =>
+            fetchJson('/legal-billing/trust-risk/policy', { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getTrustRiskEvents: (params?: { status?: string; decision?: string; severity?: string; sourceType?: string; invoiceId?: string; matterId?: string; clientId?: string; fromUtc?: string; toUtc?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.decision) qs.set('decision', params.decision);
+            if (params?.severity) qs.set('severity', params.severity);
+            if (params?.sourceType) qs.set('sourceType', params.sourceType);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            if (params?.matterId) qs.set('matterId', params.matterId);
+            if (params?.clientId) qs.set('clientId', params.clientId);
+            if (params?.fromUtc) qs.set('fromUtc', params.fromUtc);
+            if (params?.toUtc) qs.set('toUtc', params.toUtc);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/events${query}`) as Promise<any[] | null>;
+        },
+        getTrustRiskEventDetail: (eventId: string) =>
+            fetchJson(`/legal-billing/trust-risk/events/${encodeURIComponent(eventId)}`) as Promise<any | null>,
+        rescoreTrustRiskEvent: (eventId: string, payload?: { reason?: string | null }) =>
+            fetchJson(`/legal-billing/trust-risk/events/${encodeURIComponent(eventId)}/rescore`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        rescoreTrustRiskEventsBatch: (payload?: Record<string, unknown>) =>
+            fetchJson('/legal-billing/trust-risk/events/rescore-batch', { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        acknowledgeTrustRiskEvent: (eventId: string, payload?: { note?: string | null }) =>
+            fetchJson(`/legal-billing/trust-risk/events/${encodeURIComponent(eventId)}/ack`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        assignTrustRiskEvent: (eventId: string, payload: { assigneeUserId: string; note?: string | null }) =>
+            fetchJson(`/legal-billing/trust-risk/events/${encodeURIComponent(eventId)}/assign`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        setTrustRiskReviewDisposition: (eventId: string, payload: { disposition: string; reason: string; approverReason: string }) =>
+            fetchJson(`/legal-billing/trust-risk/events/${encodeURIComponent(eventId)}/review-disposition`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getTrustRiskHolds: (params?: { status?: string; holdType?: string; targetType?: string; targetId?: string; trustRiskEventId?: string; fromUtc?: string; toUtc?: string; limit?: number }) => {
+            const qs = new URLSearchParams();
+            if (params?.status) qs.set('status', params.status);
+            if (params?.holdType) qs.set('holdType', params.holdType);
+            if (params?.targetType) qs.set('targetType', params.targetType);
+            if (params?.targetId) qs.set('targetId', params.targetId);
+            if (params?.trustRiskEventId) qs.set('trustRiskEventId', params.trustRiskEventId);
+            if (params?.fromUtc) qs.set('fromUtc', params.fromUtc);
+            if (params?.toUtc) qs.set('toUtc', params.toUtc);
+            if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/holds${query}`) as Promise<any[] | null>;
+        },
+        getTrustRiskHoldDetail: (holdId: string) =>
+            fetchJson(`/legal-billing/trust-risk/holds/${encodeURIComponent(holdId)}`) as Promise<any | null>,
+        markTrustRiskHoldUnderReview: (holdId: string, payload?: { reason?: string | null }) =>
+            fetchJson(`/legal-billing/trust-risk/holds/${encodeURIComponent(holdId)}/under-review`, { method: 'POST', body: JSON.stringify(payload || {}) }) as Promise<any | null>,
+        releaseTrustRiskHold: (holdId: string, payload: { reason: string; approverReason: string }) =>
+            fetchJson(`/legal-billing/trust-risk/holds/${encodeURIComponent(holdId)}/release`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        escalateTrustRiskHold: (holdId: string, payload: { reason: string; approverReason: string }) =>
+            fetchJson(`/legal-billing/trust-risk/holds/${encodeURIComponent(holdId)}/escalate`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<any | null>,
+        getTrustRiskMetrics: (params?: { days?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/metrics${query}`) as Promise<any | null>;
+        },
+        getTrustRiskBaselines: (params?: { days?: number; top?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            if (typeof params?.top === 'number') qs.set('top', String(params.top));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/baselines${query}`) as Promise<any | null>;
+        },
+        getTrustRiskTuning: (params?: { days?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/tuning${query}`) as Promise<any | null>;
+        },
+        getTrustRiskEvidenceExport: (params?: {
+            days?: number;
+            policyLimit?: number;
+            eventLimit?: number;
+            holdLimit?: number;
+            actionLimit?: number;
+            auditLimit?: number;
+            includeAuditLogs?: boolean;
+            includeEvents?: boolean;
+        }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            if (typeof params?.policyLimit === 'number') qs.set('policyLimit', String(params.policyLimit));
+            if (typeof params?.eventLimit === 'number') qs.set('eventLimit', String(params.eventLimit));
+            if (typeof params?.holdLimit === 'number') qs.set('holdLimit', String(params.holdLimit));
+            if (typeof params?.actionLimit === 'number') qs.set('actionLimit', String(params.actionLimit));
+            if (typeof params?.auditLimit === 'number') qs.set('auditLimit', String(params.auditLimit));
+            if (typeof params?.includeAuditLogs === 'boolean') qs.set('includeAuditLogs', String(params.includeAuditLogs));
+            if (typeof params?.includeEvents === 'boolean') qs.set('includeEvents', String(params.includeEvents));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/evidence-export${query}`) as Promise<any | null>;
+        },
+        getTrustRiskTuningImpact: (params?: { days?: number; warn?: number; review?: number; softHold?: number; hardHold?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            if (typeof params?.warn === 'number') qs.set('warn', String(params.warn));
+            if (typeof params?.review === 'number') qs.set('review', String(params.review));
+            if (typeof params?.softHold === 'number') qs.set('softHold', String(params.softHold));
+            if (typeof params?.hardHold === 'number') qs.set('hardHold', String(params.hardHold));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/tuning/impact${query}`) as Promise<any | null>;
+        },
+        compareTrustRiskPolicyImpact: (params?: { days?: number; fromPolicyId?: string; fromVersion?: number; toPolicyId?: string; toVersion?: number }) => {
+            const qs = new URLSearchParams();
+            if (typeof params?.days === 'number') qs.set('days', String(params.days));
+            if (params?.fromPolicyId) qs.set('fromPolicyId', params.fromPolicyId);
+            if (typeof params?.fromVersion === 'number') qs.set('fromVersion', String(params.fromVersion));
+            if (params?.toPolicyId) qs.set('toPolicyId', params.toPolicyId);
+            if (typeof params?.toVersion === 'number') qs.set('toVersion', String(params.toVersion));
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/legal-billing/trust-risk/policy/compare-impact${query}`) as Promise<any | null>;
+        }
     },
 
     // Firm Entities & Offices
@@ -165,6 +720,7 @@ export const api = {
     getClients: () => fetchJson('/clients'),
     getClientStatusHistory: (id: string) => fetchJson(`/clients/${id}/status-history`),
     createClient: (data: any) => fetchJson('/clients', { method: 'POST', body: JSON.stringify(data) }),
+    updateClient: (id: string, data: any) => fetchJson(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     setClientPassword: (id: string, password: string) =>
         fetchJson(`/clients/${id}/set-password`, { method: 'POST', body: JSON.stringify({ password }) }),
     getLeads: () => fetchJson('/leads'),
@@ -278,6 +834,7 @@ export const api = {
     // Documents
     uploadDocument: async (file: File, matterId?: string, description?: string) => {
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const tenantSlug = getTenantSlug();
         const formData = new FormData();
         formData.append('file', file);
         if (matterId) formData.append('matterId', matterId);
@@ -286,7 +843,8 @@ export const api = {
         const res = await fetch(`${API_URL}/documents/upload`, {
             method: 'POST',
             headers: {
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
             },
             body: formData
         });
@@ -301,6 +859,14 @@ export const api = {
         const query = qs.toString() ? `?${qs.toString()}` : '';
         return fetchJson(`/documents${query}`);
     },
+    getDocumentShares: (documentId: string) => fetchJson(`/documents/${documentId}/shares`),
+    upsertDocumentShare: (documentId: string, data: { clientId: string; canView?: boolean; canDownload?: boolean; canComment?: boolean; canUpload?: boolean; expiresAt?: string | null; note?: string | null }) =>
+        fetchJson(`/documents/${documentId}/shares`, { method: 'POST', body: JSON.stringify(data) }),
+    removeDocumentShare: (documentId: string, clientId: string) =>
+        fetchJson(`/documents/${documentId}/shares/${clientId}`, { method: 'DELETE' }),
+    getDocumentComments: (documentId: string) => fetchJson(`/documents/${documentId}/comments`),
+    addDocumentComment: (documentId: string, data: { body: string }) =>
+        fetchJson(`/documents/${documentId}/comments`, { method: 'POST', body: JSON.stringify(data) }),
     searchDocuments: (q: string, options?: { matterId?: string; includeContent?: boolean }) => {
         const qs = new URLSearchParams({ q });
         if (options?.matterId) qs.set('matterId', options.matterId);
@@ -313,6 +879,7 @@ export const api = {
     bulkAssignDocuments: (data: { ids: string[]; matterId?: string | null }) =>
         fetchJson('/documents/bulk-assign', { method: 'PUT', body: JSON.stringify(data) }),
     getDocumentVersions: (documentId: string) => fetchJson(`/documents/${documentId}/versions`),
+    downloadDocument: (documentId: string) => fetchFile(`/documents/${documentId}/download`),
     downloadDocumentVersion: (versionId: string) => fetchFile(`/documents/versions/${versionId}/download`),
     restoreDocumentVersion: (versionId: string) => fetchJson(`/documents/versions/${versionId}/restore`, { method: 'POST' }),
     diffDocumentVersions: (leftVersionId: string, rightVersionId: string) =>
@@ -394,12 +961,14 @@ export const api = {
     assignTaskToEmployee: (employeeId: string, taskId: string) => fetchJson(`/employees/${employeeId}/assign-task`, { method: 'POST', body: JSON.stringify({ taskId }) }),
     uploadEmployeeAvatar: async (employeeId: string, file: File) => {
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const tenantSlug = getTenantSlug();
         const formData = new FormData();
         formData.append('file', file);
         const res = await fetch(`${API_URL}/employees/${employeeId}/avatar`, {
             method: 'POST',
             headers: {
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
             },
             body: formData
         });
@@ -419,7 +988,7 @@ export const api = {
 
     // E-Signatures
     signatures: {
-        request: (data: { documentId: string; signerEmail: string; signerName?: string; clientId?: string; expiresAt?: string }) =>
+        request: (data: { documentId: string; signerEmail: string; signerName?: string; clientId?: string; expiresAt?: string; verificationMethod?: string; requiresKba?: boolean; disclosureProvided?: boolean; disclosureVersion?: string }) =>
             fetchJson('/signatures/request', { method: 'POST', body: JSON.stringify(data) }),
         get: (id: string) => fetchJson(`/signatures/${id}`),
         getByDocument: (documentId: string) => fetchJson(`/signatures/document/${documentId}`),
@@ -428,6 +997,10 @@ export const api = {
         decline: (id: string, reason?: string) => fetchJson(`/signatures/${id}/decline`, { method: 'POST', body: JSON.stringify({ reason }) }),
         remind: (id: string) => fetchJson(`/signatures/${id}/remind`, { method: 'POST' }),
         void: (id: string) => fetchJson(`/signatures/${id}/void`, { method: 'POST' }),
+        view: (id: string) => fetchJson(`/signatures/${id}/view`, { method: 'POST' }),
+        verify: (id: string, data: { method?: string; passed: boolean; notes?: string }) =>
+            fetchJson(`/signatures/${id}/verify`, { method: 'POST', body: JSON.stringify(data) }),
+        auditTrail: (id: string) => fetchJson(`/signatures/${id}/audit-trail`),
     },
 
     // Online Payments
@@ -482,6 +1055,10 @@ export const api = {
         upcoming: (days?: number) => fetchJson(`/deadlines/upcoming${days ? `?days=${days}` : ''}`),
         calculate: (data: { courtRuleId: string; triggerDate?: string; serviceMethod?: string }) =>
             fetchJson('/deadlines/calculate', { method: 'POST', body: JSON.stringify(data) }),
+    },
+    holidays: {
+        list: (jurisdiction?: string) =>
+            fetchJson(`/holidays${jurisdiction ? `?jurisdiction=${encodeURIComponent(jurisdiction)}` : ''}`)
     },
 
     // Court Rules
@@ -633,6 +1210,106 @@ export const api = {
                 fetchJson('/ai/predict-case', { method: 'POST', body: JSON.stringify(data) }),
             list: (matterId: string) => fetchJson(`/ai/predictions/${matterId}`),
         },
+        // Evidence-Linked Drafting
+        evidenceDrafts: {
+            create: (data: any) =>
+                fetchJson('/ai/drafts/evidence-linked', { method: 'POST', body: JSON.stringify(data) }),
+            generate: (data: any) =>
+                fetchJson('/ai/drafts/evidence-linked/generate', { method: 'POST', body: JSON.stringify(data) }),
+            get: (id: string) => fetchJson(`/ai/drafts/${id}`),
+            verify: (id: string, data?: { createReviewQueueItems?: boolean }) =>
+                fetchJson(`/ai/drafts/${id}/verify`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+            batchReverify: (data?: { draftOutputIds?: string[]; createReviewQueueItems?: boolean; days?: number; limit?: number }) =>
+                fetchJson('/ai/drafts/evidence-linked/batch-reverify', { method: 'POST', body: JSON.stringify(data ?? {}) }),
+            metrics: (params?: { days?: number }) => {
+                const query = new URLSearchParams();
+                if (params?.days) query.set('days', String(params.days));
+                return fetchJson(`/ai/drafts/evidence-linked/metrics${query.toString() ? `?${query.toString()}` : ''}`);
+            },
+            reviewClaim: (draftId: string, claimId: string, data: { action: string; statusOverride?: string; reviewerNotes?: string; approverReason?: string; rewrittenText?: string }) =>
+                fetchJson(`/ai/drafts/${draftId}/claims/${claimId}/review`, { method: 'POST', body: JSON.stringify(data) }),
+            publish: (id: string, data: { policy?: string; lowConfidenceThreshold?: number }) =>
+                fetchJson(`/ai/drafts/${id}/publish`, { method: 'POST', body: JSON.stringify(data) }),
+            exportEvidence: (id: string) =>
+                fetchJson(`/ai/drafts/${id}/evidence-export`),
+        },
+    },
+
+    // Client Transparency (staff reviewer workflow)
+    clientTransparency: {
+        getCurrent: (matterId: string) =>
+            fetchJson(`/client-transparency/matter/${encodeURIComponent(matterId)}`),
+        regenerate: (matterId: string, data?: any) =>
+            fetchJson(`/client-transparency/matter/${encodeURIComponent(matterId)}/regenerate`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+        history: (matterId: string, params?: { limit?: number }) => {
+            const query = new URLSearchParams();
+            if (typeof params?.limit === 'number') query.set('limit', String(params.limit));
+            return fetchJson(`/client-transparency/matter/${encodeURIComponent(matterId)}/history${query.toString() ? `?${query.toString()}` : ''}`);
+        },
+        trigger: (data: any) =>
+            fetchJson('/client-transparency/triggers', { method: 'POST', body: JSON.stringify(data ?? {}) }),
+        getReviewWorkspace: (matterId: string) =>
+            fetchJson(`/client-transparency/matter/${encodeURIComponent(matterId)}/review-workspace`),
+        upsertMatterPolicy: (matterId: string, data: any) =>
+            fetchJson(`/client-transparency/matter/${encodeURIComponent(matterId)}/policy`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+      reviewSnapshot: (snapshotId: string, data: any) =>
+          fetchJson(`/client-transparency/snapshots/${encodeURIComponent(snapshotId)}/review`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+      publishSnapshot: (snapshotId: string, data?: any) =>
+          fetchJson(`/client-transparency/snapshots/${encodeURIComponent(snapshotId)}/publish`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+      getSnapshotEvidence: (snapshotId: string) =>
+          fetchJson(`/client-transparency/snapshots/${encodeURIComponent(snapshotId)}/evidence`),
+      batchReverifyEvidence: (data?: any) =>
+          fetchJson('/client-transparency/batch-reverify', { method: 'POST', body: JSON.stringify(data ?? {}) }),
+      metrics: (params?: { days?: number; matterId?: string }) => {
+          const query = new URLSearchParams();
+          if (typeof params?.days === 'number') query.set('days', String(params.days));
+          if (params?.matterId) query.set('matterId', params.matterId);
+          return fetchJson(`/client-transparency/metrics${query.toString() ? `?${query.toString()}` : ''}`);
+      },
+      },
+
+    // Outcome-to-Fee Planner
+    outcomeFeePlans: {
+        generate: (data: any) =>
+            fetchJson('/outcome-fee-plans/generate', { method: 'POST', body: JSON.stringify(data) }) as Promise<OutcomeFeePlanDetailResult | null>,
+        getLatestForMatter: (matterId: string) =>
+            fetchJson(`/outcome-fee-plans/matter/${encodeURIComponent(matterId)}`) as Promise<OutcomeFeePlanDetailResult | null>,
+        get: (planId: string) =>
+            fetchJson(`/outcome-fee-plans/${encodeURIComponent(planId)}`) as Promise<OutcomeFeePlanDetailResult | null>,
+        listVersions: (planId: string) =>
+            fetchJson(`/outcome-fee-plans/${encodeURIComponent(planId)}/versions`) as Promise<OutcomeFeePlanVersion[] | null>,
+        compare: (planId: string, params?: { fromVersionId?: string; toVersionId?: string }) => {
+            const query = new URLSearchParams();
+            if (params?.fromVersionId) query.set('fromVersionId', params.fromVersionId);
+            if (params?.toVersionId) query.set('toVersionId', params.toVersionId);
+            return fetchJson(`/outcome-fee-plans/${encodeURIComponent(planId)}/compare${query.toString() ? `?${query.toString()}` : ''}`) as Promise<OutcomeFeePlanVersionCompareResult | null>;
+        },
+        recompute: (planId: string, data?: any) =>
+            fetchJson(`/outcome-fee-plans/${encodeURIComponent(planId)}/recompute`, { method: 'POST', body: JSON.stringify(data ?? {}) }) as Promise<OutcomeFeePlanDetailResult | null>,
+        trigger: (data: any) =>
+            fetchJson('/outcome-fee-plans/triggers', { method: 'POST', body: JSON.stringify(data ?? {}) }) as Promise<OutcomeFeePlanTriggerResult | null>,
+        metrics: (params?: { days?: number }) => {
+            const query = new URLSearchParams();
+            if (params?.days) query.set('days', String(params.days));
+            return fetchJson(`/outcome-fee-plans/metrics${query.toString() ? `?${query.toString()}` : ''}`) as Promise<OutcomeFeePlanPortfolioMetricsResult | null>;
+        },
+        listCalibrationSnapshots: (params?: { status?: string; cohortKey?: string; limit?: number }) => {
+            const query = new URLSearchParams();
+            if (params?.status) query.set('status', params.status);
+            if (params?.cohortKey) query.set('cohortKey', params.cohortKey);
+            if (typeof params?.limit === 'number') query.set('limit', String(params.limit));
+            return fetchJson(`/outcome-fee-plans/calibration/snapshots${query.toString() ? `?${query.toString()}` : ''}`) as Promise<OutcomeFeeCalibrationSnapshotsListResult | null>;
+        },
+        getEffectiveCalibrationForMatter: (matterId: string) =>
+            fetchJson(`/outcome-fee-plans/calibration/effective/matter/${encodeURIComponent(matterId)}`) as Promise<OutcomeFeeCalibrationEffectiveResult | null>,
+        runCalibrationJob: (data?: any) =>
+            fetchJson('/outcome-fee-plans/calibration/jobs/run', { method: 'POST', body: JSON.stringify(data ?? {}) }) as Promise<OutcomeFeeCalibrationJobRunResult | null>,
+        recordOutcomeFeedback: (planId: string, data: any) =>
+            fetchJson(`/outcome-fee-plans/${encodeURIComponent(planId)}/outcome-feedback`, { method: 'POST', body: JSON.stringify(data ?? {}) }) as Promise<OutcomeFeeOutcomeFeedbackResult | null>,
+        activateCalibrationSnapshot: (snapshotId: string, data?: { asShadow?: boolean; reason?: string; correlationId?: string }) =>
+            fetchJson(`/outcome-fee-plans/calibration/snapshots/${encodeURIComponent(snapshotId)}/activate`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
+        rollbackCalibrationSnapshot: (snapshotId: string, data?: { targetSnapshotId?: string; reason?: string; correlationId?: string }) =>
+            fetchJson(`/outcome-fee-plans/calibration/snapshots/${encodeURIComponent(snapshotId)}/rollback`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
     },
 
     // Staff Direct Messages

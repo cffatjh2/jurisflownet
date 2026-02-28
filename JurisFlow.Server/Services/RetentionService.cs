@@ -8,11 +8,13 @@ namespace JurisFlow.Server.Services
     {
         private readonly JurisFlowDbContext _context;
         private readonly ILogger<RetentionService> _logger;
+        private readonly IConfiguration _configuration;
 
-        public RetentionService(JurisFlowDbContext context, ILogger<RetentionService> logger)
+        public RetentionService(JurisFlowDbContext context, ILogger<RetentionService> logger, IConfiguration configuration)
         {
             _context = context;
             _logger = logger;
+            _configuration = configuration;
         }
 
         public async Task<Dictionary<string, int>> ApplyRetentionAsync()
@@ -24,11 +26,19 @@ namespace JurisFlow.Server.Services
             {
                 var cutoff = DateTime.UtcNow.AddDays(-Math.Abs(policy.RetentionDays));
                 var deleted = 0;
+                var auditImmutable = _configuration.GetValue("Security:AuditLogImmutable", false);
 
                 switch (policy.EntityName)
                 {
                     case "AuditLog":
-                        deleted = await _context.AuditLogs.Where(x => x.CreatedAt < cutoff).ExecuteDeleteAsync();
+                        if (!auditImmutable)
+                        {
+                            deleted = await _context.AuditLogs.Where(x => x.CreatedAt < cutoff).ExecuteDeleteAsync();
+                        }
+                        else
+                        {
+                            _logger.LogInformation("Audit log retention skipped because immutability is enabled.");
+                        }
                         break;
                     case "Notification":
                         deleted = await _context.Notifications.Where(x => x.CreatedAt < cutoff).ExecuteDeleteAsync();

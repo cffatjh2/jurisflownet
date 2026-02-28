@@ -1,0 +1,60 @@
+name: CD Railway
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    if: ${{ secrets.RAILWAY_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: JurisFlow.Client/package-lock.json
+
+      - name: Validate server
+        run: |
+          dotnet restore JurisFlow.sln
+          dotnet build JurisFlow.sln --configuration Release --no-restore
+          dotnet test JurisFlow.sln --configuration Release --no-build --verbosity minimal
+
+      - name: Validate client
+        working-directory: JurisFlow.Client
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+        run: |
+          set -euo pipefail
+          ARGS=(up --ci)
+          if [ -n "${RAILWAY_SERVICE_ID:-}" ]; then
+            ARGS+=(--service "${RAILWAY_SERVICE_ID}")
+          fi
+          if [ -n "${RAILWAY_ENVIRONMENT_ID:-}" ]; then
+            ARGS+=(--environment "${RAILWAY_ENVIRONMENT_ID}")
+          fi
+          railway "${ARGS[@]}"

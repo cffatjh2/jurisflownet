@@ -9,10 +9,11 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:6', message: 'Login component render started', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'D' }) }).catch(() => { });
-  // #endregion
   const [userType, setUserType] = useState<'attorney' | 'client'>(initialUserType);
+  const [tenantSlug, setTenantSlug] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('tenant_slug') || '';
+  });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,16 +26,10 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   const { login, verifyMfa, isAuthenticated } = useAuth();
   const { login: clientLogin, isAuthenticated: isClientAuthenticated } = useClientAuth();
   const { t } = useTranslation();
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:19', message: 'Login component hooks called successfully', data: { isAuthenticated, isClientAuthenticated }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'D' }) }).catch(() => { });
-  // #endregion
 
   // Clear form state when user logs out (isAuthenticated becomes false)
   useEffect(() => {
     if (!isAuthenticated && !isClientAuthenticated) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:25', message: 'Login component - clearing form state after logout', data: { hadEmail: !!email, hadPassword: !!password }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-      // #endregion
       setEmail('');
       setPassword('');
       setError('');
@@ -54,13 +49,14 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:35', message: 'Login form submitted', data: { userType, email, hasPassword: !!password, isAuthenticated, isClientAuthenticated }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-    // #endregion
 
     try {
       if (mfaRequired && !mfaCode.trim()) {
         setError('Enter the authentication code');
+        return;
+      }
+      if (!mfaRequired && !tenantSlug.trim()) {
+        setError('Firm code is required');
         return;
       }
       if (!email || !password) {
@@ -68,16 +64,13 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
       }
 
       if (userType === 'attorney') {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:44', message: 'Calling attorney login function', data: { email }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-        // #endregion
         if (mfaRequired) {
           const result = await verifyMfa(mfaChallengeId, mfaCode);
           if (!result.success) {
             setError(result.error || 'Invalid authentication code');
           }
         } else {
-          const result = await login(email, password);
+          const result = await login(email, password, tenantSlug.trim());
           if (result.mfaRequired) {
             setMfaRequired(true);
             setMfaChallengeId(result.challengeId || '');
@@ -87,11 +80,8 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
             setError(t('error_login'));
           }
         }
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:47', message: 'Attorney login result', data: { mfaRequired }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-        // #endregion
       } else {
-        const success = await clientLogin(email, password);
+        const success = await clientLogin(email, password, tenantSlug.trim());
         if (!success) {
           setError('Invalid email or password');
         } else {
@@ -100,9 +90,6 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         }
       }
     } catch (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:58', message: 'Login form error', data: { errorMessage: err instanceof Error ? err.message : String(err) }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-      // #endregion
       setError(userType === 'attorney' ? t('error_login') : 'Invalid email or password');
     } finally {
       setLoading(false);
@@ -173,6 +160,19 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
           <form className="space-y-5" onSubmit={handleSubmit}>
             {!mfaRequired ? (
               <>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Firm Code</label>
+                  <input
+                    id="tenant"
+                    name="tenant"
+                    type="text"
+                    required
+                    value={tenantSlug}
+                    onChange={(e) => setTenantSlug(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
+                    placeholder="firm-code"
+                  />
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{t('email')}</label>
                   <input
@@ -283,9 +283,6 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
       </div>
     </div>
   );
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:139', message: 'Login component returning JSX', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'D' }) }).catch(() => { });
-  // #endregion
 };
 
 export default Login;

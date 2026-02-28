@@ -1,33 +1,50 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class MattersController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
+        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
+        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly ILogger<MattersController> _logger;
 
-        public MattersController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure)
+        public MattersController(
+            JurisFlowDbContext context,
+            AuditLogger auditLogger,
+            FirmStructureService firmStructure,
+            OutcomeFeePlannerService outcomeFeePlanner,
+            ClientTransparencyService clientTransparencyService,
+            ILogger<MattersController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
             _firmStructure = firmStructure;
+            _outcomeFeePlanner = outcomeFeePlanner;
+            _clientTransparencyService = clientTransparencyService;
+            _logger = logger;
         }
 
         // GET: api/Matters
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Matter>>> GetMatters([FromQuery] string? status, [FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            var query = _context.Matters.Include(m => m.Client).AsQueryable();
+            var query = _context.Matters
+                .AsNoTracking()
+                .Include(m => m.Client)
+                .AsQueryable();
 
             if (!string.IsNullOrEmpty(status))
             {
@@ -61,7 +78,10 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("{id}")]
         public async Task<ActionResult<Matter>> GetMatter(string id)
         {
-            var matter = await _context.Matters.Include(m => m.Client).FirstOrDefaultAsync(m => m.Id == id);
+            var matter = await _context.Matters
+                .AsNoTracking()
+                .Include(m => m.Client)
+                .FirstOrDefaultAsync(m => m.Id == id);
 
             if (matter == null)
             {
@@ -111,6 +131,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             await _auditLogger.LogAsync(HttpContext, "matter.update", "Matter", matter.Id, $"Status={matter.Status}");
+            await TryTriggerOutcomeFeePlannerAsync(matter.Id, "matter_update");
 
             return NoContent();
         }
@@ -141,6 +162,7 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
 
             await _auditLogger.LogAsync(HttpContext, "matter.archive", "Matter", id, "Archived matter");
+            await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_archive");
 
             return Ok(matter);
         }
@@ -156,6 +178,7 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
 
             await _auditLogger.LogAsync(HttpContext, "matter.restore", "Matter", id, "Restored matter");
+            await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_restore");
 
             return Ok(matter);
         }
@@ -163,6 +186,45 @@ namespace JurisFlow.Server.Controllers
         private bool MatterExists(string id)
         {
             return _context.Matters.Any(e => e.Id == id);
+        }
+
+        private async Task TryTriggerOutcomeFeePlannerAsync(string matterId, string triggerType)
+        {
+            if (string.IsNullOrWhiteSpace(matterId)) return;
+            try
+            {
+                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
+                {
+                    MatterId = matterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(Matter),
+                    TriggerEntityId = matterId
+                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for matter {MatterId}", matterId);
+            }
+
+            try
+            {
+                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
+                {
+                    MatterId = matterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(Matter),
+                    TriggerEntityId = matterId
+                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Client transparency trigger failed for matter {MatterId}", matterId);
+            }
+        }
+
+        private string? GetUserId()
+        {
+            return User.FindFirst("sub")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         }
     }
 }

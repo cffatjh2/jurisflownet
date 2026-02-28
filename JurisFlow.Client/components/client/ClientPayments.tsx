@@ -4,6 +4,7 @@ import { Invoice, InvoiceStatus, PaymentPlan } from '../../types';
 import PaymentCheckout from '../PaymentCheckout';
 import PaymentHistory from '../PaymentHistory';
 import { CreditCard, Check, AlertCircle, Clock, DollarSign, Wallet, Receipt, Calendar, RefreshCw, Play, Pause, Plus } from '../Icons';
+import { clientApi } from '../../services/clientApi';
 
 interface ClientPaymentsProps {
     clientId: string;
@@ -30,40 +31,22 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
         frequency: 'Monthly',
         startDate: new Date().toISOString().split('T')[0],
         autoPayEnabled: false,
-        autoPayMethod: 'Card on file (Simulated)',
+        autoPayMethod: 'Stripe',
         autoPayReference: ''
     });
-
     const clientToken = typeof window !== 'undefined' ? localStorage.getItem('client_token') : null;
 
     useEffect(() => {
         fetchData();
     }, []);
 
-    const requestClient = async (endpoint: string, options: RequestInit = {}) => {
-        const token = localStorage.getItem('client_token');
-        const res = await fetch(endpoint, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
-            },
-            ...options
-        });
-        if (!res.ok) {
-            const message = await res.text();
-            throw new Error(message || 'Request failed');
-        }
-        if (res.status === 204) return null;
-        return res.json();
-    };
-
     const fetchData = async () => {
         setLoading(true);
         setPlansLoading(true);
         try {
             const [invoiceData, planData] = await Promise.all([
-                requestClient('/api/client/invoices').catch(() => []),
-                requestClient('/api/client/payment-plans').catch(() => [])
+                clientApi.fetchJson('/invoices').catch(() => []),
+                clientApi.fetchJson('/payment-plans').catch(() => [])
             ]);
             setInvoices(Array.isArray(invoiceData) ? invoiceData : []);
             setPaymentPlans(Array.isArray(planData) ? planData : []);
@@ -78,7 +61,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
     const refreshPlans = async () => {
         setPlansLoading(true);
         try {
-            const planData = await requestClient('/api/client/payment-plans');
+            const planData = await clientApi.fetchJson('/payment-plans');
             setPaymentPlans(Array.isArray(planData) ? planData : []);
         } catch (error) {
             console.error('Error refreshing payment plans:', error);
@@ -171,7 +154,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
             frequency: 'Monthly',
             startDate: new Date().toISOString().split('T')[0],
             autoPayEnabled: false,
-            autoPayMethod: 'Card on file (Simulated)',
+            autoPayMethod: 'Stripe',
             autoPayReference: ''
         });
         setPlanError(null);
@@ -209,7 +192,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                 autoPayMethod: planForm.autoPayEnabled ? planForm.autoPayMethod : null,
                 autoPayReference: planForm.autoPayEnabled ? planForm.autoPayReference || null : null
             };
-            const created = await requestClient('/api/client/payment-plans', {
+            const created = await clientApi.fetchJson('/payment-plans', {
                 method: 'POST',
                 body: JSON.stringify(payload)
             });
@@ -229,7 +212,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
         const nextStatus = plan.status === 'Active' ? 'Paused' : 'Active';
         setPlanActionId(plan.id);
         try {
-            const updated = await requestClient(`/api/client/payment-plans/${plan.id}`, {
+            const updated = await clientApi.fetchJson(`/payment-plans/${plan.id}`, {
                 method: 'PUT',
                 body: JSON.stringify({ status: nextStatus })
             });
@@ -245,10 +228,10 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
 
     const handleToggleAutoPay = async (plan: PaymentPlan) => {
         const nextEnabled = !plan.autoPayEnabled;
-        const method = nextEnabled ? (plan.autoPayMethod || 'Card on file (Simulated)') : null;
+        const method = nextEnabled ? (plan.autoPayMethod || 'Stripe') : null;
         setPlanActionId(plan.id);
         try {
-            const updated = await requestClient(`/api/client/payment-plans/${plan.id}`, {
+            const updated = await clientApi.fetchJson(`/payment-plans/${plan.id}`, {
                 method: 'PUT',
                 body: JSON.stringify({ autoPayEnabled: nextEnabled, autoPayMethod: method })
             });
@@ -265,7 +248,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
     const handleRunPlan = async (plan: PaymentPlan) => {
         setPlanActionId(plan.id);
         try {
-            await requestClient(`/api/client/payment-plans/${plan.id}/run`, { method: 'POST' });
+            await clientApi.fetchJson(`/payment-plans/${plan.id}/run`, { method: 'POST' });
             await fetchData();
         } catch (error) {
             console.error('Failed to run payment plan', error);
@@ -359,7 +342,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
                             <h3 className="text-lg font-semibold text-gray-900">Payment Plans</h3>
-                            <p className="text-sm text-gray-500 mt-1">Split balances into scheduled installments. AutoPay is simulated until billing integrations are enabled.</p>
+                            <p className="text-sm text-gray-500 mt-1">Split balances into scheduled installments. AutoPay charges your saved billing method when a run is processed.</p>
                         </div>
                         <div className="flex items-center gap-2">
                             <button
@@ -442,7 +425,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                                                             onChange={() => handleToggleAutoPay(plan)}
                                                             disabled={plan.status === 'Completed' || planActionId === plan.id}
                                                         />
-                                                        AutoPay (Simulated)
+                                                        AutoPay
                                                     </label>
                                                     {plan.autoPayEnabled && plan.autoPayMethod && (
                                                         <span>Method: {plan.autoPayMethod}</span>
@@ -603,7 +586,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                 amount={checkoutInvoice ? getBalance(checkoutInvoice) : 0}
                 clientName={client?.name}
                 clientEmail={client?.email}
-                mode="demo"
+                mode="api"
                 authToken={clientToken || undefined}
                 onSuccess={handlePaymentSuccess}
             />
@@ -703,10 +686,10 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                                         onChange={e => setPlanForm(prev => ({
                                             ...prev,
                                             autoPayEnabled: e.target.checked,
-                                            autoPayMethod: e.target.checked ? prev.autoPayMethod || 'Card on file (Simulated)' : 'Card on file (Simulated)'
+                                            autoPayMethod: e.target.checked ? prev.autoPayMethod || 'Stripe' : prev.autoPayMethod
                                         }))}
                                     />
-                                    Enable AutoPay (Simulated)
+                                    Enable AutoPay
                                 </label>
                                 {planForm.autoPayEnabled && (
                                     <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -717,9 +700,7 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                                                 onChange={e => setPlanForm(prev => ({ ...prev, autoPayMethod: e.target.value }))}
                                                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                                             >
-                                                <option value="Card on file (Simulated)">Card on file (Simulated)</option>
-                                                <option value="ACH (Simulated)">ACH (Simulated)</option>
-                                                <option value="Manual Bank Transfer">Manual Bank Transfer</option>
+                                                <option value="Stripe">Stripe (Card / ACH on file)</option>
                                             </select>
                                         </div>
                                         <div>

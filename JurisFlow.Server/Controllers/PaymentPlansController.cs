@@ -9,7 +9,7 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/payment-plans")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class PaymentPlansController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
@@ -68,7 +68,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Invoice not found." });
             }
 
-            var total = dto.TotalAmount ?? (invoice?.Balance ?? 0);
+            var total = dto.TotalAmount ?? ((double?)invoice?.Balance ?? 0d);
             if (total <= 0)
             {
                 return BadRequest(new { message = "Total amount must be greater than 0." });

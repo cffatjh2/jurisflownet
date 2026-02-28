@@ -1,25 +1,35 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using TaskModel = JurisFlow.Server.Models.Task;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class TasksController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly ILogger<TasksController> _logger;
 
-        public TasksController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public TasksController(
+            JurisFlowDbContext context,
+            AuditLogger auditLogger,
+            ClientTransparencyService clientTransparencyService,
+            ILogger<TasksController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _clientTransparencyService = clientTransparencyService;
+            _logger = logger;
         }
 
         // GET: api/Tasks
@@ -27,6 +37,7 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<IEnumerable<object>>> GetTasks()
         {
             var tasks = await _context.Tasks
+                .AsNoTracking()
                 .Include(t => t.Matter)
                 .Include(t => t.AssignedEmployee)
                 .OrderByDescending(t => t.CreatedAt)
@@ -96,6 +107,7 @@ namespace JurisFlow.Server.Controllers
             Console.WriteLine($"[TasksController] Task created successfully with ID: {task.Id}");
 
             await _auditLogger.LogAsync(HttpContext, "task.create", "Task", task.Id, $"Title={task.Title}, MatterId={task.MatterId}");
+            await TryTriggerClientTransparencyAsync(task, "task_create");
 
             return CreatedAtAction("GetTask", new { id = task.Id }, new {
                 id = task.Id,
@@ -130,6 +142,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "task.update", "Task", task.Id, $"Status={task.Status}");
+            await TryTriggerClientTransparencyAsync(task, MapTaskTransparencyTriggerType(task.Status, "task_update"));
             return Ok(task);
         }
 
@@ -169,12 +182,54 @@ namespace JurisFlow.Server.Controllers
             
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "task.status", "Task", task.Id, $"Status={task.Status}");
+            await TryTriggerClientTransparencyAsync(task, MapTaskTransparencyTriggerType(task.Status, "task_status_update"));
             return Ok(task);
         }
 
         private bool TaskExists(string id)
         {
             return _context.Tasks.Any(e => e.Id == id);
+        }
+
+        private async Task TryTriggerClientTransparencyAsync(TaskModel task, string triggerType)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.MatterId))
+            {
+                return;
+            }
+
+            try
+            {
+                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
+                {
+                    MatterId = task.MatterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(TaskModel),
+                    TriggerEntityId = task.Id
+                }, GetUserId(), HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Client transparency trigger failed for task {TaskId}", task.Id);
+            }
+        }
+
+        private static string MapTaskTransparencyTriggerType(string? status, string fallback)
+        {
+            var normalized = (status ?? string.Empty).Trim().ToLowerInvariant();
+            return normalized switch
+            {
+                "completed" or "done" => "task_completed",
+                "blocked" => "task_blocked",
+                _ => fallback
+            };
+        }
+
+        private string GetUserId()
+        {
+            return User.FindFirst("sub")?.Value
+                ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                ?? "system";
         }
     }
 

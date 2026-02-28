@@ -9,63 +9,75 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class AppointmentsController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly TenantContext _tenantContext;
+        private static readonly HashSet<string> AllowedStatuses = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "pending",
+            "approved",
+            "rejected",
+            "cancelled"
+        };
 
-        public AppointmentsController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public AppointmentsController(JurisFlowDbContext context, AuditLogger auditLogger, TenantContext tenantContext)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _tenantContext = tenantContext;
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetAppointments([FromQuery] string? status, [FromQuery] string? clientId, [FromQuery] string? matterId)
+        public async Task<IActionResult> GetAppointments(
+            [FromQuery] string? status,
+            [FromQuery] string? clientId,
+            [FromQuery] string? matterId,
+            [FromQuery] int page = 1,
+            [FromQuery] int limit = 100)
         {
-            var query = _context.AppointmentRequests.AsQueryable();
-
-            if (!string.IsNullOrWhiteSpace(status))
+            var normalizedPage = Math.Max(1, page);
+            var normalizedLimit = Math.Clamp(limit, 1, 200);
+            var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(normalizedStatus) && !AllowedStatuses.Contains(normalizedStatus))
             {
-                query = query.Where(a => a.Status == status);
+                return BadRequest(new { message = "Invalid appointment status." });
+            }
+
+            var query = TenantScope(_context.AppointmentRequests).AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(normalizedStatus))
+            {
+                query = query.Where(a => a.Status == normalizedStatus);
             }
             if (!string.IsNullOrWhiteSpace(clientId))
             {
-                query = query.Where(a => a.ClientId == clientId);
+                query = query.Where(a => a.ClientId == clientId.Trim());
             }
             if (!string.IsNullOrWhiteSpace(matterId))
             {
-                query = query.Where(a => a.MatterId == matterId);
+                query = query.Where(a => a.MatterId == matterId.Trim());
             }
 
             var items = await query
                 .OrderByDescending(a => a.RequestedDate)
+                .Skip((normalizedPage - 1) * normalizedLimit)
+                .Take(normalizedLimit)
                 .ToListAsync();
 
             var clientIds = items.Select(a => a.ClientId).Distinct().ToList();
-            var clients = await _context.Clients
+            var clients = await TenantScope(_context.Clients)
+                .AsNoTracking()
                 .Where(c => clientIds.Contains(c.Id))
                 .Select(c => new { c.Id, c.Name, c.Email })
                 .ToListAsync();
             var clientMap = clients.ToDictionary(c => c.Id, c => c);
 
-            var response = items.Select(a => new
-            {
-                id = a.Id,
-                clientId = a.ClientId,
-                client = clientMap.TryGetValue(a.ClientId, out var c) ? c : null,
-                matterId = a.MatterId,
-                requestedDate = a.RequestedDate,
-                duration = a.Duration,
-                type = a.Type,
-                notes = a.Notes,
-                status = a.Status,
-                assignedTo = a.AssignedTo,
-                approvedDate = a.ApprovedDate,
-                createdAt = a.CreatedAt,
-                updatedAt = a.UpdatedAt
-            });
+            var response = items
+                .Select(a => ToAppointmentResponse(a, clientMap.TryGetValue(a.ClientId, out var c) ? c : null))
+                .ToList();
 
             return Ok(response);
         }
@@ -73,34 +85,48 @@ namespace JurisFlow.Server.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateAppointment(string id, [FromBody] AppointmentUpdateDto dto)
         {
-            var appointment = await _context.AppointmentRequests.FindAsync(id);
+            if (dto == null)
+            {
+                return BadRequest(new { message = "Request body is required." });
+            }
+
+            var appointment = await TenantScope(_context.AppointmentRequests).FirstOrDefaultAsync(a => a.Id == id);
             if (appointment == null) return NotFound();
 
             var previousStatus = appointment.Status;
             var previousApprovedDate = appointment.ApprovedDate;
+            var normalizedStatus = string.IsNullOrWhiteSpace(appointment.Status)
+                ? "pending"
+                : appointment.Status.Trim().ToLowerInvariant();
 
             if (!string.IsNullOrWhiteSpace(dto.Status))
             {
-                var allowedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    "pending",
-                    "approved",
-                    "rejected",
-                    "cancelled"
-                };
-                if (!allowedStatuses.Contains(dto.Status))
+                var requestedStatus = dto.Status.Trim().ToLowerInvariant();
+                if (!AllowedStatuses.Contains(requestedStatus))
                 {
                     return BadRequest(new { message = "Invalid appointment status." });
                 }
-                appointment.Status = dto.Status.ToLowerInvariant();
+                normalizedStatus = requestedStatus;
+                appointment.Status = requestedStatus;
             }
-            if (dto.ApprovedDate.HasValue)
+
+            if (dto.ApprovedDate.HasValue && !string.Equals(normalizedStatus, "approved", StringComparison.Ordinal))
             {
-                appointment.ApprovedDate = dto.ApprovedDate;
+                return BadRequest(new { message = "ApprovedDate can only be set when status is approved." });
             }
+
             if (!string.IsNullOrWhiteSpace(dto.AssignedTo))
             {
-                appointment.AssignedTo = dto.AssignedTo;
+                var assignee = dto.AssignedTo.Trim();
+                var assignedUser = await TenantScope(_context.Users)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.Id == assignee || u.Email == assignee);
+                if (assignedUser == null)
+                {
+                    return BadRequest(new { message = "AssignedTo user was not found for this tenant." });
+                }
+
+                appointment.AssignedTo = assignedUser.Id;
             }
             if (dto.Duration.HasValue)
             {
@@ -113,13 +139,26 @@ namespace JurisFlow.Server.Controllers
 
             appointment.UpdatedAt = DateTime.UtcNow;
 
-            if (appointment.Status == "approved" && !appointment.ApprovedDate.HasValue)
+            if (string.Equals(normalizedStatus, "approved", StringComparison.Ordinal))
             {
-                appointment.ApprovedDate = appointment.RequestedDate;
+                if (dto.ApprovedDate.HasValue)
+                {
+                    appointment.ApprovedDate = dto.ApprovedDate.Value;
+                }
+                else if (!appointment.ApprovedDate.HasValue)
+                {
+                    appointment.ApprovedDate = appointment.RequestedDate;
+                }
+            }
+            else
+            {
+                appointment.ApprovedDate = null;
             }
 
+            var notificationPlanned = false;
             if (!string.Equals(previousStatus, appointment.Status, StringComparison.OrdinalIgnoreCase))
             {
+                notificationPlanned = true;
                 await CreateClientNotificationAsync(appointment, appointment.Status switch
                 {
                     "approved" => "Appointment Approved",
@@ -132,16 +171,17 @@ namespace JurisFlow.Server.Controllers
                     "rejected" => $"Your appointment request for {appointment.RequestedDate:g} has been rejected.",
                     "cancelled" => $"Your appointment request for {appointment.RequestedDate:g} has been cancelled.",
                     _ => $"Your appointment request for {appointment.RequestedDate:g} has been updated."
-                }, appointment.Status == "approved" ? "success" : "info");
+                }, appointment.Status == "approved" ? "success" : "warning");
             }
             else if (appointment.Status == "approved" && appointment.ApprovedDate.HasValue && appointment.ApprovedDate != previousApprovedDate)
             {
+                notificationPlanned = true;
                 await CreateClientNotificationAsync(appointment, "Appointment Rescheduled",
                     $"Your appointment has been rescheduled to {appointment.ApprovedDate:MMM d, yyyy h:mm tt}.",
                     "info");
             }
 
-            if (dto.NotifyClient == true)
+            if (dto.NotifyClient == true && !notificationPlanned)
             {
                 var title = appointment.Status == "approved" ? "Appointment Reminder" : "Appointment Update";
                 var message = appointment.Status == "approved" && appointment.ApprovedDate.HasValue
@@ -153,13 +193,18 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "appointment.update", "AppointmentRequest", appointment.Id, $"Status={appointment.Status}");
 
-            return Ok(appointment);
+            var client = await TenantScope(_context.Clients)
+                .AsNoTracking()
+                .Where(c => c.Id == appointment.ClientId)
+                .Select(c => new { c.Id, c.Name, c.Email })
+                .FirstOrDefaultAsync();
+            return Ok(ToAppointmentResponse(appointment, client));
         }
 
         [HttpPost("{id}/notify")]
         public async Task<IActionResult> NotifyAppointment(string id)
         {
-            var appointment = await _context.AppointmentRequests.FindAsync(id);
+            var appointment = await TenantScope(_context.AppointmentRequests).FirstOrDefaultAsync(a => a.Id == id);
             if (appointment == null) return NotFound();
 
             var title = appointment.Status == "approved" ? "Appointment Reminder" : "Appointment Update";
@@ -176,7 +221,7 @@ namespace JurisFlow.Server.Controllers
 
         private async System.Threading.Tasks.Task CreateClientNotificationAsync(AppointmentRequest appointment, string title, string message, string type)
         {
-            var client = await _context.Clients.FindAsync(appointment.ClientId);
+            var client = await TenantScope(_context.Clients).FirstOrDefaultAsync(c => c.Id == appointment.ClientId);
             if (client == null) return;
 
             _context.Notifications.Add(new Notification
@@ -187,6 +232,43 @@ namespace JurisFlow.Server.Controllers
                 Type = type,
                 Link = "tab:appointments"
             });
+        }
+
+        private static object ToAppointmentResponse(AppointmentRequest appointment, object? client)
+        {
+            return new
+            {
+                id = appointment.Id,
+                clientId = appointment.ClientId,
+                client,
+                matterId = appointment.MatterId,
+                requestedDate = appointment.RequestedDate,
+                duration = appointment.Duration,
+                type = appointment.Type,
+                notes = appointment.Notes,
+                status = appointment.Status,
+                assignedTo = appointment.AssignedTo,
+                approvedDate = appointment.ApprovedDate,
+                createdAt = appointment.CreatedAt,
+                updatedAt = appointment.UpdatedAt
+            };
+        }
+
+        private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
+        {
+            var tenantId = RequireTenantId();
+            return query.Where(e => EF.Property<string>(e, "TenantId") == tenantId);
+        }
+
+        private string RequireTenantId()
+        {
+            var tenantId = _tenantContext.TenantId;
+            if (string.IsNullOrWhiteSpace(tenantId))
+            {
+                throw new InvalidOperationException("Tenant context is required.");
+            }
+
+            return tenantId;
         }
     }
 

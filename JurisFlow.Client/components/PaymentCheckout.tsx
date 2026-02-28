@@ -97,20 +97,12 @@ export default function PaymentCheckout({
                 })
             });
 
-            await new Promise(resolve => setTimeout(resolve, 1200));
+            if (response?.checkoutUrl) {
+                window.location.href = response.checkoutUrl;
+                return;
+            }
 
-            await requestJson(`/payments/${response.transactionId}/complete`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    externalTransactionId: `demo_${Date.now()}`,
-                    cardLast4: '4242',
-                    cardBrand: 'Visa'
-                })
-            });
-
-            setTransactionId(response.transactionId);
-            setStep('success');
-            onSuccess?.(response.transactionId);
+            throw new Error('Checkout URL is missing.');
         } catch (err) {
             console.error('Payment failed:', err);
             setError('Payment processing failed. Please try again.');

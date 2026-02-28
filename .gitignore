@@ -19,12 +19,16 @@ build_output.txt
 compiler_error.log
 msbuild.log
 build_error.log
+*.trx
+TestResults/
 
 # Runtime data
 *.db
 *.db-*
 uploads/
 JurisFlow.Server/server_run_*.txt
+.codex-tmp/
+out/
 
 # OS
 .DS_Store

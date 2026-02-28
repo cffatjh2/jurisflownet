@@ -6,11 +6,13 @@ namespace JurisFlow.Server.Services
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<RetentionHostedService> _logger;
+        private readonly TenantJobRunner _tenantJobs;
 
-        public RetentionHostedService(IServiceProvider serviceProvider, ILogger<RetentionHostedService> logger)
+        public RetentionHostedService(IServiceProvider serviceProvider, ILogger<RetentionHostedService> logger, TenantJobRunner tenantJobs)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
+            _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -19,9 +21,11 @@ namespace JurisFlow.Server.Services
             {
                 try
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var retention = scope.ServiceProvider.GetRequiredService<RetentionService>();
-                    await retention.ApplyRetentionAsync();
+                    await _tenantJobs.RunAsync(async sp =>
+                    {
+                        var retention = sp.GetRequiredService<RetentionService>();
+                        await retention.ApplyRetentionAsync();
+                    }, stoppingToken);
                 }
                 catch (Exception ex)
                 {

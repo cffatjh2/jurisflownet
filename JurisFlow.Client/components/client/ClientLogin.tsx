@@ -3,6 +3,10 @@ import { useClientAuth } from '../../contexts/ClientAuthContext';
 import { Scale } from '../Icons';
 
 const ClientLogin: React.FC = () => {
+  const [tenantSlug, setTenantSlug] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('tenant_slug') || '';
+  });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,10 +20,14 @@ const ClientLogin: React.FC = () => {
     setLoading(true);
 
     try {
+      if (!tenantSlug.trim()) {
+        setError('Firm code is required');
+        return;
+      }
       if (!email || !password) {
         throw new Error();
       }
-      const success = await login(email, password);
+      const success = await login(email, password, tenantSlug.trim());
       if (!success) {
         setError('Invalid email or password');
       }
@@ -54,6 +62,19 @@ const ClientLogin: React.FC = () => {
           <h2 className="text-xl font-bold text-slate-800 mb-6 text-center">Client Login</h2>
 
           <form className="space-y-5" onSubmit={handleSubmit}>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Firm Code</label>
+              <input
+                id="tenant"
+                name="tenant"
+                type="text"
+                required
+                value={tenantSlug}
+                onChange={(e) => setTenantSlug(e.target.value)}
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
+                placeholder="firm-code"
+              />
+            </div>
             <div>
               <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Email Address</label>
               <input

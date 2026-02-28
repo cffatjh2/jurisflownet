@@ -16,7 +16,7 @@ namespace JurisFlow.Server.DTOs
         public string Email { get; set; } = string.Empty;
 
         /// <summary>
-        /// Optional password. If not provided, email prefix will be used as default password.
+        /// Initial password for the staff member.
         /// </summary>
         public string? Password { get; set; }
 

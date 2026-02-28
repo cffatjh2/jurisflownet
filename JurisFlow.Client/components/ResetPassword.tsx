@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from '../contexts/LanguageContext';
 import { Scale, ArrowLeft, Lock } from './Icons';
 import { api } from '../services/api';
+import { passwordRequirementsText, validatePassword } from '../services/passwordPolicy';
 
 const ResetPassword: React.FC = () => {
   const { t } = useTranslation();
@@ -36,8 +37,9 @@ const ResetPassword: React.FC = () => {
       return;
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    const passwordResult = validatePassword(password);
+    if (!passwordResult.isValid) {
+      setError(passwordResult.message);
       return;
     }
 
@@ -104,8 +106,8 @@ const ResetPassword: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              placeholder="At least 6 characters"
-              minLength={6}
+              placeholder={passwordRequirementsText}
+              minLength={12}
             />
           </div>
 
@@ -118,7 +120,7 @@ const ResetPassword: React.FC = () => {
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               placeholder="Confirm your password"
-              minLength={6}
+              minLength={12}
             />
           </div>
 

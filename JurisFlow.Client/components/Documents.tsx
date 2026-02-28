@@ -9,15 +9,13 @@ import { googleDocsService } from '../services/googleDocsService';
 import { toast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { getGoogleClientId } from '../services/googleConfig';
+import { clearOAuthTokens, getOAuthAccessToken, requestOAuthState } from '../services/oauthSecurity';
 import SignatureRequestModal from './SignatureRequestModal';
 import SignatureStatus from './SignatureStatus';
 
-// API base URL - production'da relative path kullan
-const API_BASE_URL = ''; // Use proxy for both api and uploads
-
 const Documents: React.FC = () => {
   const { t, formatDate } = useTranslation();
-  const { matters, documents, addDocument, updateDocument, deleteDocument, bulkAssignDocuments } = useData();
+  const { matters, clients, documents, addDocument, updateDocument, deleteDocument, bulkAssignDocuments } = useData();
   const { confirm } = useConfirm();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const versionFileInputRef = useRef<HTMLInputElement>(null);
@@ -28,6 +26,7 @@ const Documents: React.FC = () => {
   const [viewingDoc, setViewingDoc] = useState<DocumentFile | null>(null);
   const [docContent, setDocContent] = useState<string>('');
   const [loadingContent, setLoadingContent] = useState(false);
+  const [docObjectUrl, setDocObjectUrl] = useState<string | null>(null);
   const [showMatterModal, setShowMatterModal] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [selectedMatterForUpload, setSelectedMatterForUpload] = useState<string>('');
@@ -36,7 +35,7 @@ const Documents: React.FC = () => {
   const [editTags, setEditTags] = useState<string>('');
   const [isGoogleDocsConnected, setIsGoogleDocsConnected] = useState(false);
   const [googleDocsAccessToken, setGoogleDocsAccessToken] = useState<string | null>(
-    localStorage.getItem('google_docs_access_token')
+    getOAuthAccessToken('google-docs')
   );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkMatterId, setBulkMatterId] = useState<string>('');
@@ -56,6 +55,19 @@ const Documents: React.FC = () => {
   const [diffLeftId, setDiffLeftId] = useState('');
   const [diffRightId, setDiffRightId] = useState('');
   const [diffResult, setDiffResult] = useState('');
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareDoc, setShareDoc] = useState<DocumentFile | null>(null);
+  const [shareClientId, setShareClientId] = useState('');
+  const [sharePermissions, setSharePermissions] = useState({
+    canView: true,
+    canDownload: true,
+    canComment: true,
+    canUpload: false
+  });
+  const [shareNote, setShareNote] = useState('');
+  const [shareExpiresAt, setShareExpiresAt] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareMap, setShareMap] = useState<Record<string, any>>({});
 
   useEffect(() => {
     setIsGoogleDocsConnected(!!googleDocsAccessToken);
@@ -69,15 +81,21 @@ const Documents: React.FC = () => {
     }
   };
 
-  const handleGoogleDocsConnect = () => {
+  const handleGoogleDocsConnect = async () => {
     const clientId = getGoogleClientId();
 
     if (!clientId) return;
 
-    const redirectUri = `${window.location.origin}/auth/google/callback`;
-    const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent`;
-    window.location.href = authUrl;
+    try {
+      const state = await requestOAuthState('google', 'google-docs', '/#documents');
+      const redirectUri = `${window.location.origin}/auth/google/callback`;
+      const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
+      window.location.href = authUrl;
+    } catch (error) {
+      console.error('Failed to initialize Google Docs OAuth', error);
+      toast.error('Failed to start Google Docs connection. Please try again.');
+    }
   };
 
   const handleGoogleDocsSync = async () => {
@@ -99,7 +117,7 @@ const Documents: React.FC = () => {
     } catch (error) {
       console.error('Google Docs sync error:', error);
       toast.error('Failed to sync Google Docs. Please reconnect.');
-      localStorage.removeItem('google_docs_access_token');
+      clearOAuthTokens('google-docs');
       setGoogleDocsAccessToken(null);
     }
   };
@@ -193,33 +211,47 @@ const Documents: React.FC = () => {
     return matter ? `${matter.caseNumber} - ${matter.name}` : 'Unknown Matter';
   };
 
+  const closeViewer = () => {
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+    }
+    setDocObjectUrl(null);
+    setViewingDoc(null);
+    setDocContent('');
+  };
+
   const handleOpen = async (doc: DocumentFile) => {
     setViewingDoc(doc);
     setLoadingContent(true);
     setDocContent('');
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+      setDocObjectUrl(null);
+    }
 
     try {
       // If file has filePath, load from server
       if (doc.filePath) {
-        // Ensure path starts with /
-        const path = doc.filePath.startsWith('/') ? doc.filePath : '/' + doc.filePath;
-        const fileUrl = `${API_BASE_URL}${path}`;
+        const response = await api.downloadDocument(doc.id);
+        if (!response) {
+          throw new Error('Document download failed');
+        }
 
         if (doc.type === 'pdf') {
-          // PDF: show in iframe
-          setDocContent(fileUrl);
+          const url = window.URL.createObjectURL(response.blob);
+          setDocObjectUrl(url);
+          setDocContent(url);
         } else if (doc.type === 'txt') {
-          const response = await fetch(fileUrl);
-          const text = await response.text();
+          const text = await response.blob.text();
           setDocContent(text);
         } else if (doc.type === 'docx') {
-          const response = await fetch(fileUrl);
-          const arrayBuffer = await response.arrayBuffer();
+          const arrayBuffer = await response.blob.arrayBuffer();
           const result = await mammoth.convertToHtml({ arrayBuffer });
           setDocContent(result.value);
         } else {
-          // Images: show directly
-          setDocContent(fileUrl);
+          const url = window.URL.createObjectURL(response.blob);
+          setDocObjectUrl(url);
+          setDocContent(url);
         }
       } else if (doc.content) {
         // Fallback to old content storage
@@ -244,12 +276,12 @@ const Documents: React.FC = () => {
         }
       } else {
         toast.warning('No content is available for this file.');
-        setViewingDoc(null);
+        closeViewer();
       }
     } catch (error) {
       console.error('Error opening document:', error);
       toast.error('Unable to open the file.');
-      setViewingDoc(null);
+      closeViewer();
     } finally {
       setLoadingContent(false);
     }
@@ -367,6 +399,103 @@ const Documents: React.FC = () => {
     } catch (error: any) {
       console.error('Diff error', error);
       toast.error('Unable to compare versions.');
+    }
+  };
+
+  const openShareSettings = async (doc: DocumentFile) => {
+    setShareDoc(doc);
+    setShowShareModal(true);
+    setShareLoading(true);
+    setShareMap({});
+    try {
+      const shares = await api.getDocumentShares(doc.id);
+      const map: Record<string, any> = {};
+      (shares || []).forEach((share: any) => {
+        if (share.clientId) map[share.clientId] = share;
+      });
+      setShareMap(map);
+
+      let defaultClientId = '';
+      if (doc.matterId) {
+        const matter = matters.find(m => m.id === doc.matterId);
+        defaultClientId = matter?.client?.id || '';
+      }
+      if (!defaultClientId && shares?.length) {
+        defaultClientId = shares[0].clientId;
+      }
+      if (!defaultClientId && clients.length > 0) {
+        defaultClientId = clients[0].id;
+      }
+      setShareClientId(defaultClientId);
+    } catch (error) {
+      console.error('Failed to load document shares', error);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showShareModal) return;
+    if (!shareClientId) return;
+    const existing = shareMap[shareClientId];
+    if (existing) {
+      setSharePermissions({
+        canView: !!existing.canView,
+        canDownload: !!existing.canDownload,
+        canComment: !!existing.canComment,
+        canUpload: !!existing.canUpload
+      });
+      setShareNote(existing.note || '');
+      setShareExpiresAt(existing.expiresAt ? existing.expiresAt.slice(0, 10) : '');
+    } else {
+      setSharePermissions({
+        canView: true,
+        canDownload: true,
+        canComment: true,
+        canUpload: false
+      });
+      setShareNote('');
+      setShareExpiresAt('');
+    }
+  }, [shareClientId, shareMap, showShareModal]);
+
+  const handleSaveShare = async () => {
+    if (!shareDoc || !shareClientId) {
+      toast.error('Select a client to share with.');
+      return;
+    }
+    try {
+      const payload = {
+        clientId: shareClientId,
+        canView: sharePermissions.canView,
+        canDownload: sharePermissions.canDownload,
+        canComment: sharePermissions.canComment,
+        canUpload: sharePermissions.canUpload,
+        note: shareNote.trim() || null,
+        expiresAt: shareExpiresAt ? new Date(shareExpiresAt).toISOString() : null
+      };
+      const saved = await api.upsertDocumentShare(shareDoc.id, payload);
+      setShareMap(prev => ({ ...prev, [shareClientId]: saved }));
+      toast.success('Share settings saved.');
+    } catch (error: any) {
+      console.error('Failed to save share', error);
+      toast.error('Unable to save share settings.');
+    }
+  };
+
+  const handleRemoveShare = async () => {
+    if (!shareDoc || !shareClientId) return;
+    try {
+      await api.removeDocumentShare(shareDoc.id, shareClientId);
+      setShareMap(prev => {
+        const copy = { ...prev };
+        delete copy[shareClientId];
+        return copy;
+      });
+      toast.success('Share removed.');
+    } catch (error: any) {
+      console.error('Failed to remove share', error);
+      toast.error('Unable to remove share.');
     }
   };
 
@@ -488,24 +617,15 @@ const Documents: React.FC = () => {
   const handleDownload = async (doc: DocumentFile) => {
     try {
       if (doc.filePath) {
-        // Download from server using fetch to avoid opening new tab
-        const path = doc.filePath.startsWith('/') ? doc.filePath : '/' + doc.filePath;
-        const fileUrl = `${API_BASE_URL}${path}`;
-        const token = localStorage.getItem('auth_token');
-
-        const response = await fetch(fileUrl, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {}
-        });
-
-        if (!response.ok) {
+        const response = await api.downloadDocument(doc.id);
+        if (!response) {
           throw new Error('File download failed');
         }
-
-        const blob = await response.blob();
+        const blob = response.blob;
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = doc.name;
+        link.download = response.filename || doc.name;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -546,7 +666,7 @@ const Documents: React.FC = () => {
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
-      <div className="px-8 py-6 border-b border-gray-100 flex justify-between items-center bg-white">
+      <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">{t('docs_title')}</h1>
           <p className="text-sm text-gray-500 mt-1">{t('docs_subtitle')}</p>
@@ -828,7 +948,7 @@ const Documents: React.FC = () => {
                 <p className="text-xs text-gray-500 mt-1">{viewingDoc.size} - {formatDate(viewingDoc.updatedAt)}</p>
               </div>
               <button
-                onClick={() => { setViewingDoc(null); setDocContent(''); }}
+                onClick={closeViewer}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-6 h-6" />
@@ -876,6 +996,12 @@ const Documents: React.FC = () => {
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700"
               >
                 Request Signature
+              </button>
+              <button
+                onClick={() => openShareSettings(viewingDoc)}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700"
+              >
+                Share
               </button>
               <button
                 onClick={() => handleDownload(viewingDoc)}
@@ -1011,6 +1137,133 @@ const Documents: React.FC = () => {
                   </pre>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showShareModal && shareDoc && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">Share Document</h3>
+                <p className="text-xs text-gray-500 mt-1">{shareDoc.name}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setShareDoc(null);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              {shareLoading ? (
+                <div className="text-sm text-gray-400">Loading share settings...</div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Client</label>
+                    <select
+                      value={shareClientId}
+                      onChange={(e) => setShareClientId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                    >
+                      <option value="">Select client</option>
+                      {clients.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm text-gray-700">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={sharePermissions.canView}
+                        onChange={(e) => setSharePermissions(prev => ({ ...prev, canView: e.target.checked }))}
+                      />
+                      View
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={sharePermissions.canDownload}
+                        onChange={(e) => setSharePermissions(prev => ({ ...prev, canDownload: e.target.checked }))}
+                      />
+                      Download
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={sharePermissions.canComment}
+                        onChange={(e) => setSharePermissions(prev => ({ ...prev, canComment: e.target.checked }))}
+                      />
+                      Comment
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={sharePermissions.canUpload}
+                        onChange={(e) => setSharePermissions(prev => ({ ...prev, canUpload: e.target.checked }))}
+                      />
+                      Upload
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Expiration date (optional)</label>
+                    <input
+                      type="date"
+                      value={shareExpiresAt}
+                      onChange={(e) => setShareExpiresAt(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Notes (optional)</label>
+                    <textarea
+                      value={shareNote}
+                      onChange={(e) => setShareNote(e.target.value)}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3 bg-gray-50">
+              <button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setShareDoc(null);
+                }}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRemoveShare}
+                disabled={!shareClientId}
+                className="px-4 py-2 text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
+              >
+                Remove
+              </button>
+              <button
+                onClick={handleSaveShare}
+                disabled={!shareClientId}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>

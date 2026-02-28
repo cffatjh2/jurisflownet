@@ -1,21 +1,133 @@
 import React, { useState, useEffect } from 'react';
 import { Matter } from '../../types';
 import { Clock, FileText, DollarSign } from '../Icons';
+import { clientApi } from '../../services/clientApi';
+import { useTranslation } from '../../contexts/LanguageContext';
+
+type ClientTransparencySnapshot = {
+  id: string;
+  matterId: string;
+  versionNumber: number;
+  status: string;
+  generatedAt: string;
+  dataQuality?: string | null;
+  confidenceScore?: number | null;
+  summary?: string | null;
+  whatChanged?: string | null;
+};
+
+type ClientTransparencyTimelineItem = {
+  id: string;
+  orderIndex: number;
+  phaseKey: string;
+  label: string;
+  status: string;
+  text?: string | null;
+  startedAtUtc?: string | null;
+  etaAtUtc?: string | null;
+  completedAtUtc?: string | null;
+};
+
+type ClientTransparencyDelayReason = {
+  id: string;
+  code: string;
+  severity: string;
+  expectedDelayDays?: number | null;
+  text?: string | null;
+};
+
+type ClientTransparencyNextStep = {
+  id: string;
+  ownerType: string;
+  status: string;
+  actionText: string;
+  etaAtUtc?: string | null;
+  blockedByText?: string | null;
+};
+
+type ClientTransparencyCostImpact = {
+  currency: string;
+  currentExpectedRangeMin?: number | null;
+  currentExpectedRangeMax?: number | null;
+  deltaRangeMin?: number | null;
+  deltaRangeMax?: number | null;
+  confidenceBand?: string | null;
+  driverSummary?: string | null;
+};
+
+type ClientTransparencyEvidenceSourceRef = {
+  source: string;
+  entityId?: string | null;
+  label?: string | null;
+  isStale?: boolean;
+  staleReason?: string | null;
+  lastChangedAtUtc?: string | null;
+};
+
+type ClientTransparencyEvidenceSentence = {
+  sentenceId: string;
+  text: string;
+  sourceRefs: ClientTransparencyEvidenceSourceRef[];
+};
+
+type ClientTransparencyEvidenceItemLink = {
+  itemId: string;
+  itemType: string;
+  label?: string | null;
+  text?: string | null;
+  sourceRefs: ClientTransparencyEvidenceSourceRef[];
+};
+
+type ClientTransparencyEvidenceQuality = {
+  coverage?: number;
+  stale?: number;
+  coveredSegments?: number;
+  totalSegments?: number;
+  totalSources?: number;
+  staleSources?: number;
+  reviewBurden?: number;
+  dataQuality?: string | null;
+};
+
+type ClientTransparencyEvidenceBundle = {
+  summarySentences?: ClientTransparencyEvidenceSentence[];
+  whatChangedSentences?: ClientTransparencyEvidenceSentence[];
+  delayReasonLinks?: ClientTransparencyEvidenceItemLink[];
+  timelineLinks?: ClientTransparencyEvidenceItemLink[];
+  nextStepLink?: ClientTransparencyEvidenceItemLink | null;
+  costImpactLink?: ClientTransparencyEvidenceItemLink | null;
+  staleSources?: ClientTransparencyEvidenceSourceRef[];
+  allSources?: ClientTransparencyEvidenceSourceRef[];
+  quality?: ClientTransparencyEvidenceQuality | null;
+};
+
+type ClientTransparencyResponse = {
+  snapshot: ClientTransparencySnapshot | null;
+  pendingReview?: boolean;
+  pendingReviewReason?: string | null;
+  riskFlags: string[];
+  timeline: ClientTransparencyTimelineItem[];
+  delayReasons: ClientTransparencyDelayReason[];
+  nextStep: ClientTransparencyNextStep | null;
+  costImpact: ClientTransparencyCostImpact | null;
+  evidence?: ClientTransparencyEvidenceBundle | null;
+};
 
 const ClientMatters: React.FC = () => {
+  const { language } = useTranslation();
   const [matters, setMatters] = useState<Matter[]>([]);
   const [selectedMatter, setSelectedMatter] = useState<Matter | null>(null);
   const [loading, setLoading] = useState(true);
+  const [transparency, setTransparency] = useState<ClientTransparencyResponse | null>(null);
+  const [transparencyLoading, setTransparencyLoading] = useState(false);
+  const [transparencyError, setTransparencyError] = useState<string | null>(null);
+  const [showTransparencyEvidence, setShowTransparencyEvidence] = useState(false);
 
   useEffect(() => {
     const loadMatters = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const res = await fetch('/api/client/matters', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        setMatters(data);
+        const data = await clientApi.fetchJson('/matters');
+        setMatters(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error('Error loading matters:', error);
       } finally {
@@ -25,6 +137,83 @@ const ClientMatters: React.FC = () => {
     
     loadMatters();
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let intervalId: number | null = null;
+
+    const loadTransparency = async (silent = false) => {
+      if (!selectedMatter?.id) {
+        if (!disposed) {
+          setTransparency(null);
+          setTransparencyError(null);
+          setTransparencyLoading(false);
+        }
+        return;
+      }
+
+      if (!silent && !disposed) {
+        setTransparencyLoading(true);
+      }
+      if (!disposed) {
+        setTransparencyError(null);
+      }
+      try {
+        const data = await clientApi.fetchJson(`/matters/${selectedMatter.id}/transparency?lang=${encodeURIComponent(language)}`);
+        if (!disposed) {
+          setTransparency(data as ClientTransparencyResponse);
+        }
+      } catch (error) {
+        console.error('Error loading client transparency snapshot:', error);
+        if (!disposed) {
+          setTransparencyError('Transparency summary is currently unavailable.');
+          setTransparency(null);
+        }
+      } finally {
+        if (!silent && !disposed) {
+          setTransparencyLoading(false);
+        }
+      }
+    };
+
+    void loadTransparency();
+    intervalId = window.setInterval(() => {
+      void loadTransparency(true);
+    }, 30000);
+
+    return () => {
+      disposed = true;
+      if (intervalId != null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [selectedMatter?.id, language]);
+
+  const formatEvidenceSource = (ref: ClientTransparencyEvidenceSourceRef) => {
+    const base = [ref.source, ref.label || ref.entityId].filter(Boolean).join(': ');
+    if (ref.isStale) {
+      return `${base} (stale: ${(ref.staleReason || 'unknown').replace(/_/g, ' ')})`;
+    }
+    return base;
+  };
+
+  const renderEvidenceRefs = (refs?: ClientTransparencyEvidenceSourceRef[] | null) => {
+    if (!refs || refs.length === 0) {
+      return <div className="text-[11px] text-gray-400">No linked source evidence.</div>;
+    }
+    return (
+      <div className="flex flex-wrap gap-1">
+        {refs.slice(0, 6).map((ref, idx) => (
+          <span key={`${ref.source}-${ref.entityId || idx}`} className={`px-2 py-1 rounded text-[10px] border ${ref.isStale ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+            {formatEvidenceSource(ref)}
+          </span>
+        ))}
+        {refs.length > 6 && (
+          <span className="px-2 py-1 rounded text-[10px] border bg-white border-gray-200 text-gray-500">+{refs.length - 6} more</span>
+        )}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -86,6 +275,225 @@ const ClientMatters: React.FC = () => {
               <div className="font-semibold text-slate-900">{selectedMatter.responsibleAttorney}</div>
             </div>
           </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Transparency Summary</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Plain-language status, next step, delay factors, and expected cost impact.
+              </p>
+            </div>
+            {transparency?.snapshot && (
+              <div className="text-right">
+                <div className="text-xs text-gray-500">Version {transparency.snapshot.versionNumber}</div>
+                <div className="text-xs text-gray-500">
+                  {new Date(transparency.snapshot.generatedAt).toLocaleString()}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {transparencyLoading ? (
+            <div className="text-sm text-gray-500">Loading transparency summary...</div>
+          ) : transparencyError ? (
+            <div className="text-sm text-red-600">{transparencyError}</div>
+          ) : !transparency?.snapshot ? (
+            <div className="text-sm text-gray-500">
+              {transparency?.pendingReview
+                ? `Transparency summary is being reviewed before publishing${transparency.pendingReviewReason ? ` (${String(transparency.pendingReviewReason).replaceAll('_', ' ')})` : ''}.`
+                : 'No transparency summary available yet.'}
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                <div className="text-sm text-slate-800">{transparency.snapshot.summary}</div>
+                {transparency.snapshot.whatChanged && (
+                  <div className="text-xs text-blue-700 mt-2">{transparency.snapshot.whatChanged}</div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                  transparency.snapshot.dataQuality === 'high' ? 'bg-green-100 text-green-700' :
+                  transparency.snapshot.dataQuality === 'medium' ? 'bg-amber-100 text-amber-700' :
+                  'bg-gray-100 text-gray-700'
+                }`}>
+                  Data quality: {transparency.snapshot.dataQuality ?? 'unknown'}
+                </span>
+                <span className="px-2 py-1 rounded text-xs font-semibold bg-indigo-100 text-indigo-700">
+                  Confidence: {typeof transparency.snapshot.confidenceScore === 'number'
+                    ? `${Math.round(transparency.snapshot.confidenceScore * 100)}%`
+                    : 'n/a'}
+                </span>
+                {(transparency.riskFlags || []).map(flag => (
+                  <span key={flag} className="px-2 py-1 rounded text-xs font-semibold bg-rose-100 text-rose-700">
+                    {flag.replace(/_/g, ' ')}
+                  </span>
+                ))}
+                {transparency.evidence?.quality && (
+                  <>
+                    <span className="px-2 py-1 rounded text-xs font-semibold bg-slate-100 text-slate-700">
+                      Evidence coverage: {Math.round(Number(transparency.evidence.quality.coverage || 0) * 100)}%
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs font-semibold ${Number(transparency.evidence.quality.stale || 0) > 0 ? 'bg-rose-100 text-rose-700' : 'bg-green-100 text-green-700'}`}>
+                      Stale sources: {transparency.evidence.quality.staleSources ?? 0}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {transparency.evidence && (
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">How We Know (Evidence)</div>
+                      <div className="text-xs text-gray-500">Source links behind this client-facing summary.</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowTransparencyEvidence(prev => !prev)}
+                      className="px-3 py-1.5 rounded border border-slate-200 text-xs font-semibold bg-white hover:bg-slate-50"
+                    >
+                      {showTransparencyEvidence ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {showTransparencyEvidence && (
+                    <div className="mt-3 space-y-3">
+                      {(transparency.evidence.summarySentences || []).map(sentence => (
+                        <div key={sentence.sentenceId} className="rounded border border-blue-100 bg-blue-50/40 p-2">
+                          <div className="text-xs text-slate-800">{sentence.text}</div>
+                          <div className="mt-2">{renderEvidenceRefs(sentence.sourceRefs)}</div>
+                        </div>
+                      ))}
+                      {(transparency.evidence.whatChangedSentences || []).length > 0 && (
+                        <div>
+                          <div className="text-[11px] font-semibold text-slate-600 mb-1">What changed evidence</div>
+                          {(transparency.evidence.whatChangedSentences || []).map(sentence => (
+                            <div key={sentence.sentenceId} className="rounded border border-indigo-100 bg-indigo-50/30 p-2 mb-2">
+                              <div className="text-xs text-slate-800">{sentence.text}</div>
+                              <div className="mt-2">{renderEvidenceRefs(sentence.sourceRefs)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(transparency.evidence.staleSources || []).length > 0 && (
+                        <div className="rounded border border-rose-200 bg-rose-50 p-2">
+                          <div className="text-[11px] font-semibold text-rose-700 mb-1">Source freshness warnings</div>
+                          {renderEvidenceRefs(transparency.evidence.staleSources)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="lg:col-span-2">
+                  <div className="text-sm font-semibold text-slate-900 mb-2">Process Map</div>
+                  <div className="space-y-3">
+                    {transparency.timeline.map(item => (
+                      <div key={item.id} className="rounded-lg border border-gray-200 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-medium text-slate-900 text-sm">{item.label}</div>
+                          <span className={`px-2 py-1 rounded text-[11px] font-bold uppercase ${
+                            item.status === 'completed' ? 'bg-green-100 text-green-700' :
+                            item.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                            item.status === 'blocked' ? 'bg-red-100 text-red-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {item.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                        {item.text && <div className="text-xs text-gray-700 mt-2">{item.text}</div>}
+                        <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-3">
+                          {item.startedAtUtc && <span>Started: {new Date(item.startedAtUtc).toLocaleDateString()}</span>}
+                          {item.etaAtUtc && <span>ETA: {new Date(item.etaAtUtc).toLocaleDateString()}</span>}
+                          {item.completedAtUtc && <span>Completed: {new Date(item.completedAtUtc).toLocaleDateString()}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <div className="text-sm font-semibold text-slate-900 mb-2">Next Step</div>
+                    {transparency.nextStep ? (
+                      <>
+                        <div className="text-sm text-gray-800">{transparency.nextStep.actionText}</div>
+                        <div className="text-xs text-gray-500 mt-2">
+                          Owner: {transparency.nextStep.ownerType.replace('_', ' ')}
+                          {transparency.nextStep.etaAtUtc && ` • ETA ${new Date(transparency.nextStep.etaAtUtc).toLocaleDateString()}`}
+                        </div>
+                        {transparency.nextStep.blockedByText && (
+                          <div className="text-xs text-amber-700 mt-2">{transparency.nextStep.blockedByText}</div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-sm text-gray-500">No next step is currently published.</div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <div className="text-sm font-semibold text-slate-900 mb-2">Delay Factors</div>
+                    {transparency.delayReasons.length > 0 ? (
+                      <div className="space-y-2">
+                        {transparency.delayReasons.map(delay => (
+                          <div key={delay.id} className="rounded-md bg-amber-50 border border-amber-200 p-2">
+                            <div className="text-xs font-semibold text-amber-800">
+                              {delay.code.replace(/_/g, ' ')} ({delay.severity})
+                            </div>
+                            {delay.text && <div className="text-xs text-amber-900 mt-1">{delay.text}</div>}
+                            {typeof delay.expectedDelayDays === 'number' && (
+                              <div className="text-[11px] text-amber-700 mt-1">Expected impact: ~{delay.expectedDelayDays} day(s)</div>
+                            )}
+                            {showTransparencyEvidence && (
+                              <div className="mt-2">
+                                {renderEvidenceRefs((transparency.evidence?.delayReasonLinks || []).find(link => link.itemId === delay.id)?.sourceRefs)}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-500">No active delay factor is currently flagged.</div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <div className="text-sm font-semibold text-slate-900 mb-2">Expected Cost Impact</div>
+                    {transparency.costImpact ? (
+                      <>
+                        <div className="text-lg font-bold text-slate-900">
+                          {transparency.costImpact.currency} {Number(transparency.costImpact.currentExpectedRangeMin ?? 0).toLocaleString()} - {Number(transparency.costImpact.currentExpectedRangeMax ?? 0).toLocaleString()}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Confidence: {transparency.costImpact.confidenceBand ?? 'n/a'}
+                        </div>
+                        {(transparency.costImpact.deltaRangeMin != null || transparency.costImpact.deltaRangeMax != null) && (
+                          <div className="text-xs mt-2 text-gray-700">
+                            Delta vs current forecast: {transparency.costImpact.currency} {Number(transparency.costImpact.deltaRangeMin ?? 0).toLocaleString()} to {Number(transparency.costImpact.deltaRangeMax ?? 0).toLocaleString()}
+                          </div>
+                        )}
+                        {transparency.costImpact.driverSummary && (
+                          <div className="text-xs text-gray-600 mt-2">{transparency.costImpact.driverSummary}</div>
+                        )}
+                        {showTransparencyEvidence && (
+                          <div className="mt-2">
+                            {renderEvidenceRefs(transparency.evidence?.costImpactLink?.sourceRefs)}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-sm text-gray-500">No cost impact estimate is available yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Time Entries & Expenses */}

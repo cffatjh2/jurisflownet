@@ -20,8 +20,12 @@ namespace JurisFlow.Server.Models
 
         public string? ClientId { get; set; }
 
+        public string? PayorClientId { get; set; }
+
+        public string? InvoicePayorAllocationId { get; set; }
+
         [Required]
-        public double Amount { get; set; }
+        public decimal Amount { get; set; }
 
         // UTBMS/LEDES task/expense codes (optional)
         public string? TaskCode { get; set; }
@@ -36,6 +40,36 @@ namespace JurisFlow.Server.Models
         public string PaymentMethod { get; set; } = "Stripe";
 
         /// <summary>
+        /// card | ach | echeck | card_or_ach (provider capability dependent)
+        /// </summary>
+        public string? PaymentRail { get; set; }
+
+        /// <summary>
+        /// External session identifier (e.g., Stripe Checkout Session)
+        /// </summary>
+        public string? ProviderSessionId { get; set; }
+
+        /// <summary>
+        /// External payment intent identifier
+        /// </summary>
+        public string? ProviderPaymentIntentId { get; set; }
+
+        /// <summary>
+        /// External charge identifier
+        /// </summary>
+        public string? ProviderChargeId { get; set; }
+
+        /// <summary>
+        /// External refund identifier
+        /// </summary>
+        public string? ProviderRefundId { get; set; }
+
+        /// <summary>
+        /// External customer identifier
+        /// </summary>
+        public string? ProviderCustomerId { get; set; }
+
+        /// <summary>
         /// External transaction ID from payment provider
         /// </summary>
         public string? ExternalTransactionId { get; set; }
@@ -47,7 +81,7 @@ namespace JurisFlow.Server.Models
 
         public string? FailureReason { get; set; }
 
-        public double? RefundAmount { get; set; }
+        public decimal? RefundAmount { get; set; }
 
         public string? RefundReason { get; set; }
 
@@ -75,6 +109,19 @@ namespace JurisFlow.Server.Models
         public string? Source { get; set; } // Manual, AutoPay, Plan
 
         public DateTime? ProcessedAt { get; set; }
+
+        /// <summary>
+        /// Cumulative amount applied to invoice balance (idempotency guard).
+        /// </summary>
+        public decimal InvoiceAppliedAmount { get; set; }
+
+        /// <summary>
+        /// Cumulative refunded amount already reversed from invoice.
+        /// </summary>
+        public decimal InvoiceRefundAppliedAmount { get; set; }
+
+        public DateTime? InvoiceAppliedAt { get; set; }
+        public DateTime? InvoiceRefundAppliedAt { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

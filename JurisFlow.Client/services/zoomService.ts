@@ -1,3 +1,5 @@
+import { requestOAuthState } from './oauthSecurity';
+
 // Zoom Service - Creates real Zoom meetings via Zoom API
 const ZOOM_API_BASE = 'https://api.zoom.us/v2';
 
@@ -64,12 +66,16 @@ export const zoomService = {
   },
 
   // Get OAuth2 authorization URL for Zoom API
-  getAuthUrl: (): string => {
+  getAuthUrl: async (returnPath: string = '/#videocall'): Promise<string> => {
     const clientId = import.meta.env.VITE_ZOOM_CLIENT_ID || '';
     const redirectUri = `${window.location.origin}/auth/zoom/callback`;
     const responseType = 'code';
-    
-    return `https://zoom.us/oauth/authorize?response_type=${responseType}&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+    const normalizedReturnPath = returnPath.startsWith('/') && !returnPath.startsWith('//')
+      ? returnPath
+      : '/#videocall';
+    const state = await requestOAuthState('zoom', 'zoom', normalizedReturnPath);
+
+    return `https://zoom.us/oauth/authorize?response_type=${responseType}&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
   }
 };
 

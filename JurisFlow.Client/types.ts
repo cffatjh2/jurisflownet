@@ -341,7 +341,7 @@ export const ROLE_PERMISSIONS: Record<EmployeeRole, Permission[]> = {
     'trust.view'
   ],
   [EmployeeRole.OFFICE_MANAGER]: [
-    'user.manage', 'matter.view', 'document.view',
+    'user.manage', 'matter.view', 'matter.create', 'matter.edit', 'document.view',
     'billing.view', 'billing.manage',
     'calendar.manage', 'task.manage', 'client.manage',
     'trust.view', 'trust.deposit', 'trust.withdraw'
@@ -438,6 +438,8 @@ export interface Client {
 export interface Lead {
   id: string;
   name: string;
+  email?: string;
+  phone?: string;
   source: string;
   status: 'New' | 'Contacted' | 'Consultation' | 'Retained' | 'Lost';
   estimatedValue: number;
@@ -698,6 +700,16 @@ export interface DocumentFile {
   legalHoldPlacedAt?: string;
   legalHoldReleasedAt?: string;
   legalHoldPlacedBy?: string;
+  permissions?: DocumentPermissions;
+}
+
+export interface DocumentPermissions {
+  canView?: boolean;
+  canDownload?: boolean;
+  canComment?: boolean;
+  canUpload?: boolean;
+  sharedAt?: string;
+  expiresAt?: string;
 }
 
 export interface Message {
@@ -1305,8 +1317,23 @@ export interface SecuritySettings {
 
 export type IntegrationStatus = 'connected' | 'pending' | 'disabled' | 'error';
 
+export interface IntegrationCatalogItem {
+  providerKey: string;
+  provider: string;
+  category: 'Accounting' | 'Calendar' | 'Payments' | 'Email' | string;
+  description: string;
+  connectionMode?: string;
+  supportsSync?: boolean;
+  supportsWebhook?: boolean;
+  webhookFirst?: boolean;
+  fallbackPollingMinutes?: number;
+  supportedActions?: string[];
+  capabilities?: string[];
+}
+
 export interface IntegrationItem {
   id: string;
+  providerKey?: string;
   provider: string;
   category: 'Accounting' | 'Calendar' | 'Payments' | 'Email' | string;
   status: IntegrationStatus;
@@ -1314,7 +1341,421 @@ export interface IntegrationItem {
   accountEmail?: string;
   syncEnabled?: boolean;
   lastSyncAt?: string;
+  lastWebhookAt?: string;
+  lastWebhookEventId?: string;
   notes?: string;
+}
+
+export interface IntegrationCanonicalContractDescriptor {
+  version: string;
+  actions: string[];
+  conflictPolicies: string[];
+  reviewQueueOpenStatuses: string[];
+  conflictQueueOpenStatuses: string[];
+  eventStatuses: {
+    inbox: string[];
+    outbox: string[];
+  };
+}
+
+export interface IntegrationCapabilityMatrixRow {
+  providerKey: string;
+  provider: string;
+  category: string;
+  connectionMode?: string;
+  supportsWebhook: boolean;
+  webhookFirst: boolean;
+  fallbackPollingMinutes?: number | null;
+  supportedActions: string[];
+  capabilities: string[];
+  connectionId?: string | null;
+  connectionStatus?: string | null;
+  syncEnabled: boolean;
+  lastSyncAt?: string | null;
+  lastWebhookAt?: string | null;
+  mappingProfileCount: number;
+  openConflictCount: number;
+  openReviewCount: number;
+  pendingInboxEventCount: number;
+  pendingOutboxEventCount: number;
+  lastRunStatus?: string | null;
+  lastRunAt?: string | null;
+  lastRunErrorCode?: string | null;
+  gaps: string[];
+}
+
+export interface IntegrationCapabilityMatrixResponse {
+  generatedAt: string;
+  rows: IntegrationCapabilityMatrixRow[];
+}
+
+export interface IntegrationMappingProfile {
+  id: string;
+  connectionId: string;
+  providerKey: string;
+  profileKey: string;
+  name: string;
+  entityType: string;
+  direction: string;
+  status: string;
+  conflictPolicy: string;
+  isDefault: boolean;
+  version: number;
+  fieldMappingsJson?: string | null;
+  enumMappingsJson?: string | null;
+  taxMappingsJson?: string | null;
+  accountMappingsJson?: string | null;
+  defaultsJson?: string | null;
+  metadataJson?: string | null;
+  validationSummary?: string | null;
+  lastValidatedAt?: string | null;
+  updatedBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertIntegrationMappingProfileRequest {
+  name: string;
+  entityType: string;
+  direction?: string;
+  status?: string;
+  conflictPolicy?: string;
+  isDefault?: boolean;
+  fieldMappingsJson?: string | null;
+  enumMappingsJson?: string | null;
+  taxMappingsJson?: string | null;
+  accountMappingsJson?: string | null;
+  defaultsJson?: string | null;
+  metadataJson?: string | null;
+  validationSummary?: string | null;
+  lastValidatedAt?: string | null;
+}
+
+export interface RunCanonicalIntegrationActionRequest {
+  entityType?: string;
+  localEntityId?: string;
+  externalEntityId?: string;
+  correlationId?: string;
+  idempotencyKey?: string;
+  cursor?: string;
+  deltaToken?: string;
+  payloadJson?: string;
+  dryRun?: boolean;
+  requiresReview?: boolean;
+}
+
+export interface CanonicalIntegrationActionResult {
+  success: boolean;
+  retryable: boolean;
+  action: string;
+  status: string;
+  message?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  nextCursor?: string | null;
+  nextDeltaToken?: string | null;
+  readCount: number;
+  writeCount: number;
+  conflictCount: number;
+  reviewCount: number;
+  resultJson?: string | null;
+}
+
+export interface IntegrationConflictQueueItem {
+  id: string;
+  connectionId?: string | null;
+  runId?: string | null;
+  providerKey: string;
+  entityType: string;
+  localEntityId?: string | null;
+  externalEntityId?: string | null;
+  conflictType: string;
+  severity: string;
+  status: string;
+  mappingProfileId?: string | null;
+  fingerprint?: string | null;
+  assignedTo?: string | null;
+  resolutionType?: string | null;
+  summary?: string | null;
+  localSnapshotJson?: string | null;
+  externalSnapshotJson?: string | null;
+  suggestedResolutionJson?: string | null;
+  resolutionJson?: string | null;
+  reviewNotes?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResolveIntegrationConflictRequest {
+  status?: string;
+  resolutionType: string;
+  resolutionJson?: string | null;
+  notes?: string | null;
+}
+
+export interface IntegrationReviewQueueItem {
+  id: string;
+  connectionId?: string | null;
+  runId?: string | null;
+  providerKey: string;
+  itemType: string;
+  sourceId?: string | null;
+  sourceType?: string | null;
+  conflictId?: string | null;
+  status: string;
+  priority: string;
+  title?: string | null;
+  summary?: string | null;
+  contextJson?: string | null;
+  suggestedActionsJson?: string | null;
+  decision?: string | null;
+  decisionNotes?: string | null;
+  assignedTo?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  dueAt?: string | null;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DecideIntegrationReviewItemRequest {
+  status?: string;
+  decision: string;
+  notes?: string | null;
+}
+
+export interface IntegrationInboxEventListItem {
+  id: string;
+  connectionId?: string | null;
+  runId?: string | null;
+  providerKey: string;
+  externalEventId: string;
+  status: string;
+  signatureValidated: boolean;
+  payloadHash?: string | null;
+  replayCount: number;
+  errorMessage?: string | null;
+  receivedAt: string;
+  processedAt?: string | null;
+}
+
+export interface ReplayIntegrationInboxEventResponse {
+  id: string;
+  providerKey: string;
+  replayCount: number;
+  runId?: string | null;
+  success: boolean;
+  status: string;
+  message?: string | null;
+  deduplicated?: boolean;
+}
+
+export interface IntegrationOutboxEventListItem {
+  id: string;
+  connectionId?: string | null;
+  runId?: string | null;
+  providerKey: string;
+  eventType: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  idempotencyKey: string;
+  status: string;
+  attemptCount: number;
+  nextAttemptAt?: string | null;
+  dispatchedAt?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  deadLettered: boolean;
+  createdAt: string;
+}
+
+export interface ReplayIntegrationOutboxEventResponse {
+  id: string;
+  providerKey: string;
+  eventType: string;
+  status: string;
+  attemptCount: number;
+  nextAttemptAt?: string | null;
+}
+
+export interface IntegrationRunListItem {
+  id: string;
+  connectionId?: string | null;
+  providerKey: string;
+  trigger: string;
+  status: string;
+  attemptCount: number;
+  maxAttempts?: number | null;
+  idempotencyKey?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  isDeadLetter: boolean;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface ReplayIntegrationRunResponse {
+  sourceRunId: string;
+  replayRunId: string;
+  success: boolean;
+  status: string;
+  message?: string | null;
+  syncedCount?: number;
+  attemptCount?: number;
+  isDeadLetter?: boolean;
+  deduplicated?: boolean;
+}
+
+export interface IntegrationSecretStoreStatus {
+  providerMode: string;
+  encryptionProviderId?: string | null;
+  legacyPlaintextAllowed: boolean;
+  keyRingSource?: string | null;
+  activeKeyId?: string | null;
+  configuredKeyCount: number;
+  rotationEnabled: boolean;
+  rotationIntervalMinutes: number;
+  entries: {
+    total: number;
+    byKey: Array<{
+      encryptionProvider?: string | null;
+      encryptionKeyId?: string | null;
+      count: number;
+    }>;
+  };
+  scopeMatrix: Array<{
+    scope: string;
+    read: boolean;
+    write: boolean;
+    delete: boolean;
+    rotate: boolean;
+  }>;
+}
+
+export interface RotateIntegrationSecretsResponse {
+  rotated: number;
+  executedAt: string;
+}
+
+export type AppDirectoryListingStatus =
+  | 'draft'
+  | 'changes_requested'
+  | 'in_review'
+  | 'approved'
+  | 'published'
+  | 'rejected'
+  | 'suspended'
+  | string;
+
+export interface AppDirectoryManifest {
+  providerKey: string;
+  name: string;
+  category: string;
+  connectionMode: 'oauth' | 'api_key' | 'hybrid' | string;
+  summary: string;
+  description?: string;
+  manifestVersion: string;
+  websiteUrl?: string;
+  documentationUrl?: string;
+  supportEmail?: string;
+  supportUrl?: string;
+  logoUrl?: string;
+  supportsWebhook: boolean;
+  webhookFirst: boolean;
+  fallbackPollingMinutes?: number;
+  capabilities: string[];
+  configurationHints?: Record<string, string>;
+}
+
+export interface AppDirectorySlaProfile {
+  tier: string;
+  responseHours?: number;
+  resolutionHours?: number;
+  uptimePercent?: number;
+}
+
+export interface AppDirectoryHarnessCheck {
+  key: string;
+  severity: string;
+  passed: boolean;
+  message: string;
+}
+
+export interface AppDirectoryHarnessResult {
+  passed: boolean;
+  errorCount: number;
+  warningCount: number;
+  summary: string;
+  checks: AppDirectoryHarnessCheck[];
+}
+
+export interface AppDirectoryListing {
+  id: string;
+  providerKey: string;
+  name: string;
+  category: string;
+  connectionMode: string;
+  summary: string;
+  description?: string;
+  manifestVersion: string;
+  websiteUrl?: string;
+  documentationUrl?: string;
+  supportEmail?: string;
+  supportUrl?: string;
+  logoUrl?: string;
+  supportsWebhook: boolean;
+  webhookFirst: boolean;
+  fallbackPollingMinutes?: number;
+  slaTier: string;
+  slaResponseHours?: number;
+  slaResolutionHours?: number;
+  slaUptimePercent?: number;
+  status: AppDirectoryListingStatus;
+  submissionCount: number;
+  lastSubmittedAt?: string;
+  lastTestStatus: string;
+  lastTestedAt?: string;
+  lastTestSummary?: string;
+  reviewNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  isFeatured: boolean;
+  publishedAt?: string;
+  updatedAt: string;
+}
+
+export interface AppDirectorySubmission {
+  id: string;
+  listingId: string;
+  submittedBy: string;
+  status: string;
+  testStatus: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+}
+
+export interface AppDirectoryOnboardingRequest {
+  manifest: AppDirectoryManifest;
+  sla?: AppDirectorySlaProfile;
+}
+
+export interface AppDirectoryOnboardingResponse {
+  listing: AppDirectoryListing;
+  harness: AppDirectoryHarnessResult;
+}
+
+export interface AppDirectoryReviewRequest {
+  decision: 'approve' | 'reject' | 'request_changes' | 'suspend' | string;
+  publish?: boolean;
+  isFeatured?: boolean;
+  notes?: string;
+  sla?: AppDirectorySlaProfile;
 }
 
 export interface FirmEntity {
@@ -1397,4 +1838,391 @@ export interface PaymentPlan {
   autoPayReference?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EfilingWorkspaceDocument {
+  id: string;
+  name?: string | null;
+  fileName: string;
+  fileSize: number;
+  mimeType?: string | null;
+  category?: string | null;
+  tags?: string | null;
+  status?: string | null;
+  updatedAt: string;
+}
+
+export interface EfilingWorkspaceDocket {
+  id: string;
+  providerKey: string;
+  externalDocketId: string;
+  docketNumber?: string | null;
+  caseName?: string | null;
+  court?: string | null;
+  sourceUrl?: string | null;
+  filedAt?: string | null;
+  modifiedAt?: string | null;
+  lastSeenAt: string;
+}
+
+export interface EfilingWorkspaceSubmission {
+  id: string;
+  providerKey: string;
+  externalSubmissionId: string;
+  externalDocketId?: string | null;
+  referenceNumber?: string | null;
+  status: string;
+  submittedAt?: string | null;
+  acceptedAt?: string | null;
+  rejectedAt?: string | null;
+  rejectionReason?: string | null;
+  updatedAt: string;
+}
+
+export interface EfilingWorkspaceConnection {
+  id: string;
+  providerKey: string;
+  provider: string;
+  status: string;
+  accountLabel?: string | null;
+  lastSyncAt?: string | null;
+  lastWebhookAt?: string | null;
+}
+
+export interface EfilingWorkspaceCourtRule {
+  id: string;
+  name: string;
+  jurisdiction?: string | null;
+  courtType?: string | null;
+  triggerEvent: string;
+  citation?: string | null;
+  daysCount: number;
+  dayType: string;
+  direction: string;
+  serviceDaysAdd: number;
+  extendIfWeekend: boolean;
+}
+
+export interface EfilingWorkspaceResponse {
+  matter: {
+    id: string;
+    name: string;
+    caseNumber: string;
+    status: string;
+    courtType?: string | null;
+  };
+  providerKey?: string | null;
+  documents: EfilingWorkspaceDocument[];
+  dockets: EfilingWorkspaceDocket[];
+  submissions: EfilingWorkspaceSubmission[];
+  connections: EfilingWorkspaceConnection[];
+  courtRules: EfilingWorkspaceCourtRule[];
+  suggestedPacket?: {
+    packetName?: string | null;
+    suggestedFilingType?: string | null;
+    suggestedDocumentIds?: string[];
+  } | null;
+}
+
+export interface EfilingPrecheckIssue {
+  code: string;
+  message: string;
+}
+
+export interface EfilingPrecheckResponse {
+  canSubmit: boolean;
+  matter?: {
+    id: string;
+    name: string;
+    caseNumber: string;
+    courtType?: string | null;
+    status: string;
+  };
+  providerKey?: string | null;
+  packetName?: string | null;
+  filingType?: string | null;
+  documents: Array<{
+    id: string;
+    name?: string | null;
+    fileName?: string | null;
+    fileSize: number;
+    mimeType?: string | null;
+    category?: string | null;
+    tags?: string | null;
+  }>;
+  matchedRules: EfilingWorkspaceCourtRule[];
+  suggestedDeadlines: Array<{
+    ruleId: string;
+    ruleName: string;
+    triggerEvent?: string | null;
+    dueDateUtc: string;
+    priority?: string | null;
+  }>;
+  errors: EfilingPrecheckIssue[];
+  warnings: EfilingPrecheckIssue[];
+}
+
+export interface EfilingSubmissionTimelineResponse {
+  submission: EfilingWorkspaceSubmission & {
+    matterId?: string | null;
+    lastSeenAt?: string | null;
+  };
+  timeline: Array<{
+    timestampUtc: string;
+    eventType: string;
+    source?: string | null;
+    title?: string | null;
+    summary?: string | null;
+    status?: string | null;
+    [key: string]: unknown;
+  }>;
+}
+
+export interface EfilingSubmissionTransitionResponse {
+  submissionId: string;
+  previousStatus?: string | null;
+  currentStatus: string;
+  message?: string | null;
+}
+
+export interface EfilingDocketAutomationResponse {
+  processed: number;
+  tasksCreated: number;
+  deadlinesCreated: number;
+  reviewsQueued: number;
+}
+
+// Outcome-to-Fee Planner (Phase 0/1)
+export interface OutcomeFeePlan {
+  id: string;
+  matterId: string;
+  clientId?: string | null;
+  matterBillingPolicyId?: string | null;
+  currentVersionId?: string | null;
+  plannerMode: string;
+  status: string;
+  correlationId?: string | null;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeePlanVersion {
+  id: string;
+  planId: string;
+  versionNumber: number;
+  status: string;
+  plannerMode: string;
+  modelVersion: string;
+  assumptionSetVersion: string;
+  correlationId?: string | null;
+  matterBillingPolicyId?: string | null;
+  rateCardId?: string | null;
+  currency: string;
+  generatedBy?: string | null;
+  generatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceSignalsJson?: string | null;
+  inputSnapshotJson?: string | null;
+  summaryJson?: string | null;
+  metadataJson?: string | null;
+}
+
+export interface OutcomeFeeScenario {
+  id: string;
+  planVersionId: string;
+  scenarioKey: string;
+  name: string;
+  probability: number;
+  currency: string;
+  budgetTotal: number;
+  expectedCollected: number;
+  expectedCost: number;
+  expectedMargin: number;
+  confidenceScore?: number | null;
+  status: string;
+  driverSummary?: string | null;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeePhaseForecast {
+  id: string;
+  scenarioId: string;
+  phaseOrder: number;
+  phaseCode: string;
+  name: string;
+  hoursExpected: number;
+  feeExpected: number;
+  expenseExpected: number;
+  durationDaysExpected: number;
+  status: string;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeeStaffingLine {
+  id: string;
+  scenarioId: string;
+  phaseForecastId?: string | null;
+  role: string;
+  hoursExpected: number;
+  billRate: number;
+  costRate: number;
+  feeExpected: number;
+  costExpected: number;
+  utilizationRiskScore?: number | null;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeeAssumption {
+  id: string;
+  planVersionId: string;
+  category: string;
+  key: string;
+  valueType: string;
+  valueJson?: string | null;
+  sourceType: string;
+  sourceRef?: string | null;
+  notes?: string | null;
+  metadataJson?: string | null;
+  createdAt: string;
+}
+
+export interface OutcomeFeeCollectionsForecast {
+  id: string;
+  scenarioId: string;
+  payorSegment: string;
+  bucketDays: number;
+  expectedAmount: number;
+  collectionProbability: number;
+  status: string;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeePlanDetailResult {
+  plan?: OutcomeFeePlan | null;
+  currentVersion?: OutcomeFeePlanVersion | null;
+  versions: OutcomeFeePlanVersion[];
+  scenarios: OutcomeFeeScenario[];
+  phaseForecasts: OutcomeFeePhaseForecast[];
+  staffingLines: OutcomeFeeStaffingLine[];
+  assumptions: OutcomeFeeAssumption[];
+  collectionsForecasts: OutcomeFeeCollectionsForecast[];
+}
+
+export interface OutcomeFeePlanVersionCompareResult {
+  planId: string;
+  matterId?: string | null;
+  fromVersionId?: string | null;
+  toVersionId?: string | null;
+  fromVersionNumber?: number | null;
+  toVersionNumber?: number | null;
+  comparedAtUtc: string;
+  actuals?: Record<string, unknown> | null;
+  driftSummary?: Record<string, unknown> | null;
+  scenarioDeltas: Array<Record<string, unknown>>;
+  phaseDeltas: Array<Record<string, unknown>>;
+}
+
+export interface OutcomeFeePlanTriggerResult {
+  triggerAccepted: boolean;
+  recomputed: boolean;
+  driftDetected: boolean;
+  reviewItemsQueued: number;
+  notificationsQueued: number;
+  planId?: string | null;
+  matterId?: string | null;
+  previousVersionId?: string | null;
+  currentVersionId?: string | null;
+  triggerType?: string | null;
+  triggerEntityType?: string | null;
+  triggerEntityId?: string | null;
+  driftSummary?: Record<string, unknown> | null;
+  compare?: OutcomeFeePlanVersionCompareResult | null;
+}
+
+export interface OutcomeFeePlanPortfolioMetricsResult {
+  days: number;
+  plansObserved: number;
+  comparesUsed: number;
+  dataQuality?: string | null;
+  metrics?: {
+    forecastAccuracy?: number;
+    collectionsForecastError?: number;
+    marginForecastError?: number;
+    staffingVariance?: number;
+    avgHoursDriftRatio?: number;
+    avgCollectionsDriftRatio?: number;
+    avgMarginCompressionRatio?: number;
+    driftHighCount?: number;
+    driftMediumCount?: number;
+    collectionsRiskWorsenedCount?: number;
+  } | null;
+}
+
+export interface OutcomeFeeCalibrationSnapshotRecord {
+  id: string;
+  cohortKey: string;
+  jurisdictionCode?: string | null;
+  practiceArea?: string | null;
+  arrangementType?: string | null;
+  asOfDate: string;
+  status: string;
+  sampleSize: number;
+  metricsJson?: string | null;
+  payloadJson?: string | null;
+  metadataJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OutcomeFeeCalibrationSnapshotEnvelope {
+  snapshot: OutcomeFeeCalibrationSnapshotRecord;
+  metrics?: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface OutcomeFeeCalibrationSnapshotsListResult {
+  count: number;
+  items: OutcomeFeeCalibrationSnapshotEnvelope[];
+}
+
+export interface OutcomeFeeCalibrationEffectiveResult {
+  matterId: string;
+  hasCalibration: boolean;
+  active?: OutcomeFeeCalibrationSnapshotEnvelope | null;
+  shadow?: OutcomeFeeCalibrationSnapshotEnvelope | null;
+  candidateCohorts?: Array<{ scope?: string; cohortKey?: string }>;
+}
+
+export interface OutcomeFeeCalibrationJobRunResult {
+  days: number;
+  minSampleSize: number;
+  shadowMode: boolean;
+  autoActivateHighConfidence?: boolean;
+  autoActivateConfidenceThreshold?: number;
+  cohortScopes?: string[];
+  created: number;
+  skipped: number;
+  autoActivated?: number;
+  snapshots: Array<Record<string, unknown>>;
+  notes?: string;
+}
+
+export interface OutcomeFeeOutcomeFeedbackResult {
+  eventId: string;
+  planId: string;
+  latestVersionId?: string | null;
+  createdAtUtc: string;
 }

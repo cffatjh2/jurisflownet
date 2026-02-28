@@ -39,9 +39,15 @@ export const createPaymentIntent = async (request: CreatePaymentRequest): Promis
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
             },
-            body: JSON.stringify(request)
+            body: JSON.stringify({
+                invoiceId: request.invoiceId,
+                amount: request.amount,
+                currency: request.currency,
+                description: request.description,
+                payerEmail: request.customerEmail
+            })
         });
 
         if (!response.ok) {
@@ -57,6 +63,7 @@ export const createPaymentIntent = async (request: CreatePaymentRequest): Promis
 
 // Confirm payment (after user enters card details)
 export const confirmPayment = async (
+    transactionId: string,
     paymentIntentId: string
 ): Promise<PaymentResult> => {
     try {
@@ -64,9 +71,9 @@ export const confirmPayment = async (
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
             },
-            body: JSON.stringify({ paymentIntentId })
+            body: JSON.stringify({ transactionId, paymentIntentId })
         });
 
         const result = await response.json();
@@ -91,7 +98,7 @@ export const getPaymentHistory = async (invoiceId: string): Promise<any[]> => {
     try {
         const response = await fetch(`/api/payments/invoice/${invoiceId}`, {
             headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
             }
         });
 
@@ -113,13 +120,13 @@ export const requestRefund = async (
     reason?: string
 ): Promise<PaymentResult> => {
     try {
-        const response = await fetch('/api/payments/refund', {
+        const response = await fetch(`/api/payments/${paymentId}/refund`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
             },
-            body: JSON.stringify({ paymentId, amount, reason })
+            body: JSON.stringify({ amount, reason })
         });
 
         const result = await response.json();
@@ -128,7 +135,7 @@ export const requestRefund = async (
             return { success: false, error: result.error || 'Refund failed' };
         }
 
-        return { success: true, paymentId: result.refundId };
+        return { success: true, paymentId };
     } catch (error) {
         console.error('Refund request failed:', error);
         return { success: false, error: 'Refund request failed' };
@@ -164,7 +171,7 @@ export const schedulePaymentReminder = async (
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
             },
             body: JSON.stringify({
                 invoiceId,

@@ -1,58 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, Lead, Task, TaskStatus, PracticeArea, FeeStructure, CaseStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
+import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
-
-// --- MOCK DATA FALLBACKS ---
-const MOCK_CLIENTS: Client[] = [
-  { id: 'c1', name: 'Stark Industries', email: 'tony@stark.com', phone: '212-555-0100', type: 'Corporate', status: 'Active', company: 'Stark Ind' },
-  { id: 'c2', name: 'Wayne Enterprises', email: 'bruce@wayne.com', phone: '609-555-0100', type: 'Corporate', status: 'Active', company: 'Wayne Ent' },
-  { id: 'c3', name: 'Diana Prince', email: 'diana@museum.org', phone: '202-555-0123', type: 'Individual', status: 'Active' }
-];
-
-const MOCK_MATTERS: Matter[] = [
-  { id: 'm1', caseNumber: '24-050', name: 'Stark v. Rogers', client: MOCK_CLIENTS[0], practiceArea: PracticeArea.CivilLitigation, status: CaseStatus.Open, feeStructure: FeeStructure.Hourly, openDate: '2024-03-01', responsibleAttorney: 'HS', billableRate: 850, trustBalance: 250000 },
-  { id: 'm2', caseNumber: '24-051', name: 'Wayne Merger', client: MOCK_CLIENTS[1], practiceArea: PracticeArea.Corporate, status: CaseStatus.Pending, feeStructure: FeeStructure.FlatFee, openDate: '2024-03-10', responsibleAttorney: 'JP', billableRate: 900, trustBalance: 100000 },
-  { id: 'm3', caseNumber: '24-052', name: 'Prince Artifact Dispute', client: MOCK_CLIENTS[2], practiceArea: PracticeArea.IntellectualProperty, status: CaseStatus.Open, feeStructure: FeeStructure.Contingency, openDate: '2024-03-15', responsibleAttorney: 'MR', billableRate: 450, trustBalance: 5000 }
-];
-
-const MOCK_TASKS: Task[] = [
-  { id: 't1', title: 'Draft Motion to Dismiss', dueDate: new Date(Date.now() + 86400000).toISOString(), priority: 'High', status: 'To Do', matterId: 'm1', assignedTo: 'MR' },
-  { id: 't2', title: 'Review Merger Agreement', dueDate: new Date(Date.now() + 172800000).toISOString(), priority: 'Medium', status: 'In Progress', matterId: 'm2', assignedTo: 'JP' }
-];
-
-const MOCK_TIME_ENTRIES: TimeEntry[] = [
-  { id: 'te1', matterId: 'm1', description: 'Client meeting regarding deposition strategy', duration: 90, rate: 850, date: new Date().toISOString(), billed: false, type: 'time' },
-  { id: 'te2', matterId: 'm2', description: 'Due diligence review', duration: 120, rate: 900, date: new Date(Date.now() - 86400000).toISOString(), billed: true, type: 'time' }
-];
-
-const MOCK_EVENTS: CalendarEvent[] = [
-  { id: 'ev1', title: 'Court Hearing: Stark v Rogers', date: new Date(Date.now() + 86400000 * 2).toISOString(), type: 'Court', matterId: 'm1' },
-  { id: 'ev2', title: 'Partner Lunch', date: new Date(Date.now() + 86400000 * 3).toISOString(), type: 'Meeting' }
-];
-
-const MOCK_LEADS: Lead[] = [
-  { id: 'l1', name: 'Lex Luthor', source: 'Referral', status: 'New', estimatedValue: 50000, practiceArea: PracticeArea.CriminalDefense }
-];
-
-const MOCK_INVOICES: Invoice[] = [
-  {
-    id: 'inv1',
-    number: 'INV-2024-001',
-    client: MOCK_CLIENTS[0],
-    clientId: MOCK_CLIENTS[0].id,
-    amount: 15400,
-    dueDate: new Date(Date.now() + 86400000 * 10).toISOString(),
-    status: 'SENT' as any,
-    subtotal: 14000,
-    taxAmount: 1400,
-    discount: 0,
-    amountPaid: 0,
-    balance: 15400,
-    issueDate: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  }
-];
 
 interface DataContextType {
   matters: Matter[];
@@ -71,7 +20,7 @@ interface DataContextType {
   // Timer Actions
   activeTimer: ActiveTimer | null;
   startTimer: (matterId: string | undefined, description: string, rate?: number, activityCode?: string, isBillable?: boolean) => void;
-  stopTimer: () => Promise<void>;
+  stopTimer: () => Promise<boolean>;
   updateTimer: (elapsed: number) => void;
   pauseTimer: () => void;
   resumeTimer: () => void;
@@ -79,12 +28,12 @@ interface DataContextType {
   addMatter: (item: any) => Promise<void>;
   updateMatter: (id: string, data: Partial<Matter>) => Promise<void>;
   deleteMatter: (id: string) => Promise<void>;
-  addTimeEntry: (item: any) => Promise<void>;
-  addExpense: (item: any) => void;
-  approveTimeEntry: (id: string) => Promise<void>;
-  rejectTimeEntry: (id: string, reason?: string) => Promise<void>;
-  approveExpense: (id: string) => Promise<void>;
-  rejectExpense: (id: string, reason?: string) => Promise<void>;
+  addTimeEntry: (item: any) => Promise<boolean>;
+  addExpense: (item: any) => Promise<boolean>;
+  approveTimeEntry: (id: string) => Promise<boolean>;
+  rejectTimeEntry: (id: string, reason?: string) => Promise<boolean>;
+  approveExpense: (id: string) => Promise<boolean>;
+  rejectExpense: (id: string, reason?: string) => Promise<boolean>;
   addMessage: (item: Message) => void;
   markMessageRead: (id: string) => void;
   addEvent: (item: any) => Promise<void>;
@@ -196,8 +145,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     // This is mostly for UI sync if needed, but the real truth is calculated
   };
 
-  const stopTimer = async () => {
-    if (!activeTimer) return;
+  const stopTimer = async (): Promise<boolean> => {
+    if (!activeTimer) return false;
 
     // Calculate total duration
     let totalDurationMs = activeTimer.elapsed;
@@ -209,7 +158,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     const minutes = Math.ceil(totalDurationMs / 1000 / 60);
 
     // Create Time Entry
-    await addTimeEntry({
+    const saved = await addTimeEntry({
       matterId: activeTimer.matterId,
       description: activeTimer.description,
       duration: minutes,
@@ -221,7 +170,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       isBillable: activeTimer.isBillable ?? true
     });
 
-    setActiveTimer(null);
+    if (saved) {
+      setActiveTimer(null);
+    }
+    return saved;
   };
 
   const parseDocTags = (raw: any): string[] | undefined => {
@@ -272,28 +224,31 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
+  const clearLoadedData = () => {
+    setMatters([]);
+    setClients([]);
+    setTasks([]);
+    setTimeEntries([]);
+    setExpenses([]);
+    setEvents([]);
+    setLeads([]);
+    setInvoices([]);
+    setNotifications([]);
+    setDocuments([]);
+    setTaskTemplates([]);
+  };
+
   // --- INITIAL LOAD ---
   useEffect(() => {
     const loadData = async () => {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       try {
-        // Check if user is authenticated before making API calls
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-
-        // Only make API calls if user is authenticated
-        if (!token || !isAuthenticated) {
-          // Use mock data if not authenticated
-          console.log('🔄 Not authenticated, using mock data');
-          setMatters(MOCK_MATTERS);
-          setClients(MOCK_CLIENTS);
-          setTasks(MOCK_TASKS);
-          setTimeEntries(MOCK_TIME_ENTRIES);
-          setEvents(MOCK_EVENTS);
-          setLeads(MOCK_LEADS);
-          setInvoices(MOCK_INVOICES);
+        if (!isAuthenticated || !token) {
+          clearLoadedData();
           return;
         }
 
-        console.log('🔄 Fetching data from API...');
+        console.log('Fetching data from API...');
         const [m, t, te, ex, c, l, e, i, n, docs, templates] = await Promise.all([
           api.getMatters().catch(() => null),
           api.getTasks().catch(() => null),
@@ -309,48 +264,46 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         ]);
 
         // IMPORTANT: Only update state if API returned valid data (not null)
-        // If API returns null/undefined, keep using mock/previous data
+        // If API returns null/undefined, keep current data to avoid mixing mock IDs with real records
         if (Array.isArray(m)) setMatters(m);
         else console.warn('Matters API returned null, keeping current data');
 
         if (Array.isArray(t)) setTasks(t);
-        else {
-          console.warn('Tasks API returned null, using mock data');
-          setTasks(MOCK_TASKS);
-        }
+        else console.warn('Tasks API returned null, keeping current data');
 
         if (Array.isArray(te)) setTimeEntries(te);
-        else setTimeEntries(MOCK_TIME_ENTRIES);
+        else console.warn('Time entries API returned null, keeping current data');
 
         if (Array.isArray(ex)) setExpenses(ex);
-        else setExpenses([]);
+        else console.warn('Expenses API returned null, keeping current data');
 
         if (Array.isArray(c)) setClients(c);
-        else setClients(MOCK_CLIENTS);
+        else console.warn('Clients API returned null, keeping current data');
 
         if (Array.isArray(l)) setLeads(l);
-        else setLeads(MOCK_LEADS);
+        else console.warn('Leads API returned null, keeping current data');
 
         if (Array.isArray(e)) setEvents(e);
-        else setEvents(MOCK_EVENTS);
+        else console.warn('Events API returned null, keeping current data');
 
         if (Array.isArray(i)) setInvoices(i);
-        else setInvoices(MOCK_INVOICES);
+        else console.warn('Invoices API returned null, keeping current data');
 
-        setNotifications(n || []);
-        setDocuments((docs || []).map(normalizeDocument));
-        setTaskTemplates(templates || []);
-        console.log('✅ Data loaded successfully from API');
+        if (Array.isArray(n)) setNotifications(n);
+        else console.warn('Notifications API returned null, keeping current data');
+
+        if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
+        else console.warn('Documents API returned null, keeping current data');
+
+        if (Array.isArray(templates)) setTaskTemplates(templates);
+        else console.warn('Task templates API returned null, keeping current data');
+        console.log('Data loaded successfully from API');
+
       } catch (error) {
-        console.warn('⚠️ Failed to load data from backend. Falling back to Mock Data.', error);
-        // Fallback to MOCK DATA so app is usable
-        setMatters(MOCK_MATTERS);
-        setClients(MOCK_CLIENTS);
-        setTasks(MOCK_TASKS);
-        setTimeEntries(MOCK_TIME_ENTRIES);
-        setEvents(MOCK_EVENTS);
-        setLeads(MOCK_LEADS);
-        setInvoices(MOCK_INVOICES);
+        console.warn('Failed to load data from backend.', error);
+        if (!isAuthenticated || !token) {
+          clearLoadedData();
+        }
       }
     };
     loadData();
@@ -409,7 +362,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           const newNotification: AppNotification = {
             id: `notif-event-${event.id}-${Date.now()}`,
             userId: 'current',
-            title: `📅 Upcoming Event`,
+            title: `Upcoming Event`,
             message: `"${event.title}" starts in ${timeStr}!`,
             type: 'warning',
             read: false,
@@ -426,7 +379,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
           // Show browser notification if permission granted
           if ('Notification' in window && Notification.permission === 'granted') {
-            new window.Notification(`📅 ${event.title}`, {
+            new window.Notification(`${event.title}`, {
               body: `Event starts in ${timeStr}!`,
               icon: '/icons/icon-192.png',
               tag: `event-${event.id}`
@@ -469,7 +422,12 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setMatters(prev => [optimisticMatter, ...prev]);
 
     try {
-      const newMatter = await api.createMatter(matterData);
+      const payload = { ...matterData };
+      delete payload.client;
+      if (!payload.clientId) {
+        throw new Error('Client is required to create a matter.');
+      }
+      const newMatter = await api.createMatter(payload);
       // Replace temp with real
       const hydratedMatter = { ...newMatter, client: newMatter.client || optimisticClient };
       setMatters(prev => [hydratedMatter, ...prev.filter(m => m.id !== tempId)]);
@@ -477,6 +435,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       setClients(freshClients);
     } catch (e) {
       console.error("API Error (addMatter) - operating offline", e);
+      setMatters(prev => prev.filter(m => m.id !== tempId));
+      throw e;
     }
   };
 
@@ -597,9 +557,21 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const addTimeEntry = async (entryData: any) => {
+  const resolveMatterId = (matterId?: string) => {
+    if (!matterId) return undefined;
+    return matters.some(matter => matter.id === matterId) ? matterId : undefined;
+  };
+
+  const isMissingMatterError = (error: unknown) => {
+    if (!error) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes('selected matter was not found');
+  };
+
+  const addTimeEntry = async (entryData: any): Promise<boolean> => {
     const payload = {
       ...entryData,
+      matterId: resolveMatterId(entryData.matterId),
       isBillable: entryData.isBillable ?? true
     };
     const tempEntry = {
@@ -610,8 +582,29 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setTimeEntries(prev => [tempEntry, ...prev]);
     try {
       const newEntry = await api.createTimeEntry(payload);
+      if (!newEntry) {
+        setTimeEntries(prev => prev.filter(t => t.id !== tempEntry.id));
+        return false;
+      }
       setTimeEntries(prev => [newEntry, ...prev.filter(t => t.id !== tempEntry.id)]);
-    } catch (e) { console.error("API Error", e); }
+      return true;
+    } catch (e) {
+      if (payload.matterId && isMissingMatterError(e)) {
+        setMatters(prev => prev.filter(matter => matter.id !== payload.matterId));
+        try {
+          const retryEntry = await api.createTimeEntry({ ...payload, matterId: undefined });
+          if (retryEntry) {
+            setTimeEntries(prev => [retryEntry, ...prev.filter(t => t.id !== tempEntry.id)]);
+            return true;
+          }
+        } catch (retryError) {
+          console.error("API Error (addTimeEntry retry)", retryError);
+        }
+      }
+      console.error("API Error (addTimeEntry)", e);
+      setTimeEntries(prev => prev.filter(t => t.id !== tempEntry.id));
+      return false;
+    }
   };
 
   const addClient = async (clientData: any): Promise<Client> => {
@@ -634,7 +627,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     // Optimistic update
     setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...clientData } : c));
     try {
-      const updated = await api.admin.updateClient(id, data);
+      const updated = await api.updateClient(id, data);
       if (updated) {
         setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...updated } : c));
       }
@@ -762,8 +755,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   // Local Actions
-  const addExpense = async (expenseData: any) => {
-    const payload = { ...expenseData };
+  const addExpense = async (expenseData: any): Promise<boolean> => {
+    const payload = {
+      ...expenseData,
+      matterId: resolveMatterId(expenseData.matterId)
+    };
     const tempExpense = {
       ...payload,
       id: `e-${Date.now()}`,
@@ -772,13 +768,32 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setExpenses(prev => [tempExpense, ...prev]);
     try {
       const newExpense = await api.createExpense(payload);
+      if (!newExpense) {
+        setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
+        return false;
+      }
       setExpenses(prev => [newExpense, ...prev.filter(e => e.id !== tempExpense.id)]);
+      return true;
     } catch (e) {
+      if (payload.matterId && isMissingMatterError(e)) {
+        setMatters(prev => prev.filter(matter => matter.id !== payload.matterId));
+        try {
+          const retryExpense = await api.createExpense({ ...payload, matterId: undefined });
+          if (retryExpense) {
+            setExpenses(prev => [retryExpense, ...prev.filter(e => e.id !== tempExpense.id)]);
+            return true;
+          }
+        } catch (retryError) {
+          console.error("API Error (addExpense retry)", retryError);
+        }
+      }
       console.error("API Error (addExpense)", e);
+      setExpenses(prev => prev.filter(e => e.id !== tempExpense.id));
+      return false;
     }
   };
 
-  const approveTimeEntry = async (id: string) => {
+  const approveTimeEntry = async (id: string): Promise<boolean> => {
     const prev = timeEntries;
     const now = new Date().toISOString();
     setTimeEntries(items => items.map(entry =>
@@ -786,16 +801,20 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     ));
     try {
       const updated = await api.approveTimeEntry(id);
-      if (updated) {
-        setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      if (!updated) {
+        setTimeEntries(prev);
+        return false;
       }
+      setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      return true;
     } catch (e) {
       console.error("API Error (approveTimeEntry)", e);
       setTimeEntries(prev);
+      return false;
     }
   };
 
-  const rejectTimeEntry = async (id: string, reason?: string) => {
+  const rejectTimeEntry = async (id: string, reason?: string): Promise<boolean> => {
     const prev = timeEntries;
     const now = new Date().toISOString();
     setTimeEntries(items => items.map(entry =>
@@ -803,16 +822,20 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     ));
     try {
       const updated = await api.rejectTimeEntry(id, reason);
-      if (updated) {
-        setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      if (!updated) {
+        setTimeEntries(prev);
+        return false;
       }
+      setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      return true;
     } catch (e) {
       console.error("API Error (rejectTimeEntry)", e);
       setTimeEntries(prev);
+      return false;
     }
   };
 
-  const approveExpense = async (id: string) => {
+  const approveExpense = async (id: string): Promise<boolean> => {
     const prev = expenses;
     const now = new Date().toISOString();
     setExpenses(items => items.map(expense =>
@@ -820,16 +843,20 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     ));
     try {
       const updated = await api.approveExpense(id);
-      if (updated) {
-        setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      if (!updated) {
+        setExpenses(prev);
+        return false;
       }
+      setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      return true;
     } catch (e) {
       console.error("API Error (approveExpense)", e);
       setExpenses(prev);
+      return false;
     }
   };
 
-  const rejectExpense = async (id: string, reason?: string) => {
+  const rejectExpense = async (id: string, reason?: string): Promise<boolean> => {
     const prev = expenses;
     const now = new Date().toISOString();
     setExpenses(items => items.map(expense =>
@@ -837,12 +864,16 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     ));
     try {
       const updated = await api.rejectExpense(id, reason);
-      if (updated) {
-        setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      if (!updated) {
+        setExpenses(prev);
+        return false;
       }
+      setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      return true;
     } catch (e) {
       console.error("API Error (rejectExpense)", e);
       setExpenses(prev);
+      return false;
     }
   };
   const addMessage = (msg: Message) => setMessages(prev => [msg, ...prev]);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Users, Plus, Edit, Trash2, Mail, Phone, Calendar, Clock, CheckSquare, RefreshCw, Search, LayoutGrid, List, Send, X } from './Icons';
 import { Can } from './common/Can';
 import { ConfirmDialog } from './common/ConfirmDialog';
@@ -10,6 +10,9 @@ import { api } from '../services/api';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
+import { passwordRequirementsText, validatePassword } from '../services/passwordPolicy';
+
+const getAvatarPath = (emp: Employee) => emp.user?.avatar || emp.avatar || null;
 
 const Employees: React.FC = () => {
     const { t } = useTranslation();
@@ -42,6 +45,9 @@ const Employees: React.FC = () => {
     // Avatar upload state
     const [avatarFile, setAvatarFile] = useState<File | null>(null);
     const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+    const [avatarUrls, setAvatarUrls] = useState<Record<string, string>>({});
+    const avatarUrlsRef = useRef<Map<string, string>>(new Map());
+    const [avatarPreviewIsTemp, setAvatarPreviewIsTemp] = useState(false);
 
     const [formData, setFormData] = useState({
         firstName: '',
@@ -132,6 +138,95 @@ const Employees: React.FC = () => {
         fetchEmployees();
     }, []);
 
+    useEffect(() => {
+        let cancelled = false;
+        const needed = new Set<string>();
+        employees.forEach((emp) => {
+            const path = getAvatarPath(emp);
+            if (path) needed.add(path);
+        });
+
+        const cache = avatarUrlsRef.current;
+        for (const [path, url] of cache) {
+            if (!needed.has(path)) {
+                URL.revokeObjectURL(url);
+                cache.delete(path);
+            }
+        }
+
+        setAvatarUrls(Object.fromEntries(cache));
+
+        const missing = Array.from(needed).filter((path) => !cache.has(path));
+        if (missing.length === 0) {
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        (async () => {
+            const downloads = await Promise.all(
+                missing.map(async (path) => {
+                    try {
+                        const file = await api.downloadFile(path);
+                        if (!file?.blob) return null;
+                        const url = URL.createObjectURL(file.blob);
+                        return { path, url };
+                    } catch (error) {
+                        console.error('Failed to load avatar', error);
+                        return null;
+                    }
+                })
+            );
+
+            if (cancelled) {
+                downloads.forEach((item) => {
+                    if (item?.url) {
+                        URL.revokeObjectURL(item.url);
+                    }
+                });
+                return;
+            }
+
+            downloads.forEach((item) => {
+                if (item) {
+                    cache.set(item.path, item.url);
+                }
+            });
+            setAvatarUrls(Object.fromEntries(cache));
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [employees]);
+
+    useEffect(() => {
+        return () => {
+            if (avatarPreviewIsTemp && avatarPreview) {
+                URL.revokeObjectURL(avatarPreview);
+            }
+        };
+    }, [avatarPreview, avatarPreviewIsTemp]);
+
+    useEffect(() => {
+        return () => {
+            for (const url of avatarUrlsRef.current.values()) {
+                URL.revokeObjectURL(url);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!editingEmployee || avatarFile) return;
+        const avatarPath = getAvatarPath(editingEmployee);
+        if (!avatarPath) return;
+        const cached = avatarUrls[avatarPath];
+        if (cached && avatarPreview !== cached) {
+            setAvatarPreview(cached);
+            setAvatarPreviewIsTemp(false);
+        }
+    }, [avatarFile, avatarPreview, avatarUrls, editingEmployee]);
+
     const normalizeEmployee = (emp: Employee) => {
         const normalized = { ...emp } as Employee;
         const roleValue = (emp as any).role;
@@ -174,11 +269,29 @@ const Employees: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
+            if (!editingEmployee) {
+                if (!formData.password) {
+                    toast.error('Initial password is required.');
+                    return;
+                }
+                const passwordResult = validatePassword(formData.password, {
+                    email: formData.email,
+                    name: `${formData.firstName} ${formData.lastName}`
+                });
+                if (!passwordResult.isValid) {
+                    toast.error(passwordResult.message);
+                    return;
+                }
+            }
+
             const employeeData: any = {
                 ...formData,
                 hourlyRate: formData.hourlyRate ? parseFloat(formData.hourlyRate) : undefined,
                 salary: formData.salary ? parseFloat(formData.salary) : undefined,
             };
+            if (editingEmployee) {
+                delete employeeData.password;
+            }
 
             // Add Bar License if role is attorney
             if ([EmployeeRole.PARTNER, EmployeeRole.ASSOCIATE, EmployeeRole.OF_COUNSEL].includes(formData.role as EmployeeRole)) {
@@ -350,7 +463,9 @@ const Employees: React.FC = () => {
             officeId: emp.officeId || ''
         });
         setShowForm(true);
-        setAvatarPreview(emp.user?.avatar || emp.avatar || null);
+        const avatarPath = getAvatarPath(emp);
+        setAvatarPreview(avatarPath ? avatarUrls[avatarPath] || null : null);
+        setAvatarPreviewIsTemp(false);
         setAvatarFile(null);
     };
 
@@ -386,10 +501,12 @@ const Employees: React.FC = () => {
         if (!file) {
             setAvatarFile(null);
             setAvatarPreview(null);
+            setAvatarPreviewIsTemp(false);
             return;
         }
         setAvatarFile(file);
         setAvatarPreview(URL.createObjectURL(file));
+        setAvatarPreviewIsTemp(true);
     };
 
     return (
@@ -439,7 +556,7 @@ const Employees: React.FC = () => {
                             </div>
                             <Can perform="user.manage">
                                 <button
-                                    onClick={() => { setShowForm(true); setEditingEmployee(null); resetForm(); }}
+                                    onClick={() => { setShowForm(true); setEditingEmployee(null); resetForm(); handleAvatarChange(null); }}
                                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow"
                                 >
                                     <Plus className="w-5 h-5" />
@@ -627,14 +744,15 @@ const Employees: React.FC = () => {
 
                                 {!editingEmployee && (
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Initial Password</label>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Initial Password *</label>
                                         <input
                                             type="password"
                                             value={formData.password}
                                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                            placeholder="Leave blank to auto-generate"
+                                            placeholder={passwordRequirementsText}
                                         />
+                                        <p className="mt-1 text-xs text-gray-500">{passwordRequirementsText}</p>
                                     </div>
                                 )}
 
@@ -728,7 +846,7 @@ const Employees: React.FC = () => {
                                 <div className="flex justify-end gap-3 pt-4 border-t">
                                     <button
                                         type="button"
-                                        onClick={() => { setShowForm(false); setEditingEmployee(null); }}
+                                        onClick={() => { setShowForm(false); setEditingEmployee(null); handleAvatarChange(null); }}
                                         className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
                                     >
                                         Cancel
@@ -752,7 +870,7 @@ const Employees: React.FC = () => {
                         <h3 className="text-lg font-medium text-gray-900 mb-2">{t('no_employees') || 'No staff members found'}</h3>
                         <p className="text-gray-500 mb-4">Start by adding staff to your firm.</p>
                         <button
-                            onClick={() => { setShowForm(true); resetForm(); }}
+                            onClick={() => { setShowForm(true); setEditingEmployee(null); resetForm(); handleAvatarChange(null); }}
                             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                         >
                             <Plus className="w-5 h-5" />
@@ -761,76 +879,80 @@ const Employees: React.FC = () => {
                     </div>
                 ) : (
                     <div className={viewMode === 'grid' ? 'grid gap-4 md:grid-cols-2' : 'grid gap-3'}>
-                        {filteredEmployees.map((emp) => (
-                            <div key={emp.id} className={`bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow ${viewMode === 'list' ? 'flex items-center justify-between gap-4' : ''}`}>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
-                                            {emp.user?.avatar ? (
-                                                <img src={emp.user.avatar} alt={emp.firstName} className="w-full h-full object-cover rounded-full" />
-                                            ) : (
-                                                <>{emp.firstName[0]}{emp.lastName[0]}</>
-                                            )}
-                                        </div>
-                                        <div>
-                                            <div className="flex items-center gap-3">
-                                                <h3 className="font-semibold text-gray-900">{emp.firstName} {emp.lastName}</h3>
-                                                <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[emp.status]}`}>
-                                                    {statusLabels[emp.status]}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
-                                                <span className="flex items-center gap-1">
-                                                    {roleIcons[emp.role]} {roleLabels[emp.role]}
-                                                </span>
-                                                <span className="flex items-center gap-1">
-                                                    <Mail className="w-4 h-4" /> {emp.email}
-                                                </span>
-                                                {emp.barNumber && (
-                                                    <span className="flex items-center gap-1 text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-600">
-                                                        Bar: {emp.barNumber} ({emp.barJurisdiction})
-                                                    </span>
+                        {filteredEmployees.map((emp) => {
+                            const avatarPath = getAvatarPath(emp);
+                            const avatarUrl = avatarPath ? avatarUrls[avatarPath] : null;
+                            return (
+                                <div key={emp.id} className={`bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow ${viewMode === 'list' ? 'flex items-center justify-between gap-4' : ''}`}>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
+                                                {avatarUrl ? (
+                                                    <img src={avatarUrl} alt={emp.firstName} className="w-full h-full object-cover rounded-full" />
+                                                ) : (
+                                                    <>{emp.firstName[0]}{emp.lastName[0]}</>
                                                 )}
-                                                {emp.phone && (
+                                            </div>
+                                            <div>
+                                                <div className="flex items-center gap-3">
+                                                    <h3 className="font-semibold text-gray-900">{emp.firstName} {emp.lastName}</h3>
+                                                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[emp.status]}`}>
+                                                        {statusLabels[emp.status]}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
                                                     <span className="flex items-center gap-1">
-                                                        <Phone className="w-4 h-4" /> {emp.phone}
+                                                        {roleIcons[emp.role]} {roleLabels[emp.role]}
                                                     </span>
-                                                )}
+                                                    <span className="flex items-center gap-1">
+                                                        <Mail className="w-4 h-4" /> {emp.email}
+                                                    </span>
+                                                    {emp.barNumber && (
+                                                        <span className="flex items-center gap-1 text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-600">
+                                                            Bar: {emp.barNumber} ({emp.barJurisdiction})
+                                                        </span>
+                                                    )}
+                                                    {emp.phone && (
+                                                        <span className="flex items-center gap-1">
+                                                            <Phone className="w-4 h-4" /> {emp.phone}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={() => openMessageModal(emp)}
-                                            className="px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
-                                        >
-                                            <Send className="w-4 h-4" /> Message
-                                        </button>
-                                        <Can perform="user.manage">
+                                        <div className="flex items-center gap-2">
                                             <button
-                                                onClick={() => handleResetPassword(emp.id)}
-                                                className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                                                title={t('reset_password') || 'Reset Password'}
+                                                onClick={() => openMessageModal(emp)}
+                                                className="px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
                                             >
-                                                <RefreshCw className="w-5 h-5" />
+                                                <Send className="w-4 h-4" /> Message
                                             </button>
-                                            <button
-                                                onClick={() => openEditForm(emp)}
-                                                className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                                            >
-                                                <Edit className="w-5 h-5" />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteClick(emp.id)}
-                                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                            >
-                                                <Trash2 className="w-5 h-5" />
-                                            </button>
-                                        </Can>
+                                            <Can perform="user.manage">
+                                                <button
+                                                    onClick={() => handleResetPassword(emp.id)}
+                                                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                                    title={t('reset_password') || 'Reset Password'}
+                                                >
+                                                    <RefreshCw className="w-5 h-5" />
+                                                </button>
+                                                <button
+                                                    onClick={() => openEditForm(emp)}
+                                                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                                >
+                                                    <Edit className="w-5 h-5" />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteClick(emp.id)}
+                                                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                >
+                                                    <Trash2 className="w-5 h-5" />
+                                                </button>
+                                            </Can>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>

@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { FileText, Check, X, Clock, AlertCircle, Edit3 } from '../Icons';
+import { clientApi } from '../../services/clientApi';
 
 interface ClientSignaturesProps {
     clientId: string;
@@ -11,6 +12,8 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
     const [signingRequest, setSigningRequest] = useState<any | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
+    const [consentAccepted, setConsentAccepted] = useState(false);
+    const consentVersion = 'v1';
 
     useEffect(() => {
         fetchSignatureRequests();
@@ -18,14 +21,8 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
 
     const fetchSignatureRequests = async () => {
         try {
-            const token = localStorage.getItem('client_token');
-            const res = await fetch('/api/client/signatures', {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setSignatureRequests(data);
-            }
+            const data = await clientApi.fetchJson('/signatures');
+            setSignatureRequests(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching signature requests:', error);
         } finally {
@@ -78,24 +75,18 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
     const submitSignature = async () => {
         const canvas = canvasRef.current;
         if (!canvas || !signingRequest) return;
+        if (!consentAccepted) return;
 
         const signatureImage = canvas.toDataURL('image/png');
 
         try {
-            const token = localStorage.getItem('client_token');
-            const res = await fetch(`/api/client/sign/${signingRequest.id}`, {
+            await clientApi.fetchJson(`/sign/${signingRequest.id}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ signatureData: signatureImage }),
+                body: JSON.stringify({ signatureData: signatureImage, consentAccepted, consentVersion }),
             });
 
-            if (res.ok) {
-                setSigningRequest(null);
-                fetchSignatureRequests();
-            }
+            setSigningRequest(null);
+            fetchSignatureRequests();
         } catch (error) {
             console.error('Error submitting signature:', error);
         }
@@ -125,6 +116,25 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
             hour: '2-digit',
             minute: '2-digit'
         });
+    };
+
+    const getVerificationLabel = (method?: string) => {
+        if (!method) return 'Email Link';
+        const normalized = method.toLowerCase();
+        if (normalized === 'kba') return 'Knowledge-Based (KBA)';
+        if (normalized === 'smsotp' || normalized === 'sms') return 'SMS One-Time Code';
+        if (normalized === 'none') return 'None';
+        return 'Email Link';
+    };
+
+    const isVerificationRequired = (method?: string) => {
+        const normalized = (method || '').toLowerCase();
+        return normalized !== '' && normalized !== 'none' && normalized !== 'emaillink' && normalized !== 'email';
+    };
+
+    const isVerificationPassed = (status?: string) => {
+        const normalized = (status || '').toLowerCase();
+        return normalized === 'passed' || normalized === 'notrequired';
     };
 
     if (loading) {
@@ -172,6 +182,18 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
                                 />
                             </div>
 
+                            <label className="flex items-start gap-2 text-sm text-gray-600 mb-4">
+                                <input
+                                    type="checkbox"
+                                    checked={consentAccepted}
+                                    onChange={(e) => setConsentAccepted(e.target.checked)}
+                                    className="mt-1"
+                                />
+                                <span>
+                                    I consent to the use of electronic records and signatures and acknowledge the ESIGN/UETA disclosure.
+                                </span>
+                            </label>
+
                             <div className="flex justify-between">
                                 <button
                                     onClick={clearSignature}
@@ -188,7 +210,8 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
                                     </button>
                                     <button
                                         onClick={submitSignature}
-                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                                        disabled={!consentAccepted}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50"
                                     >
                                         <Check className="w-4 h-4" />
                                         Sign
@@ -210,6 +233,8 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
                     <div className="space-y-4">
                         {signatureRequests.map((request) => {
                             const status = request.status?.toLowerCase();
+                            const verificationRequired = isVerificationRequired(request.verificationMethod);
+                            const verificationPassed = isVerificationPassed(request.verificationStatus);
                             return (
                                 <div key={request.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
                                     <div className="flex items-center justify-between">
@@ -226,6 +251,14 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
                                                     Requested on: {formatDate(request.createdAt)}
                                                     {request.expiresAt && ` - Due by: ${formatDate(request.expiresAt)}`}
                                                 </p>
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    Verification: {getVerificationLabel(request.verificationMethod)} ({request.verificationStatus || 'Pending'})
+                                                </p>
+                                                {verificationRequired && !verificationPassed && (
+                                                    <p className="text-xs text-amber-600 mt-1">
+                                                        Verification is required before signing.
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
 
@@ -233,9 +266,11 @@ const ClientSignatures: React.FC<ClientSignaturesProps> = ({ clientId }) => {
                                             <button
                                                 onClick={() => {
                                                     setSigningRequest(request);
+                                                    setConsentAccepted(false);
                                                     setTimeout(initCanvas, 100);
                                                 }}
-                                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                                                disabled={verificationRequired && !verificationPassed}
+                                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                                             >
                                                 <Edit3 className="w-4 h-4" />
                                                 Sign

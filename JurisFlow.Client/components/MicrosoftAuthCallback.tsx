@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { toast } from './Toast';
+import { buildOAuthAuthHeaders, setOAuthTokens } from '../services/oauthSecurity';
 
 const MicrosoftAuthCallback: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
@@ -18,16 +19,13 @@ const MicrosoftAuthCallback: React.FC = () => {
       // Exchange code for tokens via backend
       fetch('/api/microsoft/oauth', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildOAuthAuthHeaders(true),
         body: JSON.stringify({ code })
       })
         .then(res => res.json())
         .then(data => {
           if (data.accessToken) {
-            localStorage.setItem('microsoft_access_token', data.accessToken);
-            if (data.refreshToken) {
-              localStorage.setItem('microsoft_refresh_token', data.refreshToken);
-            }
+            setOAuthTokens('microsoft-teams', data.accessToken, data.refreshToken);
             toast.success('Microsoft Teams successfully connected!');
             window.location.href = '/#videocall';
           } else {

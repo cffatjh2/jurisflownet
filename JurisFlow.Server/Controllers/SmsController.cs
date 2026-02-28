@@ -1,21 +1,32 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
+using JurisFlow.Server.Services;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Policy = "StaffOnly")]
     public class SmsController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly IConfiguration _configuration;
+        private readonly SmsReminderService _smsReminderService;
+        private readonly TwilioSmsService _twilioSmsService;
 
-        public SmsController(JurisFlowDbContext context, IConfiguration configuration)
+        public SmsController(
+            JurisFlowDbContext context,
+            IConfiguration configuration,
+            SmsReminderService smsReminderService,
+            TwilioSmsService twilioSmsService)
         {
             _context = context;
             _configuration = configuration;
+            _smsReminderService = smsReminderService;
+            _twilioSmsService = twilioSmsService;
         }
 
         // POST: api/sms/send
@@ -40,15 +51,26 @@ namespace JurisFlow.Server.Controllers
             _context.SmsMessages.Add(message);
             await _context.SaveChangesAsync();
 
-            // TODO: Integrate with Twilio API
-            // var twilioClient = new TwilioRestClient(...);
-            // var twilioMessage = await MessageResource.CreateAsync(...);
-            // message.ExternalId = twilioMessage.Sid;
-
-            // For now, simulate send
-            message.Status = "Sent";
-            message.SentAt = DateTime.UtcNow;
+            var sendResult = await _twilioSmsService.SendAsync(dto.ToNumber, dto.Body, HttpContext.RequestAborted);
+            message.ExternalId = sendResult.MessageSid;
+            message.Status = sendResult.Status;
+            message.ErrorCode = sendResult.ErrorCode;
+            message.ErrorMessage = sendResult.ErrorMessage;
+            if (sendResult.Success)
+            {
+                message.SentAt = DateTime.UtcNow;
+            }
             await _context.SaveChangesAsync();
+
+            if (!sendResult.Success)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    message = "SMS provider rejected the message.",
+                    detail = sendResult.ErrorMessage,
+                    smsId = message.Id
+                });
+            }
 
             return Ok(message);
         }
@@ -231,58 +253,82 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("reminders/process")]
         public async Task<IActionResult> ProcessPendingReminders()
         {
-            var now = DateTime.UtcNow;
-            var pendingReminders = await _context.SmsReminders
-                .Where(r => r.Status == "Pending" && r.ScheduledFor <= now)
-                .ToListAsync();
+            var sentCount = await _smsReminderService.ProcessPendingAsync();
+            return Ok(new { message = $"Processed reminders, sent {sentCount}" });
+        }
 
-            int sentCount = 0;
-
-            foreach (var reminder in pendingReminders)
+        // POST: api/sms/webhook (Twilio webhook)
+        [AllowAnonymous]
+        [HttpPost("webhook")]
+        public async Task<IActionResult> HandleTwilioWebhook()
+        {
+            if (!await _twilioSmsService.IsWebhookSignatureValidAsync(Request))
             {
-                try
+                return Unauthorized(new { message = "Invalid webhook signature." });
+            }
+
+            if (!Request.HasFormContentType)
+            {
+                return BadRequest(new { message = "Form encoded webhook payload is required." });
+            }
+
+            var form = await Request.ReadFormAsync();
+            var messageSid = FirstNonEmpty(form, "MessageSid", "SmsSid");
+            var providerStatus = FirstNonEmpty(form, "MessageStatus", "SmsStatus");
+            var normalizedStatus = TwilioSmsService.NormalizeProviderStatus(providerStatus);
+            var fromNumber = FirstNonEmpty(form, "From") ?? string.Empty;
+            var toNumber = FirstNonEmpty(form, "To") ?? string.Empty;
+            var body = FirstNonEmpty(form, "Body");
+            var errorCode = FirstNonEmpty(form, "ErrorCode");
+            var errorMessage = FirstNonEmpty(form, "ErrorMessage");
+            var now = DateTime.UtcNow;
+
+            var existing = !string.IsNullOrWhiteSpace(messageSid)
+                ? await _context.SmsMessages.FirstOrDefaultAsync(m => m.ExternalId == messageSid)
+                : null;
+
+            if (existing != null)
+            {
+                existing.Status = normalizedStatus;
+                existing.ErrorCode = errorCode;
+                existing.ErrorMessage = errorMessage;
+                if (normalizedStatus == "Delivered")
                 {
-                    // Create SMS message
-                    var message = new SmsMessage
-                    {
-                        FromNumber = _configuration["Twilio:FromNumber"] ?? "+15551234567",
-                        ToNumber = reminder.ToNumber,
-                        Body = reminder.Message,
-                        Direction = "Outbound",
-                        Status = "Sent",
-                        ClientId = reminder.ClientId,
-                        SentAt = DateTime.UtcNow
-                    };
-
-                    _context.SmsMessages.Add(message);
-
-                    // TODO: Send via Twilio API
-
-                    reminder.Status = "Sent";
-                    reminder.SmsMessageId = message.Id;
-                    sentCount++;
+                    existing.DeliveredAt = now;
                 }
-                catch (Exception ex)
+
+                if (!string.IsNullOrWhiteSpace(body))
                 {
-                    reminder.Status = "Failed";
-                    Console.WriteLine($"Failed to send reminder {reminder.Id}: {ex.Message}");
+                    existing.Body = body;
                 }
+            }
+            else
+            {
+                var direction = IsInbound(toNumber) ? "Inbound" : "Outbound";
+                var inferredStatus = direction == "Inbound" ? "Received" : normalizedStatus;
+                var inferredClientId = await ResolveClientIdByPhoneAsync(fromNumber);
+
+                var message = new SmsMessage
+                {
+                    ExternalId = messageSid,
+                    FromNumber = fromNumber,
+                    ToNumber = toNumber,
+                    Body = body ?? string.Empty,
+                    Direction = direction,
+                    Status = inferredStatus,
+                    ClientId = inferredClientId,
+                    SentAt = now,
+                    DeliveredAt = inferredStatus == "Delivered" ? now : null,
+                    ErrorCode = errorCode,
+                    ErrorMessage = errorMessage
+                };
+
+                _context.SmsMessages.Add(message);
             }
 
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = $"Processed {pendingReminders.Count} reminders, sent {sentCount}" });
-        }
-
-        // POST: api/sms/webhook (Twilio webhook)
-        [HttpPost("webhook")]
-        public async Task<IActionResult> HandleTwilioWebhook()
-        {
-            // TODO: Implement Twilio webhook handling
-            // Parse incoming message status updates
-            // Handle inbound messages
-
-            return Ok();
+            return Content("<Response></Response>", "application/xml");
         }
 
         // POST: api/sms/templates/seed
@@ -337,6 +383,59 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = $"Seeded {templates.Count} SMS templates" });
+        }
+
+        private static string? FirstNonEmpty(IFormCollection form, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                if (form.TryGetValue(key, out var values))
+                {
+                    var value = values.FirstOrDefault();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private bool IsInbound(string toNumber)
+        {
+            var fromNumber = _configuration["Twilio:FromNumber"];
+            if (string.IsNullOrWhiteSpace(fromNumber))
+            {
+                return false;
+            }
+
+            return NormalizePhone(fromNumber) == NormalizePhone(toNumber);
+        }
+
+        private async Task<string?> ResolveClientIdByPhoneAsync(string phoneNumber)
+        {
+            if (string.IsNullOrWhiteSpace(phoneNumber))
+            {
+                return null;
+            }
+
+            var normalized = NormalizePhone(phoneNumber);
+            return await _context.Clients
+                .Where(c => c.Phone != null || c.Mobile != null)
+                .Where(c => NormalizePhone(c.Phone) == normalized || NormalizePhone(c.Mobile) == normalized)
+                .Select(c => c.Id)
+                .FirstOrDefaultAsync();
+        }
+
+        private static string NormalizePhone(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            return new string(value.Where(char.IsDigit).ToArray());
         }
     }
 

@@ -1,6 +1,7 @@
 // Google Meet Service - Creates real Google Meet meetings via Calendar API
 import { toast } from '../components/Toast';
 import { getGoogleClientId } from './googleConfig';
+import { requestOAuthState } from './oauthSecurity';
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 
 export interface GoogleMeetMeeting {
@@ -71,18 +72,22 @@ export const googleMeetService = {
   },
 
   // Get OAuth2 authorization URL for Calendar API
-  getAuthUrl: (): string => {
+  getAuthUrl: async (returnPath: string = '/#videocall'): Promise<string> => {
     const clientId = getGoogleClientId();
 
     if (!clientId) {
       throw new Error('VITE_GOOGLE_CLIENT_ID is not set in environment variables');
     }
 
+    const normalizedReturnPath = returnPath.startsWith('/') && !returnPath.startsWith('//')
+      ? returnPath
+      : '/#videocall';
     const redirectUri = `${window.location.origin}/auth/google/callback`;
     const scope = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events';
     const responseType = 'code';
+    const state = await requestOAuthState('google', 'google-meet', normalizedReturnPath);
 
-    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent`;
+    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
   }
 };
 

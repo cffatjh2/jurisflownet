@@ -7,15 +7,18 @@ namespace JurisFlow.Server.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<DeadlineReminderHostedService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly TenantJobRunner _tenantJobs;
 
         public DeadlineReminderHostedService(
             IServiceProvider serviceProvider,
             ILogger<DeadlineReminderHostedService> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            TenantJobRunner tenantJobs)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
             _configuration = configuration;
+            _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -33,9 +36,11 @@ namespace JurisFlow.Server.Services
                 {
                     try
                     {
-                        using var scope = _serviceProvider.CreateScope();
-                        var service = scope.ServiceProvider.GetRequiredService<DeadlineReminderService>();
-                        await service.ProcessAsync();
+                        await _tenantJobs.RunAsync(async sp =>
+                        {
+                            var service = sp.GetRequiredService<DeadlineReminderService>();
+                            await service.ProcessAsync();
+                        }, stoppingToken);
                     }
                     catch (Exception ex)
                     {

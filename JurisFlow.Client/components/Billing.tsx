@@ -11,9 +11,10 @@ import { api } from '../services/api';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
 
 // Helper functions for status checks (handles both legacy strings and new enums)
-const isPaid = (status: any) => status === 'Paid' || status === 'PAID';
-const isDraft = (status: any) => status === 'Draft' || status === 'DRAFT';
-const isApproved = (status: any) => status === 'APPROVED';
+const normalizeStatus = (status: any) => (status ?? '').toString().toLowerCase();
+const isPaid = (status: any) => normalizeStatus(status) === 'paid';
+const isDraft = (status: any) => normalizeStatus(status) === 'draft';
+const isApproved = (status: any) => normalizeStatus(status) === 'approved';
 const isEntryApproved = (status?: string) => !status || status.toLowerCase() === 'approved';
 
 // Extended Invoice type with additional fields
@@ -47,6 +48,8 @@ interface ExtendedInvoice {
     tax?: number;
     discount?: number;
     subtotal?: number;
+    entityId?: string;
+    officeId?: string;
 }
 
 const Billing: React.FC = () => {
@@ -61,6 +64,10 @@ const Billing: React.FC = () => {
     const [selectedInvoice, setSelectedInvoice] = useState<ExtendedInvoice | null>(null);
     const [billingSettings, setBillingSettings] = useState<BillingSettings | null>(null);
     const [settingsLoading, setSettingsLoading] = useState(false);
+    const [invoicePayorSummary, setInvoicePayorSummary] = useState<any | null>(null);
+    const [invoicePayorSummaryLoading, setInvoicePayorSummaryLoading] = useState(false);
+    const [payorAging, setPayorAging] = useState<any | null>(null);
+    const [payorAgingLoading, setPayorAgingLoading] = useState(false);
 
     // Filter states
     const [searchQuery, setSearchQuery] = useState('');
@@ -122,6 +129,48 @@ const Billing: React.FC = () => {
         setInvoiceEntityId(matter?.entityId || '');
         setInvoiceOfficeId(matter?.officeId || '');
     }, [selectedMatterId, matters]);
+
+    useEffect(() => {
+        let isMounted = true;
+        const loadPayorAging = async () => {
+            setPayorAgingLoading(true);
+            try {
+                const data = await api.legalBilling.getPayorAging({ limit: 20 });
+                if (isMounted) setPayorAging(data || null);
+            } catch (error) {
+                console.error('Failed to load payor aging', error);
+                if (isMounted) setPayorAging(null);
+            } finally {
+                if (isMounted) setPayorAgingLoading(false);
+            }
+        };
+        void loadPayorAging();
+        return () => {
+            isMounted = false;
+        };
+    }, [invoices.length]);
+
+    useEffect(() => {
+        let isMounted = true;
+        const loadInvoicePayorSummary = async () => {
+            if (!showDetailModal || !selectedInvoice?.id) {
+                if (isMounted) setInvoicePayorSummary(null);
+                return;
+            }
+            setInvoicePayorSummaryLoading(true);
+            try {
+                const data = await api.legalBilling.getInvoicePayorStatements(selectedInvoice.id);
+                if (isMounted) setInvoicePayorSummary(data || null);
+            } catch (error) {
+                console.error('Failed to load invoice payor allocation summary', error);
+                if (isMounted) setInvoicePayorSummary(null);
+            } finally {
+                if (isMounted) setInvoicePayorSummaryLoading(false);
+            }
+        };
+        void loadInvoicePayorSummary();
+        return () => { isMounted = false; };
+    }, [showDetailModal, selectedInvoice?.id]);
 
     // Stats calculations
     const stats = useMemo(() => {
@@ -355,7 +404,7 @@ const Billing: React.FC = () => {
     const handleSendInvoice = async (invoice: ExtendedInvoice) => {
         const ok = await confirm({
             title: 'Send Invoice',
-            message: `Send invoice ${invoice.number} to ${invoice.client.name}?`,
+            message: `Send invoice ${invoice.number} to ${invoice.client?.name || 'client'}?`,
             confirmText: 'Send',
             cancelText: 'Cancel',
         });
@@ -439,9 +488,9 @@ const Billing: React.FC = () => {
     };
 
     return (
-        <div className="h-full flex flex-col bg-gray-50/50">
+        <div className="h-full min-h-0 flex flex-col bg-gray-50/50 overflow-y-auto overscroll-y-contain">
             {/* Header */}
-            <div className="px-8 py-6 border-b border-gray-200 bg-white">
+            <div className="px-6 py-4 border-b border-gray-200 bg-white">
                 <div className="flex justify-between items-center">
                     <div>
                         <h1 className="text-2xl font-bold text-slate-800">{t('billing_title')}</h1>
@@ -461,7 +510,7 @@ const Billing: React.FC = () => {
             </div>
 
             {/* Stats Cards */}
-            <div className="px-8 py-6">
+            <div className="px-6 py-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
                         <div className="flex items-center justify-between">
@@ -521,6 +570,56 @@ const Billing: React.FC = () => {
                             <p className="text-xs text-white/80 mt-1">Revenue collected</p>
                         </div>
                     </div>
+                </div>
+
+                <div className="mt-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                        <div>
+                            <h3 className="text-sm font-bold text-slate-800">Collections Payor Aging</h3>
+                            <p className="text-xs text-gray-500">Outstanding balances grouped by payor allocation aging buckets.</p>
+                        </div>
+                        <button
+                            onClick={async () => {
+                                setPayorAgingLoading(true);
+                                try {
+                                    setPayorAging(await api.legalBilling.getPayorAging({ limit: 20 }));
+                                } catch (error) {
+                                    console.error('Failed to refresh payor aging', error);
+                                } finally {
+                                    setPayorAgingLoading(false);
+                                }
+                            }}
+                            className="px-2 py-1 text-xs font-semibold rounded border border-gray-300 bg-white"
+                        >
+                            {payorAgingLoading ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                    </div>
+                    {!payorAging || !Array.isArray(payorAging.buckets) || payorAging.buckets.length === 0 ? (
+                        <div className="mt-3 text-xs text-gray-500">No payor aging rows available.</div>
+                    ) : (
+                        <>
+                            <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                                {payorAging.buckets.map((b: any) => (
+                                    <div key={String(b.bucketKey)} className="rounded-lg border border-indigo-100 bg-indigo-50/30 p-3">
+                                        <div className="text-[11px] font-bold uppercase text-indigo-700">{b.bucketLabel || b.bucketKey}</div>
+                                        <div className="mt-1 text-sm font-bold text-slate-800">{formatCurrency(Number(b.totalOutstanding || 0))}</div>
+                                        <div className="text-[11px] text-gray-500">Rows {Number(b.rowCount || 0)}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            {Array.isArray(payorAging.payorSegments) && payorAging.payorSegments.length > 0 && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {payorAging.payorSegments.map((s: any) => (
+                                        <div key={String(s.segment)} className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-slate-700">
+                                            <span className="font-semibold">{String(s.segment)}</span>
+                                            <span className="ml-2">{formatCurrency(Number(s.totalOutstanding || 0))}</span>
+                                            <span className="ml-2 text-gray-500">rows {Number(s.rowCount || 0)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -595,8 +694,8 @@ const Billing: React.FC = () => {
             </div>
 
             {/* Invoice Table */}
-            <div className="flex-1 px-8 pb-8 overflow-hidden">
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm h-full flex flex-col overflow-hidden">
+            <div className="px-8 pb-8">
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm min-h-[260px] flex flex-col overflow-hidden">
                     {filteredInvoices.length === 0 ? (
                         <div className="flex flex-col items-center justify-center flex-1 text-gray-400">
                             <CreditCard className="w-16 h-16 opacity-20 mb-4" />
@@ -610,7 +709,7 @@ const Billing: React.FC = () => {
                             </button>
                         </div>
                     ) : (
-                        <div className="overflow-y-auto flex-1">
+                        <div className="overflow-x-auto">
                             <table className="w-full text-left">
                                 <thead className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase sticky top-0">
                                     <tr>
@@ -962,6 +1061,54 @@ const Billing: React.FC = () => {
                                 </div>
                             </div>
 
+                            {/* Payor Allocation Summary (Split Billing) */}
+                            <div className="mb-6">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h4 className="font-bold text-gray-700">Payor Allocation Summary</h4>
+                                    {invoicePayorSummaryLoading && <span className="text-xs text-gray-500">Loading...</span>}
+                                </div>
+                                {invoicePayorSummaryLoading ? (
+                                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-500">Loading split billing allocations...</div>
+                                ) : !invoicePayorSummary || !Array.isArray(invoicePayorSummary.rows) || invoicePayorSummary.rows.length === 0 ? (
+                                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-500">
+                                        No payor allocations recorded for this invoice. Legacy single-payor flow may be in use.
+                                    </div>
+                                ) : (
+                                    <div className="rounded-lg border border-gray-200 overflow-hidden">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-500">Payor</th>
+                                                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-500">Type</th>
+                                                    <th className="px-4 py-2 text-right text-xs font-bold text-gray-500">Allocated</th>
+                                                    <th className="px-4 py-2 text-right text-xs font-bold text-gray-500">Line Alloc.</th>
+                                                    <th className="px-4 py-2 text-right text-xs font-bold text-gray-500">Rows</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {invoicePayorSummary.rows.map((row: any) => (
+                                                    <tr key={row.invoicePayorAllocationId || `${row.payorClientId}-${row.responsibilityType}`}>
+                                                        <td className="px-4 py-3">
+                                                            <div className="font-medium text-gray-900">{row.payorName || row.payorClientId || 'Unknown Payor'}</div>
+                                                            <div className="text-xs text-gray-500">{row.payorEmail || row.payorClientId}</div>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <div className="capitalize">{row.responsibilityType || 'primary'}</div>
+                                                            <div className="text-xs text-gray-500">
+                                                                {row.isPrimary ? 'Primary' : 'Secondary'}{row.percent != null ? ` • ${Number(row.percent).toFixed(2)}%` : ''}{row.amountCap != null ? ` • Cap ${formatCurrency(Number(row.amountCap))}` : ''}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 text-right font-medium">{formatCurrency(Number(row.allocatedAmount || 0))}</td>
+                                                        <td className="px-4 py-3 text-right">{formatCurrency(Number(row.lineAllocatedAmount || 0))}</td>
+                                                        <td className="px-4 py-3 text-right">{Number(row.lineCount || 0)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Line Items */}
                             {selectedInvoice.lineItems && selectedInvoice.lineItems.length > 0 && (
                                 <div className="mb-6">
@@ -1047,7 +1194,7 @@ const Billing: React.FC = () => {
                                         Export LEDES
                                     </button>
                                 )}
-                                {(selectedInvoice.status === 'DRAFT' || selectedInvoice.status === 'DRAFT') && (
+                                {isDraft(selectedInvoice.status) && (
                                     <>
                                         <button
                                             onClick={async () => {
@@ -1067,7 +1214,7 @@ const Billing: React.FC = () => {
                                         </button>
                                     </>
                                 )}
-                                {(selectedInvoice.status === 'APPROVED') && (
+                                {isApproved(selectedInvoice.status) && (
                                     <button
                                         onClick={() => handleSendInvoice(selectedInvoice)}
                                         className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700"

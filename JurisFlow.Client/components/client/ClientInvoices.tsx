@@ -3,6 +3,7 @@ import { Invoice, InvoiceStatus } from '../../types';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
 import PaymentCheckout from '../PaymentCheckout';
 import { CreditCard, Download, CheckCircle } from '../Icons';
+import { clientApi } from '../../services/clientApi';
 
 const ClientInvoices: React.FC = () => {
   const { client } = useClientAuth();
@@ -34,12 +35,8 @@ const ClientInvoices: React.FC = () => {
   useEffect(() => {
     const loadInvoices = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const res = await fetch('/api/client/invoices', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        setInvoices(data);
+        const data = await clientApi.fetchJson('/invoices');
+        setInvoices(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error('Error loading invoices:', error);
       } finally {
@@ -203,7 +200,7 @@ const ClientInvoices: React.FC = () => {
         amount={checkoutInvoice ? getBalance(checkoutInvoice) : 0}
         clientName={client?.name}
         clientEmail={client?.email}
-        mode="demo"
+        mode="api"
         authToken={clientToken || undefined}
         onSuccess={handlePaymentSuccess}
       />

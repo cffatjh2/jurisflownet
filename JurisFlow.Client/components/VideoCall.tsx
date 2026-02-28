@@ -5,6 +5,7 @@ import { googleMeetService } from '../services/googleMeetService';
 import { microsoftTeamsService } from '../services/microsoftTeamsService';
 import { zoomService } from '../services/zoomService';
 import { toast } from './Toast';
+import { getOAuthAccessToken, getPreferredGoogleAccessToken } from '../services/oauthSecurity';
 
 interface VideoCallRoom {
   id: string;
@@ -29,17 +30,9 @@ const VideoCall: React.FC = () => {
   });
 
   // Check for access tokens
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(
-    localStorage.getItem('google_meet_access_token') ||
-    localStorage.getItem('gmail_access_token') ||
-    localStorage.getItem('google_docs_access_token')
-  );
-  const [microsoftAccessToken, setMicrosoftAccessToken] = useState<string | null>(
-    localStorage.getItem('microsoft_access_token')
-  );
-  const [zoomAccessToken, setZoomAccessToken] = useState<string | null>(
-    localStorage.getItem('zoom_access_token')
-  );
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() => getPreferredGoogleAccessToken());
+  const [microsoftAccessToken, setMicrosoftAccessToken] = useState<string | null>(() => getOAuthAccessToken('microsoft-teams'));
+  const [zoomAccessToken, setZoomAccessToken] = useState<string | null>(() => getOAuthAccessToken('zoom'));
 
   useEffect(() => {
     // Load saved rooms from localStorage
@@ -48,29 +41,38 @@ const VideoCall: React.FC = () => {
       setRooms(JSON.parse(savedRooms));
     }
 
-    // Update access tokens from localStorage
-    const googleToken = localStorage.getItem('google_meet_access_token') ||
-      localStorage.getItem('gmail_access_token') ||
-      localStorage.getItem('google_docs_access_token');
-    const microsoftToken = localStorage.getItem('microsoft_access_token');
-    const zoomToken = localStorage.getItem('zoom_access_token');
-
-    setGoogleAccessToken(googleToken);
-    setMicrosoftAccessToken(microsoftToken);
-    setZoomAccessToken(zoomToken);
+    // Refresh OAuth token snapshots (migrates legacy localStorage tokens to sessionStorage).
+    setGoogleAccessToken(getPreferredGoogleAccessToken());
+    setMicrosoftAccessToken(getOAuthAccessToken('microsoft-teams'));
+    setZoomAccessToken(getOAuthAccessToken('zoom'));
   }, []);
 
-  const handleConnect = (type: 'google-meet' | 'microsoft-teams' | 'zoom') => {
-    switch (type) {
-      case 'google-meet':
-        window.location.href = googleMeetService.getAuthUrl();
-        break;
-      case 'microsoft-teams':
-        window.location.href = microsoftTeamsService.getAuthUrl();
-        break;
-      case 'zoom':
-        window.location.href = zoomService.getAuthUrl();
-        break;
+  const resolveOAuthReturnPath = () => {
+    const isClientPortal =
+      window.location.pathname === '/client' ||
+      window.location.pathname.startsWith('/client/') ||
+      window.location.hash === '#/client';
+
+    return isClientPortal ? '/client' : '/#videocall';
+  };
+
+  const handleConnect = async (type: 'google-meet' | 'microsoft-teams' | 'zoom') => {
+    try {
+      const returnPath = resolveOAuthReturnPath();
+      switch (type) {
+        case 'google-meet':
+          window.location.href = await googleMeetService.getAuthUrl(returnPath);
+          break;
+        case 'microsoft-teams':
+          window.location.href = microsoftTeamsService.getAuthUrl();
+          break;
+        case 'zoom':
+          window.location.href = await zoomService.getAuthUrl(returnPath);
+          break;
+      }
+    } catch (error) {
+      console.error('OAuth connection init failed:', error);
+      toast.error('Failed to start account connection. Please try again.');
     }
   };
 

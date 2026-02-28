@@ -174,9 +174,9 @@ const CalendarView: React.FC = () => {
       const eventPayload = {
         title: `${activeAppointment.client?.name || 'Client'} - ${activeAppointment.type}`,
         date: approvedDate.toISOString(),
-        type: activeAppointment.type === 'consultation' ? 'Consultation' :
+        type: (activeAppointment.type === 'consultation' ? 'Consultation' :
           activeAppointment.type === 'meeting' ? 'Meeting' :
-            activeAppointment.type === 'call' ? 'Conference' : 'Court',
+            activeAppointment.type === 'call' ? 'Conference' : 'Court') as 'Consultation' | 'Meeting' | 'Conference' | 'Court',
         duration: scheduleDuration,
         description: buildAppointmentDescription(activeAppointment.notes, activeAppointment.id),
         matterId: activeAppointment.matterId || undefined,

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  server:
+    name: Server Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore JurisFlow.sln
+
+      - name: Build
+        run: dotnet build JurisFlow.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test JurisFlow.sln --configuration Release --no-build --verbosity minimal
+
+  client:
+    name: Client Lint and Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: JurisFlow.Client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: JurisFlow.Client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build

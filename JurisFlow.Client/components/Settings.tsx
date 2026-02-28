@@ -1,14 +1,360 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Settings as SettingsIcon, User, Globe, DollarSign, Bell, Lock, X, Shield, Moon, Sun, Briefcase, CreditCard, RefreshCw, Copy, CheckCircle, AlertTriangle, Link, Users } from './Icons';
 import { useTranslation, Currency } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { Language } from '../translations';
-import { BillingSettings, FirmSettings, SecuritySettings, IntegrationItem, FirmEntity, Office } from '../types';
+import { BillingSettings, FirmSettings, SecuritySettings, IntegrationItem, IntegrationCatalogItem, FirmEntity, Office } from '../types';
 import AdminPanel from './AdminPanel';
+import AppDirectoryPanel from './AppDirectoryPanel';
+import IntegrationOpsPanel from './IntegrationOpsPanel';
+import JurisdictionRulesOpsPanel from './JurisdictionRulesOpsPanel';
+import LegalBillingOpsPanel from './LegalBillingOpsPanel';
+import EfilingWorkflowPanel from './EfilingWorkflowPanel';
+import TrustRiskRadarPanel from './TrustRiskRadarPanel';
 import { toast } from './Toast';
 import { api } from '../services/api';
+import {
+  isIntegrationOAuthProviderKey,
+  startIntegrationOAuth
+} from '../services/integrationOAuthService';
+
+const SETTINGS_TR_TEXT_MAP: Record<string, string> = {
+  'Settings': 'Ayarlar',
+  'Manage your account settings and preferences': 'Hesap ayarlarınızı ve tercihlerinizi yönetin',
+  'Profile': 'Profil',
+  'Preferences': 'Tercihler',
+  'Notifications': 'Bildirimler',
+  'Security': 'Güvenlik',
+  'Firm Settings': 'Firma Ayarları',
+  'Firm Info': 'Firma Bilgileri',
+  'Offices & Entities': 'Ofisler ve Tüzel Kişiler',
+  'Billing': 'Muhasebe',
+  'Integrations': 'Entegrasyonlar',
+  'App Directory': 'Uygulama Dizini',
+  'Admin Panel': 'Yönetici Paneli',
+  'Profile Information': 'Profil Bilgileri',
+  'Full Name': 'Ad Soyad',
+  'Email': 'E-posta',
+  'Phone': 'Telefon',
+  'Mobile': 'Cep Telefonu',
+  'Address': 'Adres',
+  'City': 'Şehir',
+  'State': 'Eyalet / İl',
+  'ZIP Code': 'Posta Kodu',
+  'Country': 'Ülke',
+  'Bar Number': 'Baro Sicil No',
+  'Bio': 'Biyografi',
+  'Save Changes': 'Değişiklikleri Kaydet',
+  'Language': 'Dil',
+  'Currency': 'Para Birimi',
+  'Theme': 'Tema',
+  'Light': 'Açık',
+  'Dark': 'Koyu',
+  'System': 'Sistem',
+  'Notification Preferences': 'Bildirim Tercihleri',
+  'Email Notifications': 'E-posta Bildirimleri',
+  'Receive email notifications for important updates': 'Önemli güncellemeler için e-posta bildirimi al',
+  'Task Reminders': 'Görev Hatırlatıcıları',
+  'Get reminders for upcoming tasks': 'Yaklaşan görevler için hatırlatma al',
+  'Calendar Events': 'Takvim Etkinlikleri',
+  'Notifications for calendar events': 'Takvim etkinlikleri için bildirimler',
+  'Security Settings': 'Güvenlik Ayarları',
+  'Change Password': 'Şifre Değiştir',
+  'Current Password': 'Mevcut Şifre',
+  'New Password': 'Yeni Şifre',
+  'Confirm Password': 'Şifreyi Onayla',
+  'Update Password': 'Şifreyi Güncelle',
+  'Two-Factor Authentication': 'İki Faktörlü Kimlik Doğrulama',
+  'Add an extra layer of security to your account': 'Hesabınıza ek bir güvenlik katmanı ekleyin',
+  'Enabled': 'Etkin',
+  'Not enabled': 'Etkin değil',
+  'MFA enforcement is paused': 'MFA zorunluluğu duraklatıldı',
+  'Login will not require verification codes until enforcement is re-enabled.': 'Zorunluluk yeniden etkinleştirilene kadar girişte doğrulama kodu istenmez.',
+  'MFA is active': 'MFA etkin',
+  'MFA is not enabled': 'MFA etkin değil',
+  'Use an authenticator app to generate verification codes.': 'Doğrulama kodu üretmek için bir doğrulayıcı uygulama kullanın.',
+  'Start MFA Setup': 'MFA Kurulumunu Başlat',
+  'Secret key': 'Gizli anahtar',
+  'otpauth URI': 'otpauth URI',
+  'Enter code to enable': 'Etkinleştirmek için kod girin',
+  'Disable MFA (enter code)': 'MFA\'yı Kapat (kod girin)',
+  'Disable MFA': 'MFA\'yı Kapat',
+  'Enable MFA': 'MFA\'yı Etkinleştir',
+  'Generate Backup Codes': 'Yedek Kodları Oluştur',
+  'Regenerate Backup Codes': 'Yedek Kodları Yeniden Oluştur',
+  'Backup Codes': 'Yedek Kodlar',
+  'Active Sessions': 'Aktif Oturumlar',
+  'Current session': 'Mevcut oturum',
+  'Revoke': 'İptal Et',
+  'Revoke All Other Sessions': 'Diğer Tüm Oturumları Sonlandır',
+  'Save Security Settings': 'Güvenlik Ayarlarını Kaydet',
+  'Session timeout (minutes)': 'Oturum zaman aşımı (dakika)',
+  'Idle timeout (minutes)': 'Boşta kalma zaman aşımı (dakika)',
+  'Require MFA on sign-in': 'Girişte MFA zorunlu',
+  'Firm information used for invoices, trust accounting, and compliance exports.': 'Faturalar, emanet hesabı ve uyumluluk dışa aktarımları için kullanılan firma bilgileri.',
+  'Save Firm Settings': 'Firma Ayarlarını Kaydet',
+  'Billing defaults for rates, invoice generation, and trust safeguards.': 'Ücretler, fatura üretimi ve emanet güvenlikleri için muhasebe varsayılanları.',
+  'Save Billing Settings': 'Muhasebe Ayarlarını Kaydet',
+  'Offices & Entities Tab - Admin Only': 'Ofisler ve Tüzel Kişiler Sekmesi - Yalnızca Yönetici',
+  'Select an entity to manage offices, billing defaults, and scheduling metadata.': 'Ofisleri, fatura varsayılanlarını ve planlama meta verilerini yönetmek için bir tüzel kişi seçin.',
+  '+ Add Entity': '+ Tüzel Kişi Ekle',
+  '+ Add Office': '+ Ofis Ekle',
+  'No entities found yet. Add your first legal entity to begin.': 'Henüz tüzel kişi yok. Başlamak için ilk tüzel kişiyi ekleyin.',
+  'Default': 'Varsayılan',
+  'Active': 'Aktif',
+  'Inactive': 'Pasif',
+  'Edit': 'Düzenle',
+  'Set Default': 'Varsayılan Yap',
+  'Deactivate': 'Pasifleştir',
+  'Activate': 'Etkinleştir',
+  'Remove': 'Kaldır',
+  'No offices yet. Add an office to support calendaring and compliance notices.': 'Henüz ofis yok. Takvim ve uyumluluk bildirimleri için bir ofis ekleyin.',
+  'Add Entity': 'Tüzel Kişi Ekle',
+  'Edit Entity': 'Tüzel Kişiyi Düzenle',
+  'Use legal entity details for billing and tax compliance.': 'Faturalama ve vergi uyumluluğu için tüzel kişi bilgilerini kullanın.',
+  'Entity Name *': 'Tüzel Kişi Adı *',
+  'Legal Name': 'Yasal Unvan',
+  'Tax ID (EIN)': 'Vergi No (EIN)',
+  'Website': 'Web Sitesi',
+  'Zip Code': 'Posta Kodu',
+  'Set as default entity': 'Varsayılan tüzel kişi yap',
+  'Used for new matters and invoices.': 'Yeni dosyalar ve faturalar için kullanılır.',
+  'Entity status': 'Tüzel kişi durumu',
+  'Inactive entities will not appear in selections.': 'Pasif tüzel kişiler seçimlerde görünmez.',
+  'Save Entity': 'Tüzel Kişiyi Kaydet',
+  'Edit Office': 'Ofisi Düzenle',
+  'Add Office': 'Ofis Ekle',
+  'Office details power scheduling, conflicts, and compliance notices.': 'Ofis bilgileri planlama, conflict ve uyumluluk bildirimlerinde kullanılır.',
+  'Office Name *': 'Ofis Adı *',
+  'Office Code': 'Ofis Kodu',
+  'Time Zone': 'Saat Dilimi',
+  'Set as default office': 'Varsayılan ofis yap',
+  'Used for new matters when this entity is selected.': 'Bu tüzel kişi seçildiğinde yeni dosyalarda kullanılır.',
+  'Office status': 'Ofis durumu',
+  'Inactive offices will not appear in selections.': 'Pasif ofisler seçimlerde görünmez.',
+  'Save Office': 'Ofisi Kaydet',
+  'Connect': 'Bağlan',
+  'Connect Gmail': 'Gmail Bağla',
+  'Connect Outlook': 'Outlook Bağla',
+  'Add an email inbox for matter-linked communications.': 'Dosya ile ilişkilendirilmiş iletişim için bir e-posta kutusu ekleyin.',
+  'Email Address': 'E-posta Adresi',
+  'Display Name': 'Görünen Ad',
+  'Account Label': 'Hesap Etiketi',
+  'Account Email (optional)': 'Hesap E-postası (opsiyonel)',
+  'API Key': 'API Anahtarı',
+  'OAuth Connection': 'OAuth Bağlantısı',
+  'Use secure redirect flow. Authorization code entry is automatic after callback.': 'Güvenli yönlendirme akışını kullanın. Callback sonrası yetkilendirme kodu otomatik işlenir.',
+  'Start OAuth': 'OAuth Başlat',
+  'Authorization Code (optional)': 'Yetkilendirme Kodu (opsiyonel)',
+  'Access Token (optional)': 'Access Token (opsiyonel)',
+  'Refresh Token (optional)': 'Refresh Token (opsiyonel)',
+  'Sync Enabled': 'Senkronizasyon Etkin',
+  'Cancel': 'İptal',
+  'Saving...': 'Kaydediliyor...',
+  'Create': 'Oluştur'
+};
+
+const SETTINGS_TR_PLACEHOLDER_MAP: Record<string, string> = {
+  'Bar association registration number': 'Baro kayıt numarası',
+  'Professional bio or description': 'Profesyonel biyografi veya açıklama',
+  'Enter current password': 'Mevcut şifreyi girin',
+  'Enter new password': 'Yeni şifreyi girin',
+  'Confirm new password': 'Yeni şifreyi onaylayın',
+  'XX-XXXXXXX': 'XX-XXXXXXX',
+  'https://': 'https://',
+  '123456': '123456',
+  'Acme Holdings - Operating': 'Örnek Firma - Operasyon',
+  'finance@yourfirm.com': 'finance@firma.com',
+  'Paste provider API key': 'Sağlayıcı API anahtarını yapıştırın',
+  'Paste OAuth authorization code': 'OAuth yetkilendirme kodunu yapıştırın',
+  'attorney@yourfirm.com': 'avukat@firma.com',
+  'Primary Inbox': 'Birincil Gelen Kutusu'
+};
+
+Object.assign(SETTINGS_TR_TEXT_MAP, {
+  'Integration Runtime Ops': 'Entegrasyon Operasyonları',
+  'Canonical action runner, mappings, conflict/review queues, inbox/outbox replay.': 'Kanonik aksiyon çalıştırıcı, eşlemeler, çatışma/inceleme kuyrukları ve gelen/giden yeniden oynatma.',
+  'Capability Matrix': 'Yetenek Matrisi',
+  'Contract': 'Sözleşme',
+  'Sync Status': 'Senkronizasyon Durumu',
+  'Webhook Monitor': 'Webhook İzleme',
+  'Reconciliation': 'Mutabakat',
+  'Secret Store': 'Secret Deposu',
+  'Canonical Action Runner': 'Kanonik Aksiyon Çalıştırıcı',
+  'Mapping Profiles': 'Eşleme Profilleri',
+  'Conflict Queue': 'Çatışma Kuyruğu',
+  'Review Queue': 'İnceleme Kuyruğu',
+  'Inbox Events': 'Gelen Olaylar',
+  'Outbox Events': 'Giden Olaylar',
+  'Inbox Status': 'Gelen Durumu',
+  'Outbox Status': 'Giden Durumu',
+  'Inbox failed': 'Gelen başarısız',
+  'Replayed': 'Yeniden oynatıldı',
+  'Outbox pending': 'Giden beklemede',
+  'Outbox dead-letter': 'Giden dead-letter',
+  'Refresh': 'Yenile',
+  'Refreshing...': 'Yenileniyor...',
+  'Rotate': 'Döndür',
+  'Rotating...': 'Döndürülüyor...',
+  'Replay': 'Yeniden Oynat',
+  'Replaying...': 'Yeniden Oynatılıyor...',
+  'Requeue': 'Tekrar Kuyruğa Al',
+  'Requeueing...': 'Tekrar Kuyruğa Alınıyor...',
+  'Resolve': 'Çöz',
+  'Ignore': 'Yoksay',
+  'Approve': 'Onayla',
+  'Retry': 'Tekrar Dene',
+  'In Review': 'İncelemede',
+  'Reject': 'Reddet',
+  'Dry run': 'Deneme Çalıştırması',
+  'Review on fail': 'Hata durumunda incelemeye gönder',
+  'Default profile': 'Varsayılan profil',
+  'Invoice preset': 'Fatura hazır ayarı',
+  'Payment preset': 'Ödeme hazır ayarı',
+  'Customer preset': 'Müşteri hazır ayarı',
+  'No inbox events.': 'Gelen olay yok.',
+  'No outbox events.': 'Giden olay yok.',
+  'Action required': 'İşlem gerekli',
+  'Connected': 'Bağlı',
+  'Pending': 'Bekliyor',
+  'Disabled': 'Devre dışı',
+  'Not connected': 'Bağlı değil'
+});
+
+const SETTINGS_TR_REGEX_REPLACERS: Array<{ pattern: RegExp; replace: (match: RegExpExecArray) => string }> = [
+  {
+    pattern: /^Currently using:\s*(.+?)\s*mode$/i,
+    replace: (m) => `Şu anda kullanılan mod: ${m[1]}`
+  },
+  {
+    pattern: /^Backup codes remaining:\s*(\d+)$/i,
+    replace: (m) => `Kalan yedek kod: ${m[1]}`
+  },
+  {
+    pattern: /^Connect\s+(.+)$/i,
+    replace: (m) => `${m[1]} Bağla`
+  }
+];
+
+const SETTINGS_TR_FRAGMENT_REPLACERS: Array<[string, string]> = [
+  ['Save ', 'Kaydet '],
+  ['Add ', 'Ekle '],
+  ['Edit ', 'Düzenle '],
+  ['Remove', 'Kaldır'],
+  ['Default', 'Varsayılan'],
+  ['Active', 'Aktif'],
+  ['Inactive', 'Pasif'],
+  ['Status', 'Durum'],
+  ['Name', 'Ad'],
+  ['Phone', 'Telefon'],
+  ['Address', 'Adres'],
+  ['City', 'Şehir'],
+  ['State', 'Eyalet / İl'],
+  ['Country', 'Ülke'],
+  ['Website', 'Web Sitesi'],
+  ['Language', 'Dil'],
+  ['Currency', 'Para Birimi'],
+  ['Theme', 'Tema'],
+  ['Security', 'Güvenlik'],
+  ['Notifications', 'Bildirimler'],
+  ['Profile', 'Profil'],
+  ['Preferences', 'Tercihler'],
+  ['Billing', 'Muhasebe'],
+  ['Integrations', 'Entegrasyonlar']
+];
+
+SETTINGS_TR_FRAGMENT_REPLACERS.push(
+  ['Queue', 'Kuyruk'],
+  ['Monitor', 'İzleme'],
+  ['Events', 'Olaylar'],
+  ['Contract', 'Sözleşme'],
+  ['Matrix', 'Matrisi'],
+  ['Replay', 'Yeniden Oynat'],
+  ['Requeue', 'Tekrar Kuyruğa Al'],
+  ['Resolve', 'Çöz'],
+  ['Ignore', 'Yoksay'],
+  ['Approve', 'Onayla'],
+  ['Retry', 'Tekrar Dene'],
+  ['Reject', 'Reddet'],
+  ['Rows', 'Satır'],
+  ['shown', 'gösteriliyor']
+);
+
+const settingsOriginalTextMap = new WeakMap<Text, string>();
+const settingsOriginalAttrMap = new WeakMap<Element, Record<string, string>>();
+
+function translateSettingsUiText(original: string, language: Language): string {
+  if (language !== 'tr') return original;
+
+  const exact = SETTINGS_TR_TEXT_MAP[original];
+  if (exact) return exact;
+
+  for (const { pattern, replace } of SETTINGS_TR_REGEX_REPLACERS) {
+    const match = pattern.exec(original);
+    if (match) return replace(match);
+  }
+
+  let next = original;
+  for (const [from, to] of SETTINGS_TR_FRAGMENT_REPLACERS) {
+    if (next.includes(from)) {
+      next = next.split(from).join(to);
+    }
+  }
+  return next;
+}
+
+function localizeSettingsDom(root: HTMLElement | null, language: Language) {
+  if (!root) return;
+
+  const textWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (['SCRIPT', 'STYLE'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('code') && !parent.classList.contains('notranslate')) return NodeFilter.FILTER_SKIP;
+      const raw = node.textContent ?? '';
+      if (!raw.trim()) return NodeFilter.FILTER_SKIP;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+
+  let textNode: Text | null;
+  while ((textNode = textWalker.nextNode() as Text | null)) {
+    if (!settingsOriginalTextMap.has(textNode)) {
+      settingsOriginalTextMap.set(textNode, textNode.textContent ?? '');
+    }
+    const original = settingsOriginalTextMap.get(textNode) ?? (textNode.textContent ?? '');
+    const trimmed = original.trim();
+    const translatedTrimmed = translateSettingsUiText(trimmed, language);
+    if (trimmed !== translatedTrimmed) {
+      const leading = original.match(/^\s*/)?.[0] ?? '';
+      const trailing = original.match(/\s*$/)?.[0] ?? '';
+      textNode.textContent = `${leading}${translatedTrimmed}${trailing}`;
+    } else {
+      textNode.textContent = original;
+    }
+  }
+
+  root.querySelectorAll('input[placeholder], textarea[placeholder]').forEach((el) => {
+    const key = 'placeholder';
+    if (!settingsOriginalAttrMap.has(el)) {
+      settingsOriginalAttrMap.set(el, {});
+    }
+    const attrBag = settingsOriginalAttrMap.get(el)!;
+    if (!(key in attrBag)) {
+      attrBag[key] = el.getAttribute('placeholder') || '';
+    }
+    const original = attrBag[key];
+    const localized = language === 'tr'
+      ? (SETTINGS_TR_PLACEHOLDER_MAP[original] ?? translateSettingsUiText(original, language))
+      : original;
+    if (localized !== original || language !== 'tr') {
+      el.setAttribute('placeholder', localized);
+    }
+  });
+}
 
 const Settings: React.FC = () => {
   const { t, language, setLanguage, currency, setCurrency } = useTranslation();
@@ -16,7 +362,7 @@ const Settings: React.FC = () => {
   const { updateUserProfile } = useData();
   const { theme, setTheme, resolvedTheme } = useTheme();
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'preferences' | 'notifications' | 'security' | 'firm' | 'billing' | 'organization' | 'integrations' | 'admin'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'preferences' | 'notifications' | 'security' | 'firm' | 'billing' | 'organization' | 'integrations' | 'appDirectory' | 'admin'>('profile');
   const [profileData, setProfileData] = useState({
     name: '',
     email: '',
@@ -92,12 +438,24 @@ const Settings: React.FC = () => {
   const [revokingSessionId, setRevokingSessionId] = useState<string | null>(null);
 
   // Integrations State
+  const createIntegrationDraft = () => ({
+    accountLabel: '',
+    accountEmail: '',
+    syncEnabled: true,
+    apiKey: '',
+    accessToken: '',
+    refreshToken: '',
+    authorizationCode: '',
+    realmId: '',
+    tenantId: ''
+  });
   const [integrations, setIntegrations] = useState<IntegrationItem[]>([]);
+  const [integrationCatalog, setIntegrationCatalog] = useState<IntegrationCatalogItem[]>([]);
   const [integrationsLoading, setIntegrationsLoading] = useState(false);
   const [integrationsSaving, setIntegrationsSaving] = useState(false);
   const [integrationModalOpen, setIntegrationModalOpen] = useState(false);
-  const [integrationDraft, setIntegrationDraft] = useState({ accountLabel: '', accountEmail: '', syncEnabled: true });
-  const [activeIntegration, setActiveIntegration] = useState<{ provider: string; category: string; description: string } | null>(null);
+  const [integrationDraft, setIntegrationDraft] = useState(createIntegrationDraft);
+  const [activeIntegration, setActiveIntegration] = useState<IntegrationCatalogItem | null>(null);
 
   const [emailAccounts, setEmailAccounts] = useState<any[]>([]);
   const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
@@ -145,6 +503,7 @@ const Settings: React.FC = () => {
     isDefault: false,
     isActive: true
   });
+  const settingsRootRef = useRef<HTMLDivElement | null>(null);
 
   const timeZoneOptions = [
     { value: 'America/New_York', label: 'Eastern (US & Canada)' },
@@ -156,36 +515,36 @@ const Settings: React.FC = () => {
     { value: 'Pacific/Honolulu', label: 'Hawaii' }
   ];
 
-  const integrationCatalog = [
-    {
-      provider: 'QuickBooks Online',
-      category: 'Accounting',
-      description: 'Sync invoices, payments, and chart of accounts.'
-    },
-    {
-      provider: 'Xero',
-      category: 'Accounting',
-      description: 'Connect billing data to Xero for reconciliation.'
-    },
-    {
-      provider: 'Stripe',
-      category: 'Payments',
-      description: 'Accept card payments and reconcile settlements.'
-    },
-    {
-      provider: 'Google Calendar',
-      category: 'Calendar',
-      description: 'Two-way sync for hearings and appointments.'
-    },
-    {
-      provider: 'Microsoft Outlook Calendar',
-      category: 'Calendar',
-      description: 'Sync firm calendars and deadline reminders.'
+  const resolveIntegrationKey = (providerKey?: string, provider?: string, category?: string) => {
+    if (providerKey?.trim()) {
+      return providerKey.trim().toLowerCase();
     }
-  ];
 
-  const findIntegration = (provider: string, category: string) =>
-    integrations.find(i => i.provider === provider && i.category === category);
+    return `${(provider || '').trim().toLowerCase()}::${(category || '').trim().toLowerCase()}`;
+  };
+
+  const inferConnectionMode = (providerKey?: string) => {
+    const normalized = (providerKey || '').trim().toLowerCase();
+    if (normalized === 'stripe' || normalized.startsWith('courtlistener-')) {
+      return 'api_key';
+    }
+
+    return 'oauth';
+  };
+
+  const supportsOAuthRedirectStart = (providerKey?: string) => {
+    const normalized = (providerKey || '').trim().toLowerCase();
+    return normalized === 'google-gmail'
+      || normalized === 'microsoft-outlook-mail'
+      || normalized === 'quickbooks-online'
+      || normalized === 'xero'
+      || normalized === 'microsoft-outlook-calendar';
+  };
+
+  const findIntegration = (provider: string, category: string, providerKey?: string) => {
+    const key = resolveIntegrationKey(providerKey, provider, category);
+    return integrations.find(i => resolveIntegrationKey(i.providerKey, i.provider, i.category) === key);
+  };
 
   useEffect(() => {
     if (user) {
@@ -204,6 +563,43 @@ const Settings: React.FC = () => {
       });
     }
   }, [user]);
+
+  useEffect(() => {
+    const root = settingsRootRef.current;
+    if (!root) return;
+
+    let raf = 0;
+    const run = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => localizeSettingsDom(root, language));
+    };
+
+    run();
+
+    const observer = new MutationObserver(() => run());
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['placeholder']
+    });
+
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [language, activeTab, entityModalOpen, officeModalOpen, integrationModalOpen, emailConnectOpen]);
+
+  useEffect(() => {
+    if (window.location.hash === '#settings-integrations') {
+      setActiveTab('integrations');
+      return;
+    }
+    if (window.location.hash === '#settings-app-directory') {
+      setActiveTab('appDirectory');
+    }
+  }, []);
 
   const refreshSecurity = async () => {
     setSecurityLoading(true);
@@ -296,8 +692,46 @@ const Settings: React.FC = () => {
   const loadIntegrations = async () => {
     setIntegrationsLoading(true);
     try {
-      const data = await api.settings.getIntegrations();
-      setIntegrations(Array.isArray(data) ? data : []);
+      const [itemsResult, catalogResult] = await Promise.allSettled([
+        api.settings.getIntegrations(),
+        api.settings.getIntegrationCatalog()
+      ]);
+
+      const loadedIntegrations = itemsResult.status === 'fulfilled' && Array.isArray(itemsResult.value)
+        ? itemsResult.value
+        : [];
+
+      if (itemsResult.status === 'fulfilled') {
+        setIntegrations(loadedIntegrations);
+      } else {
+        throw itemsResult.reason;
+      }
+
+      if (catalogResult.status === 'fulfilled' && Array.isArray(catalogResult.value)) {
+        if (catalogResult.value.length > 0) {
+          setIntegrationCatalog(catalogResult.value);
+        } else {
+          setIntegrationCatalog(
+            loadedIntegrations.map(item => ({
+              providerKey: item.providerKey || resolveIntegrationKey(undefined, item.provider, item.category),
+              provider: item.provider,
+              category: item.category,
+              description: item.notes || `${item.provider} integration`,
+              connectionMode: inferConnectionMode(item.providerKey)
+            }))
+          );
+        }
+      } else if (catalogResult.status === 'fulfilled') {
+        setIntegrationCatalog(
+          loadedIntegrations.map(item => ({
+            providerKey: item.providerKey || resolveIntegrationKey(undefined, item.provider, item.category),
+            provider: item.provider,
+            category: item.category,
+            description: item.notes || `${item.provider} integration`,
+            connectionMode: inferConnectionMode(item.providerKey)
+          }))
+        );
+      }
     } catch (error) {
       console.error('Failed to load integrations', error);
       toast.error('Failed to load integrations.');
@@ -334,43 +768,92 @@ const Settings: React.FC = () => {
     }
   };
 
-  const handleConnectIntegration = (integration: { provider: string; category: string; description: string }) => {
+  const handleConnectIntegration = (integration: IntegrationCatalogItem) => {
     setActiveIntegration(integration);
-    setIntegrationDraft({ accountLabel: '', accountEmail: '', syncEnabled: true });
+    setIntegrationDraft(createIntegrationDraft());
     setIntegrationModalOpen(true);
   };
 
   const handleSubmitIntegration = async () => {
     if (!activeIntegration) return;
-    if (!integrationDraft.accountLabel.trim() && !integrationDraft.accountEmail.trim()) {
-      toast.error('Add an account label or email.');
+
+    const providerKey = activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category);
+    const connectionMode = (activeIntegration.connectionMode || '').toLowerCase();
+    const hasApiKey = !!integrationDraft.apiKey.trim();
+    const hasOAuthCredential = !!integrationDraft.authorizationCode.trim() || !!integrationDraft.accessToken.trim();
+    const hasRedirectOAuth = supportsOAuthRedirectStart(providerKey);
+
+    if (connectionMode === 'api_key' && !hasApiKey) {
+      toast.error('API key is required for this provider.');
       return;
     }
-    const existing = findIntegration(activeIntegration.provider, activeIntegration.category);
-    const id = existing?.id || `int-${Date.now()}`;
-    const nextItem: IntegrationItem = {
-      id,
-      provider: activeIntegration.provider,
-      category: activeIntegration.category,
-      status: 'connected',
-      accountLabel: integrationDraft.accountLabel.trim() || undefined,
-      accountEmail: integrationDraft.accountEmail.trim() || undefined,
-      syncEnabled: integrationDraft.syncEnabled,
-      lastSyncAt: existing?.lastSyncAt || undefined
-    };
-    const nextItems = [
-      ...integrations.filter(i => !(i.provider === activeIntegration.provider && i.category === activeIntegration.category)),
-      nextItem
-    ];
-    await saveIntegrations(nextItems, integrations);
-    setIntegrationModalOpen(false);
-    setActiveIntegration(null);
+
+    if (connectionMode === 'oauth' && hasRedirectOAuth) {
+      toast.error('Use Start OAuth to connect this provider.');
+      return;
+    }
+
+    if (connectionMode === 'oauth' && !hasOAuthCredential) {
+      toast.error('Authorization code or access token is required for this provider.');
+      return;
+    }
+
+    try {
+      setIntegrationsSaving(true);
+      const connected = await api.settings.connectIntegration(providerKey, {
+        accountLabel: integrationDraft.accountLabel.trim() || undefined,
+        accountEmail: integrationDraft.accountEmail.trim() || undefined,
+        syncEnabled: integrationDraft.syncEnabled,
+        apiKey: integrationDraft.apiKey.trim() || undefined,
+        accessToken: integrationDraft.accessToken.trim() || undefined,
+        refreshToken: integrationDraft.refreshToken.trim() || undefined,
+        authorizationCode: integrationDraft.authorizationCode.trim() || undefined,
+        realmId: integrationDraft.realmId.trim() || undefined,
+        tenantId: integrationDraft.tenantId.trim() || undefined
+      });
+
+      if (connected) {
+        const integrationKey = resolveIntegrationKey(connected.providerKey, connected.provider, connected.category);
+        setIntegrations(prev => [
+          ...prev.filter(i => resolveIntegrationKey(i.providerKey, i.provider, i.category) !== integrationKey),
+          connected
+        ]);
+      } else {
+        await loadIntegrations();
+      }
+
+      toast.success(`${activeIntegration.provider} connected.`);
+      closeIntegrationModal();
+    } catch (error: any) {
+      const message = error?.message || 'Failed to connect integration.';
+      console.error('Failed to connect integration', error);
+      toast.error(message);
+    } finally {
+      setIntegrationsSaving(false);
+    }
+  };
+
+  const handleStartIntegrationOAuth = () => {
+    if (!activeIntegration) return;
+
+    const providerKey = activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category);
+    if (!isIntegrationOAuthProviderKey(providerKey)) {
+      toast.error('OAuth flow is not available for this provider.');
+      return;
+    }
+
+    try {
+      startIntegrationOAuth(providerKey, '/#settings-integrations');
+    } catch (error: any) {
+      console.error('Failed to start OAuth flow', error);
+      toast.error(error?.message || 'Failed to start OAuth flow.');
+    }
   };
 
   const closeIntegrationModal = () => {
     setIntegrationModalOpen(false);
     setActiveIntegration(null);
-    setIntegrationDraft({ accountLabel: '', accountEmail: '', syncEnabled: true });
+    setIntegrationDraft(createIntegrationDraft());
   };
 
   const closeEmailModal = () => {
@@ -379,15 +862,33 @@ const Settings: React.FC = () => {
   };
 
   const handleDisconnectIntegration = async (integration: IntegrationItem) => {
-    const nextItems = integrations.filter(item => item.id !== integration.id);
-    await saveIntegrations(nextItems, integrations);
+    const providerKey = integration.providerKey || resolveIntegrationKey(undefined, integration.provider, integration.category);
+    try {
+      setIntegrationsSaving(true);
+      await api.settings.disconnectIntegration(providerKey);
+      setIntegrations(prev => prev.filter(item => item.id !== integration.id));
+      toast.success(`${integration.provider} disconnected.`);
+    } catch (error: any) {
+      console.error('Failed to disconnect integration', error);
+      toast.error(error?.message || 'Failed to disconnect integration.');
+    } finally {
+      setIntegrationsSaving(false);
+    }
   };
 
   const handleSyncIntegration = async (integration: IntegrationItem) => {
-    const nextItems = integrations.map(item => item.id === integration.id
-      ? { ...item, lastSyncAt: new Date().toISOString(), status: 'connected' }
-      : item);
-    await saveIntegrations(nextItems, integrations);
+    const providerKey = integration.providerKey || resolveIntegrationKey(undefined, integration.provider, integration.category);
+    try {
+      setIntegrationsSaving(true);
+      await api.settings.syncIntegration(providerKey);
+      await loadIntegrations();
+      toast.success(`${integration.provider} sync completed.`);
+    } catch (error: any) {
+      console.error('Failed to sync integration', error);
+      toast.error(error?.message || 'Failed to sync integration.');
+    } finally {
+      setIntegrationsSaving(false);
+    }
   };
 
   const handleToggleIntegrationSync = async (integration: IntegrationItem) => {
@@ -867,9 +1368,9 @@ const Settings: React.FC = () => {
   const handleCopy = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      toast.success('Copied to clipboard.');
+      toast.success(language === 'tr' ? 'Panoya kopyalandı.' : 'Copied to clipboard.');
     } catch {
-      toast.error('Copy failed.');
+      toast.error(language === 'tr' ? 'Kopyalama başarısız oldu.' : 'Copy failed.');
     }
   };
 
@@ -883,9 +1384,11 @@ const Settings: React.FC = () => {
     setSaving(true);
     try {
       await updateUserProfile(profileData);
-      toast.success('Profile updated successfully');
-    } catch (error) {
-      toast.error('Failed to update profile');
+      toast.success(language === 'tr' ? 'Profil başarıyla güncellendi' : 'Profile updated successfully');
+    } catch (error: any) {
+      const baseMessage = typeof error?.message === 'string' ? error.message : '';
+      const msg = baseMessage ? `: ${baseMessage}` : '';
+      toast.error(language === 'tr' ? `Profil güncellenemedi${msg}` : `Failed to update profile${msg}`);
     } finally {
       setSaving(false);
     }
@@ -901,8 +1404,8 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-gray-50/50">
-      <div className="px-8 py-6 border-b border-gray-200 bg-white">
+    <div ref={settingsRootRef} className="h-full flex flex-col bg-gray-50/50">
+      <div className="px-6 py-4 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-3 mb-2">
           <SettingsIcon className="w-6 h-6 text-slate-800" />
           <h1 className="text-2xl font-bold text-slate-800">Settings</h1>
@@ -1000,6 +1503,16 @@ const Settings: React.FC = () => {
                 >
                   <Link className="w-5 h-5" />
                   Integrations
+                </button>
+                <button
+                  onClick={() => setActiveTab('appDirectory')}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'appDirectory'
+                    ? 'bg-slate-100 text-slate-900'
+                    : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                >
+                  <CheckCircle className="w-5 h-5" />
+                  App Directory
                 </button>
                 <button
                   onClick={() => setActiveTab('admin')}
@@ -1778,8 +2291,8 @@ const Settings: React.FC = () => {
               </div>
 
               {entityModalOpen && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6">
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-start sm:items-center justify-center overflow-y-auto p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 my-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
                     <div className="flex items-start justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">{editingEntity ? 'Edit Entity' : 'Add Entity'}</h3>
@@ -1926,8 +2439,8 @@ const Settings: React.FC = () => {
               )}
 
               {officeModalOpen && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6">
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-start sm:items-center justify-center overflow-y-auto p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 my-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
                     <div className="flex items-start justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">{editingOffice ? 'Edit Office' : 'Add Office'}</h3>
@@ -2268,7 +2781,7 @@ const Settings: React.FC = () => {
             <div className="space-y-6">
               <div>
                 <h2 className="text-xl font-bold text-slate-800 mb-1">Integrations</h2>
-                <p className="text-sm text-gray-500">Connect accounting, calendar, and email platforms. API keys can be added later.</p>
+                <p className="text-sm text-gray-500">Connect accounting, calendar, docket, and e-filing platforms with verified credentials.</p>
               </div>
 
               <div className="bg-white border border-gray-200 rounded-xl p-6">
@@ -2281,15 +2794,20 @@ const Settings: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   {integrationCatalog.filter(item => item.category === 'Accounting' || item.category === 'Payments').map(item => {
-                    const integration = findIntegration(item.provider, item.category);
+                    const integration = findIntegration(item.provider, item.category, item.providerKey);
                     const badge = getIntegrationBadge(integration?.status);
                     const isConnected = integration?.status === 'connected';
                     return (
-                      <div key={`${item.category}-${item.provider}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50/60">
+                      <div key={`${item.category}-${item.providerKey || item.provider}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50/60">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-sm font-semibold text-slate-800">{item.provider}</p>
                             <p className="text-xs text-gray-500 mt-1">{item.description}</p>
+                            {item.webhookFirst && (
+                              <p className="text-[11px] text-emerald-700 mt-1">
+                                Webhook-first, polling fallback {item.fallbackPollingMinutes || 360}m
+                              </p>
+                            )}
                           </div>
                           <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${badge.className}`}>{badge.label}</span>
                         </div>
@@ -2297,6 +2815,9 @@ const Settings: React.FC = () => {
                           <div className="mt-3 text-xs text-gray-500 space-y-1">
                             <div>Account: {integration.accountLabel || integration.accountEmail || 'Configured'}</div>
                             <div>Last sync: {integration.lastSyncAt ? new Date(integration.lastSyncAt).toLocaleString('en-US') : 'Not synced yet'}</div>
+                            {integration.lastWebhookAt && (
+                              <div>Last webhook: {new Date(integration.lastWebhookAt).toLocaleString('en-US')}</div>
+                            )}
                           </div>
                         )}
                         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -2351,15 +2872,20 @@ const Settings: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   {integrationCatalog.filter(item => item.category === 'Calendar').map(item => {
-                    const integration = findIntegration(item.provider, item.category);
+                    const integration = findIntegration(item.provider, item.category, item.providerKey);
                     const badge = getIntegrationBadge(integration?.status);
                     const isConnected = integration?.status === 'connected';
                     return (
-                      <div key={`${item.category}-${item.provider}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50/60">
+                      <div key={`${item.category}-${item.providerKey || item.provider}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50/60">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-sm font-semibold text-slate-800">{item.provider}</p>
                             <p className="text-xs text-gray-500 mt-1">{item.description}</p>
+                            {item.webhookFirst && (
+                              <p className="text-[11px] text-emerald-700 mt-1">
+                                Webhook-first, polling fallback {item.fallbackPollingMinutes || 360}m
+                              </p>
+                            )}
                           </div>
                           <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${badge.className}`}>{badge.label}</span>
                         </div>
@@ -2367,6 +2893,9 @@ const Settings: React.FC = () => {
                           <div className="mt-3 text-xs text-gray-500 space-y-1">
                             <div>Calendar: {integration.accountLabel || integration.accountEmail || 'Primary calendar'}</div>
                             <div>Last sync: {integration.lastSyncAt ? new Date(integration.lastSyncAt).toLocaleString('en-US') : 'Not synced yet'}</div>
+                            {integration.lastWebhookAt && (
+                              <div>Last webhook: {new Date(integration.lastWebhookAt).toLocaleString('en-US')}</div>
+                            )}
                           </div>
                         )}
                         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -2408,6 +2937,86 @@ const Settings: React.FC = () => {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-xl p-6">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="font-semibold text-slate-800">Email, Court Docket & E-Filing</h3>
+                    <p className="text-xs text-gray-500">Connect matter-linked mailboxes, U.S. dockets, and filing status feeds.</p>
+                  </div>
+                  {integrationsLoading && <span className="text-xs text-gray-500">Loading...</span>}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  {integrationCatalog
+                    .filter(item => item.category === 'Email' || item.category === 'Court Docket' || item.category === 'E-Filing')
+                    .map(item => {
+                      const integration = findIntegration(item.provider, item.category, item.providerKey);
+                      const badge = getIntegrationBadge(integration?.status);
+                      const isConnected = integration?.status === 'connected';
+                      return (
+                        <div key={`${item.category}-${item.providerKey || item.provider}`} className="border border-gray-200 rounded-lg p-4 bg-gray-50/60">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">{item.provider}</p>
+                              <p className="text-xs text-gray-500 mt-1">{item.description}</p>
+                              {item.webhookFirst && (
+                                <p className="text-[11px] text-emerald-700 mt-1">
+                                  Webhook-first, polling fallback {item.fallbackPollingMinutes || 360}m
+                                </p>
+                              )}
+                            </div>
+                            <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${badge.className}`}>{badge.label}</span>
+                          </div>
+                          {integration && (
+                            <div className="mt-3 text-xs text-gray-500 space-y-1">
+                              <div>Account: {integration.accountLabel || integration.accountEmail || 'Configured'}</div>
+                              <div>Last sync: {integration.lastSyncAt ? new Date(integration.lastSyncAt).toLocaleString('en-US') : 'Not synced yet'}</div>
+                              {integration.lastWebhookAt && (
+                                <div>Last webhook: {new Date(integration.lastWebhookAt).toLocaleString('en-US')}</div>
+                              )}
+                            </div>
+                          )}
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {isConnected ? (
+                              <>
+                                <button
+                                  onClick={() => integration && handleSyncIntegration(integration)}
+                                  disabled={integrationsSaving}
+                                  className="px-3 py-1 text-xs font-semibold text-slate-700 border border-gray-300 rounded hover:bg-white disabled:opacity-50"
+                                >
+                                  Sync Now
+                                </button>
+                                <button
+                                  onClick={() => integration && handleDisconnectIntegration(integration)}
+                                  disabled={integrationsSaving}
+                                  className="px-3 py-1 text-xs font-semibold text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                                >
+                                  Disconnect
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => handleConnectIntegration(item)}
+                                className="px-3 py-1 text-xs font-semibold text-white bg-slate-800 rounded hover:bg-slate-900"
+                              >
+                                Connect
+                              </button>
+                            )}
+                            {integration && (
+                              <button
+                                onClick={() => integration && handleToggleIntegrationSync(integration)}
+                                disabled={integrationsSaving}
+                                className={`px-3 py-1 text-xs font-semibold border rounded ${integration.syncEnabled ? 'border-emerald-200 text-emerald-700 bg-emerald-50' : 'border-gray-200 text-gray-600 bg-white'} disabled:opacity-50`}
+                              >
+                                Auto-sync {integration.syncEnabled ? 'On' : 'Off'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
 
@@ -2470,9 +3079,40 @@ const Settings: React.FC = () => {
                 )}
               </div>
 
+              <IntegrationOpsPanel
+                refreshKey={integrations
+                  .map(i => `${i.id}:${i.status}:${i.syncEnabled ? '1' : '0'}:${i.lastSyncAt || ''}`)
+                  .join('|')}
+              />
+
+              <JurisdictionRulesOpsPanel
+                refreshKey={integrations
+                  .map(i => `${i.id}:${i.status}:${i.syncEnabled ? '1' : '0'}:${i.lastSyncAt || ''}:${i.lastWebhookAt || ''}`)
+                  .join('|')}
+              />
+
+              <LegalBillingOpsPanel
+                refreshKey={integrations
+                  .map(i => `${i.id}:${i.status}:${i.syncEnabled ? '1' : '0'}:${i.lastSyncAt || ''}:${i.lastWebhookAt || ''}`)
+                  .join('|')}
+              />
+
+              <TrustRiskRadarPanel
+                refreshKey={integrations
+                  .map(i => `${i.id}:${i.status}:${i.syncEnabled ? '1' : '0'}:${i.lastSyncAt || ''}:${i.lastWebhookAt || ''}`)
+                  .join('|')}
+              />
+
+              <EfilingWorkflowPanel
+                integrations={integrations}
+                refreshKey={integrations
+                  .map(i => `${i.id}:${i.status}:${i.syncEnabled ? '1' : '0'}:${i.lastSyncAt || ''}:${i.lastWebhookAt || ''}`)
+                  .join('|')}
+              />
+
               {integrationModalOpen && activeIntegration && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-start sm:items-center justify-center overflow-y-auto p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 my-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
                     <div className="flex items-start justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">Connect {activeIntegration.provider}</h3>
@@ -2502,6 +3142,65 @@ const Settings: React.FC = () => {
                           onChange={(e) => setIntegrationDraft(prev => ({ ...prev, accountEmail: e.target.value }))}
                         />
                       </div>
+                      {(activeIntegration.connectionMode || '').toLowerCase() === 'api_key' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">API Key</label>
+                          <input
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
+                            placeholder="Paste provider API key"
+                            value={integrationDraft.apiKey}
+                            onChange={(e) => setIntegrationDraft(prev => ({ ...prev, apiKey: e.target.value }))}
+                          />
+                        </div>
+                      )}
+                      {(activeIntegration.connectionMode || '').toLowerCase() === 'oauth' && (
+                        supportsOAuthRedirectStart(activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category))
+                      ) && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold text-slate-700">OAuth Connection</p>
+                          <p className="text-[11px] text-gray-500 mt-1">
+                            Use secure redirect flow. Authorization code entry is automatic after callback.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleStartIntegrationOAuth}
+                            className="mt-3 px-3 py-1.5 text-xs font-semibold text-white bg-slate-800 rounded hover:bg-slate-900"
+                          >
+                            Start OAuth
+                          </button>
+                        </div>
+                      )}
+                      {(activeIntegration.connectionMode || '').toLowerCase() === 'oauth' && !supportsOAuthRedirectStart(activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category)) && (
+                        <>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-500 mb-1">Authorization Code (optional)</label>
+                            <input
+                              className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
+                              placeholder="Paste OAuth authorization code"
+                              value={integrationDraft.authorizationCode}
+                              onChange={(e) => setIntegrationDraft(prev => ({ ...prev, authorizationCode: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-500 mb-1">Access Token (optional)</label>
+                            <input
+                              className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
+                              placeholder="Paste OAuth access token"
+                              value={integrationDraft.accessToken}
+                              onChange={(e) => setIntegrationDraft(prev => ({ ...prev, accessToken: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-500 mb-1">Refresh Token (optional)</label>
+                            <input
+                              className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
+                              placeholder="Paste OAuth refresh token"
+                              value={integrationDraft.refreshToken}
+                              onChange={(e) => setIntegrationDraft(prev => ({ ...prev, refreshToken: e.target.value }))}
+                            />
+                          </div>
+                        </>
+                      )}
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-xs font-semibold text-gray-600">Auto-sync</p>
@@ -2523,11 +3222,17 @@ const Settings: React.FC = () => {
                         Cancel
                       </button>
                       <button
-                        onClick={handleSubmitIntegration}
+                        onClick={(activeIntegration.connectionMode || '').toLowerCase() === 'oauth' && supportsOAuthRedirectStart(activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category))
+                          ? handleStartIntegrationOAuth
+                          : handleSubmitIntegration}
                         disabled={integrationsSaving}
                         className="px-4 py-2 text-sm font-semibold text-white bg-slate-800 rounded-lg hover:bg-slate-900 disabled:opacity-50"
                       >
-                        {integrationsSaving ? 'Saving...' : 'Connect'}
+                        {integrationsSaving
+                          ? 'Saving...'
+                          : (activeIntegration.connectionMode || '').toLowerCase() === 'oauth' && supportsOAuthRedirectStart(activeIntegration.providerKey || resolveIntegrationKey(undefined, activeIntegration.provider, activeIntegration.category))
+                            ? 'Start OAuth'
+                            : 'Connect'}
                       </button>
                     </div>
                   </div>
@@ -2535,8 +3240,8 @@ const Settings: React.FC = () => {
               )}
 
               {emailConnectOpen && (
-                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                <div className="fixed inset-0 z-50 bg-black/40 flex items-start sm:items-center justify-center overflow-y-auto p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 my-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
                     <div className="flex items-start justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">Connect {emailConnectProvider}</h3>
@@ -2586,6 +3291,10 @@ const Settings: React.FC = () => {
                 </div>
               )}
             </div>
+          )}
+
+          {activeTab === 'appDirectory' && (
+            <AppDirectoryPanel isAdmin={user?.role === 'Admin'} />
           )}
 
           {/* Admin Panel */}

@@ -34,6 +34,13 @@ const GlobalTimer: React.FC = () => {
     return () => clearInterval(intervalRef.current);
   }, [isRunning]);
 
+  useEffect(() => {
+    if (matters.length > 0 && selectedMatterId && !matters.some(matter => matter.id === selectedMatterId)) {
+      setSelectedMatterId('');
+      toast.warning('Selected matter is no longer available. Please reselect.');
+    }
+  }, [matters, selectedMatterId]);
+
   // Mini State (Collapsed) vs Open State
   if (!isOpen) {
     return (
@@ -95,26 +102,25 @@ const GlobalTimer: React.FC = () => {
                   <button 
                     onClick={async () => { 
                       if (seconds > 0) {
-                        try {
-                          await addTimeEntry({
-                            id: `t${Date.now()}`,
-                            matterId: selectedMatterId || undefined,
-                            description: description || 'General Legal Services',
-                            duration: Math.ceil(seconds / 60),
-                            rate: 450,
-                            date: new Date().toISOString(),
-                            billed: false,
-                            type: 'time',
-                            activityCode: ActivityCode.A103,
-                            isBillable: true
-                          });
+                        const saved = await addTimeEntry({
+                          id: `t${Date.now()}`,
+                          matterId: selectedMatterId || undefined,
+                          description: description || 'General Legal Services',
+                          duration: Math.ceil(seconds / 60),
+                          rate: 450,
+                          date: new Date().toISOString(),
+                          billed: false,
+                          type: 'time',
+                          activityCode: ActivityCode.A103,
+                          isBillable: true
+                        });
+                        if (saved) {
                           setIsRunning(false);
                           setSeconds(0);
                           setDescription('');
                           setSelectedMatterId('');
                           setIsOpen(false);
-                        } catch (error) {
-                          console.error('Error logging time:', error);
+                        } else {
                           toast.error('Failed to log time entry');
                         }
                       } else {

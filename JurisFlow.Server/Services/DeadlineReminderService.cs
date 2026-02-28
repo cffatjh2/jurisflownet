@@ -16,12 +16,23 @@ namespace JurisFlow.Server.Services
             _logger = logger;
         }
 
-        public async Task<DeadlineReminderResult> ProcessAsync(DateTime? nowUtc = null)
+        public Task<DeadlineReminderResult> ProcessAsync(DateTime? nowUtc = null)
+        {
+            return ProcessAsync(null, nowUtc);
+        }
+
+        public async Task<DeadlineReminderResult> ProcessAsync(string? tenantId, DateTime? nowUtc = null)
         {
             var utcNow = nowUtc ?? DateTime.UtcNow;
             var today = utcNow.Date;
 
-            var pendingDeadlines = await _context.Deadlines
+            var deadlineQuery = _context.Deadlines.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                deadlineQuery = deadlineQuery.Where(d => EF.Property<string>(d, "TenantId") == tenantId);
+            }
+
+            var pendingDeadlines = await deadlineQuery
                 .Where(d => d.Status == "Pending")
                 .ToListAsync();
 
@@ -39,9 +50,15 @@ namespace JurisFlow.Server.Services
             var matterMap = new Dictionary<string, Matter>();
             if (matterIds.Count > 0)
             {
-                matterMap = await _context.Matters
-                    .Where(m => matterIds.Contains(m.Id))
-                    .ToDictionaryAsync(m => m.Id);
+                var matterQuery = _context.Matters
+                    .Where(m => matterIds.Contains(m.Id));
+
+                if (!string.IsNullOrWhiteSpace(tenantId))
+                {
+                    matterQuery = matterQuery.Where(m => EF.Property<string>(m, "TenantId") == tenantId);
+                }
+
+                matterMap = await matterQuery.ToDictionaryAsync(m => m.Id);
             }
 
             var notifications = new List<Notification>();

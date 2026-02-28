@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
 import ClientLogin from './ClientLogin';
 import ClientDashboard from './ClientDashboard';
@@ -12,7 +12,9 @@ import ClientCalendar from './ClientCalendar';
 import ClientAppointments from './ClientAppointments';
 import ClientPayments from './ClientPayments';
 import ClientSignatures from './ClientSignatures';
+import ClientNotificationsPanel from './ClientNotificationsPanel';
 import { Briefcase, CreditCard, Folder, Mail, User, Bell, Scale, X, Calendar as CalendarIcon, Video, Clock, Edit3, DollarSign } from '../Icons';
+import { clientApi } from '../../services/clientApi';
 
 type ClientTab = 'dashboard' | 'matters' | 'invoices' | 'payments' | 'documents' | 'messages' | 'calendar' | 'appointments' | 'signatures' | 'profile' | 'videocall';
 
@@ -20,6 +22,21 @@ const ClientPortal: React.FC = () => {
   const { isAuthenticated, client, logout, loading } = useClientAuth();
   const [activeTab, setActiveTab] = useState<ClientTab>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const loadNotifications = async () => {
+      try {
+        const data = await clientApi.fetchJson('/notifications');
+        const count = Array.isArray(data) ? data.filter((n: any) => !n.read).length : 0;
+        setUnreadNotifications(count);
+      } catch (error) {
+        console.error('Failed to load client notifications', error);
+      }
+    };
+    loadNotifications();
+  }, [isAuthenticated]);
 
   if (loading) {
     return (
@@ -129,7 +146,7 @@ const ClientPortal: React.FC = () => {
 
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50 relative">
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 z-10 sticky top-0">
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-10 sticky top-0">
           <div>
             <h1 className="text-lg font-bold text-slate-900">{getPageTitle()}</h1>
           </div>
@@ -140,7 +157,9 @@ const ClientPortal: React.FC = () => {
               className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+              {unreadNotifications > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+              )}
             </button>
           </div>
         </header>
@@ -159,6 +178,12 @@ const ClientPortal: React.FC = () => {
           {activeTab === 'profile' && <ClientProfile />}
         </div>
       </main>
+
+      <ClientNotificationsPanel
+        open={showNotifications}
+        onClose={() => setShowNotifications(false)}
+        onUnreadChange={setUnreadNotifications}
+      />
     </div>
   );
 };

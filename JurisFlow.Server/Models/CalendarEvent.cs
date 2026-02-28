@@ -31,6 +31,11 @@ namespace JurisFlow.Server.Models
         public int ReminderMinutes { get; set; } = 30;
         public bool ReminderSent { get; set; } = false;
 
+        [Required]
+        [MaxLength(32)]
+        [ConcurrencyCheck]
+        public string RowVersion { get; set; } = Guid.NewGuid().ToString("N");
+
         // Matter association
         public string? MatterId { get; set; }
 

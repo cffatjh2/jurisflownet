@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, Plus, X, Check } from '../Icons';
 import { AppointmentRequest } from '../../types';
+import { clientApi } from '../../services/clientApi';
 
 interface ClientAppointmentsProps {
     clientId: string;
@@ -24,14 +25,8 @@ const ClientAppointments: React.FC<ClientAppointmentsProps> = ({ clientId }) => 
 
     const fetchAppointments = async () => {
         try {
-            const token = localStorage.getItem('client_token');
-            const res = await fetch('/api/client/appointments', {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setAppointments(data);
-            }
+            const data = await clientApi.fetchJson('/appointments');
+            setAppointments(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching appointments:', error);
         } finally {
@@ -41,29 +36,22 @@ const ClientAppointments: React.FC<ClientAppointmentsProps> = ({ clientId }) => 
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        const token = localStorage.getItem('client_token');
         const dateTime = new Date(`${formData.requestedDate}T${formData.requestedTime}`);
 
         try {
-            const res = await fetch('/api/client/appointments', {
+            await clientApi.fetchJson('/appointments', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
                 body: JSON.stringify({
                     requestedDate: dateTime.toISOString(),
                     duration: formData.duration,
                     type: formData.type,
                     notes: formData.notes,
-                }),
+                })
             });
 
-            if (res.ok) {
-                setShowForm(false);
-                setFormData({ requestedDate: '', requestedTime: '10:00', duration: 30, type: 'consultation', notes: '' });
-                fetchAppointments();
-            }
+            setShowForm(false);
+            setFormData({ requestedDate: '', requestedTime: '10:00', duration: 30, type: 'consultation', notes: '' });
+            fetchAppointments();
         } catch (error) {
             console.error('Error creating appointment:', error);
         }

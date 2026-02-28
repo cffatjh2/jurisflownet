@@ -8,7 +8,7 @@ namespace JurisFlow.Server.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class OpposingPartiesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;

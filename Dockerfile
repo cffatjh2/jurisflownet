@@ -1,38 +1,27 @@
-# Use Node.js 20 official image
-FROM node:20-alpine
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
 
-# Set working directory
+COPY JurisFlow.Server/JurisFlow.Server.csproj JurisFlow.Server/
+RUN dotnet restore JurisFlow.Server/JurisFlow.Server.csproj
+
+COPY JurisFlow.Server/ JurisFlow.Server/
+RUN dotnet publish JurisFlow.Server/JurisFlow.Server.csproj -c Release -o /app/publish /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 
-# Install dependencies for Prisma
-RUN apk add --no-cache openssl libc6-compat
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY package*.json ./
-COPY prisma ./prisma/
+ENV ASPNETCORE_URLS=http://0.0.0.0:8080
+ENV ASPNETCORE_ENVIRONMENT=Production
 
-# Install dependencies
-RUN npm ci
+COPY --from=build /app/publish .
 
-# Generate Prisma client
-RUN npx prisma generate
+EXPOSE 8080
 
-# Copy the rest of the application
-COPY . .
-
-# Build the frontend
-RUN npm run build
-
-# Set environment variables
-ENV NODE_ENV=production
-ENV HOST=0.0.0.0
-
-# Expose port (Railway will set PORT env var)
-EXPOSE 3001
-
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3001}/api/health || exit 1
+  CMD sh -c "curl --fail http://localhost:${PORT:-8080}/health || exit 1"
 
-# Start the server
-CMD ["npm", "run", "start"]
+ENTRYPOINT ["dotnet", "JurisFlow.Server.dll"]

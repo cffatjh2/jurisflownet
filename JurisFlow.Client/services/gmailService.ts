@@ -5,8 +5,8 @@
 // 3. Create OAuth2 credentials
 // 4. Add redirect URI: http://localhost:3000/auth/google/callback
 
-import { toast } from '../components/Toast';
 import { getGoogleClientId } from './googleConfig';
+import { buildOAuthAuthHeaders, requestOAuthState, type OAuthTarget } from './oauthSecurity';
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1';
 
 export interface GmailMessage {
@@ -20,28 +20,44 @@ export interface GmailMessage {
   };
 }
 
+interface GmailAuthUrlOptions {
+  target?: Extract<OAuthTarget, 'gmail' | 'google-docs'>;
+  returnPath?: string;
+}
+
+const normalizeReturnPath = (value: string | undefined, fallback: string): string => {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return fallback;
+  return trimmed;
+};
+
 export const gmailService = {
   // Get OAuth2 authorization URL
-  getAuthUrl: (): string => {
+  getAuthUrl: async (options: GmailAuthUrlOptions = {}): Promise<string> => {
     const clientId = getGoogleClientId();
 
     if (!clientId) {
       return '';
     }
 
+    const target = options.target ?? 'gmail';
+    const fallbackPath = target === 'google-docs' ? '/#documents' : '/#communications';
+    const returnPath = normalizeReturnPath(options.returnPath, fallbackPath);
     const redirectUri = `${window.location.origin}/auth/google/callback`;
     const scope = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
     const responseType = 'code';
+    const state = await requestOAuthState('google', target, returnPath);
 
-    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent`;
+    return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
   },
 
   // Exchange authorization code for tokens (server-side)
-  exchangeCodeForTokens: async (code: string): Promise<{ accessToken: string; refreshToken: string }> => {
+  exchangeCodeForTokens: async (code: string, state: string): Promise<{ accessToken: string; refreshToken: string }> => {
     const response = await fetch('/api/google/oauth', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code })
+      headers: buildOAuthAuthHeaders(true),
+      body: JSON.stringify({ code, state })
     });
     return response.json();
   },

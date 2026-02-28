@@ -36,6 +36,8 @@ namespace JurisFlow.Server.Models
         public double BillableRate { get; set; }
         public double TrustBalance { get; set; } = 0;
 
+        public string? CurrentOutcomeFeePlanId { get; set; }
+
         public string? EntityId { get; set; }
 
         [ForeignKey("EntityId")]
@@ -54,7 +56,7 @@ namespace JurisFlow.Server.Models
 
         [ForeignKey("ClientId")]
         [JsonIgnore] // Prevent cycles
-        public Client Client { get; set; }
+        public Client? Client { get; set; }
 
         // Navigation Properties
         // public ICollection<Task> Tasks { get; set; }

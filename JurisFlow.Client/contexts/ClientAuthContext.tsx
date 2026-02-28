@@ -14,7 +14,7 @@ export interface Client {
 interface ClientAuthContextType {
   client: Client | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string, tenantSlug?: string) => Promise<boolean>;
   logout: () => void;
   loading: boolean;
 }
@@ -26,11 +26,19 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string, tenantSlug?: string): Promise<boolean> => {
     try {
+      const normalizedTenant = tenantSlug?.trim().toLowerCase();
+      if (typeof window !== 'undefined' && normalizedTenant) {
+        localStorage.setItem('tenant_slug', normalizedTenant);
+      }
+      const tenantHeader = normalizedTenant || (typeof window !== 'undefined' ? localStorage.getItem('tenant_slug') : null);
       const res = await fetch('/api/client/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(tenantHeader ? { 'X-Tenant-Slug': tenantHeader } : {})
+        },
         body: JSON.stringify({ email, password })
       });
       if (!res.ok) return false;
@@ -39,6 +47,12 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
       if (typeof window !== 'undefined') {
         localStorage.setItem('client_token', data.token);
         localStorage.setItem('client_user', JSON.stringify(data.client));
+        if (data.refreshToken) {
+          localStorage.setItem('client_refresh_token', data.refreshToken);
+        }
+        if (data.refreshTokenExpiresAt) {
+          localStorage.setItem('client_refresh_expires_at', data.refreshTokenExpiresAt);
+        }
         if (data.session?.id && data.session?.expiresAt) {
           localStorage.setItem('client_session_id', data.session.id);
           localStorage.setItem('client_session_expires_at', data.session.expiresAt);
@@ -59,6 +73,8 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
       localStorage.removeItem('client_user');
       localStorage.removeItem('client_session_id');
       localStorage.removeItem('client_session_expires_at');
+      localStorage.removeItem('client_refresh_token');
+      localStorage.removeItem('client_refresh_expires_at');
       setSessionExpiresAt(null);
     }
   };
@@ -94,6 +110,15 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
     const timer = window.setTimeout(() => logout(), delay);
     return () => window.clearTimeout(timer);
   }, [sessionExpiresAt]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUnauthorized = () => {
+      logout();
+    };
+    window.addEventListener('client:unauthorized', handleUnauthorized as EventListener);
+    return () => window.removeEventListener('client:unauthorized', handleUnauthorized as EventListener);
+  }, []);
 
   return (
     <ClientAuthContext.Provider value={{ client, isAuthenticated: !!client, login, logout, loading }}>

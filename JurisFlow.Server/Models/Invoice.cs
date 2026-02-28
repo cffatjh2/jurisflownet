@@ -27,12 +27,12 @@ namespace JurisFlow.Server.Models
         public DateTime IssueDate { get; set; } = DateTime.UtcNow;
         public DateTime? DueDate { get; set; }
 
-        public double Subtotal { get; set; }
-        public double Tax { get; set; }
-        public double Discount { get; set; }
-        public double Total { get; set; }
-        public double AmountPaid { get; set; }
-        public double Balance { get; set; }
+        public decimal Subtotal { get; set; }
+        public decimal Tax { get; set; }
+        public decimal Discount { get; set; }
+        public decimal Total { get; set; }
+        public decimal AmountPaid { get; set; }
+        public decimal Balance { get; set; }
 
         [MaxLength(500)]
         public string? Notes { get; set; }

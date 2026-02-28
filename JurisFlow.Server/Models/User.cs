@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace JurisFlow.Server.Models
 {
@@ -13,12 +14,18 @@ namespace JurisFlow.Server.Models
         public string Email { get; set; }
 
         [Required]
+        [MaxLength(320)]
+        [JsonIgnore]
+        public string NormalizedEmail { get; set; } = string.Empty;
+
+        [Required]
         public string Name { get; set; }
 
         [Required]
         public string Role { get; set; } // Admin | Partner | Associate | Employee
 
         [Required]
+        [JsonIgnore]
         public string PasswordHash { get; set; }
 
         public string? Phone { get; set; }

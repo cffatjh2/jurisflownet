@@ -1,78 +1,92 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { toast } from './Toast';
+import { buildOAuthAuthHeaders, setOAuthTokens, type OAuthTarget } from '../services/oauthSecurity';
 
-// This component handles the OAuth callback from Google
-// It should be rendered at the route /auth/google/callback
+const TARGET_RETURN_PATH: Record<OAuthTarget, string> = {
+  'gmail': '/#communications',
+  'google-docs': '/#documents',
+  'google-meet': '/#videocall',
+  'zoom': '/#videocall',
+  'microsoft-teams': '/#videocall'
+};
+
+const normalizeReturnPath = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return fallback;
+  return trimmed;
+};
+
+const normalizeGoogleTarget = (value: unknown): OAuthTarget => {
+  if (value === 'google-docs' || value === 'google-meet') {
+    return value;
+  }
+  return 'gmail';
+};
+
+const getSuccessMessage = (target: OAuthTarget): string => {
+  if (target === 'google-docs') return 'Google Docs successfully connected!';
+  if (target === 'google-meet') return 'Google Meet successfully connected!';
+  return 'Gmail successfully connected!';
+};
+
+// This component handles the OAuth callback from Google.
 const GoogleAuthCallback: React.FC = () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get('code');
-  const error = urlParams.get('error');
+  const handledRef = useRef(false);
 
   useEffect(() => {
-    if (error) {
-      console.error('OAuth error:', error);
-      toast.error('Authentication failed. Please try again.');
-      window.close();
-      return;
-    }
+    if (handledRef.current) return;
+    handledRef.current = true;
 
-    if (code) {
-      // Exchange code for tokens
-      fetch('/api/google/oauth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code })
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.accessToken) {
-            // Determine which service based on scope in the URL or localStorage
-            const scope = urlParams.get('scope') || '';
-            const isGmail = scope.includes('gmail');
-            const isDocs = scope.includes('documents') || scope.includes('drive');
-            
-            if (isGmail) {
-              localStorage.setItem('gmail_access_token', data.accessToken);
-              if (data.refreshToken) {
-                localStorage.setItem('gmail_refresh_token', data.refreshToken);
-              }
-              toast.success('Gmail successfully connected!');
-              window.location.href = '/#communications';
-            } else if (isDocs) {
-              localStorage.setItem('google_docs_access_token', data.accessToken);
-              if (data.refreshToken) {
-                localStorage.setItem('google_docs_refresh_token', data.refreshToken);
-              }
-              toast.success('Google Docs successfully connected!');
-              window.location.href = '/#documents';
-            } else if (scope.includes('calendar')) {
-              // Google Calendar/Meet connection
-              localStorage.setItem('google_meet_access_token', data.accessToken);
-              if (data.refreshToken) {
-                localStorage.setItem('google_meet_refresh_token', data.refreshToken);
-              }
-              toast.success('Google Meet successfully connected!');
-              window.location.href = '/#videocall';
-            } else {
-              // Default to Gmail if can't determine
-              localStorage.setItem('gmail_access_token', data.accessToken);
-              if (data.refreshToken) {
-                localStorage.setItem('gmail_refresh_token', data.refreshToken);
-              }
-              toast.success('Successfully connected!');
-              window.location.href = '/';
-            }
-          } else {
-            throw new Error('No access token received');
-          }
-        })
-        .catch(err => {
-          console.error('Token exchange error:', err);
-          toast.error('Failed to complete authentication. Please try again.');
-          window.close();
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    const error = urlParams.get('error');
+
+    const run = async () => {
+      if (error) {
+        console.error('OAuth error:', error);
+        toast.error('Authentication failed. Please try again.');
+        window.location.href = '/';
+        return;
+      }
+
+      if (!code || !state) {
+        toast.error('Invalid Google OAuth callback. Please try again.');
+        window.location.href = '/';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/google/oauth', {
+          method: 'POST',
+          headers: buildOAuthAuthHeaders(true),
+          body: JSON.stringify({ code, state })
         });
-    }
-  }, [code, error]);
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.message || 'Failed to exchange Google authorization code.');
+        }
+        if (!data?.accessToken || typeof data.accessToken !== 'string') {
+          throw new Error('No access token received.');
+        }
+
+        const target = normalizeGoogleTarget(data?.target);
+        setOAuthTokens(target, data.accessToken, data?.refreshToken);
+
+        toast.success(getSuccessMessage(target));
+        const returnPath = normalizeReturnPath(data?.returnPath, TARGET_RETURN_PATH[target]);
+        window.location.href = returnPath;
+      } catch (err) {
+        console.error('Token exchange error:', err);
+        toast.error('Failed to complete authentication. Please try again.');
+        window.location.href = '/';
+      }
+    };
+
+    void run();
+  }, []);
 
   return (
     <div className="flex items-center justify-center h-screen">

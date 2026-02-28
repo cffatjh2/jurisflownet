@@ -7,23 +7,36 @@ using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using System.Globalization;
 using System.Text;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class InvoicesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
+        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
+        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly ILogger<InvoicesController> _logger;
 
-        public InvoicesController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure)
+        public InvoicesController(
+            JurisFlowDbContext context,
+            AuditLogger auditLogger,
+            FirmStructureService firmStructure,
+            OutcomeFeePlannerService outcomeFeePlanner,
+            ClientTransparencyService clientTransparencyService,
+            ILogger<InvoicesController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
             _firmStructure = firmStructure;
+            _outcomeFeePlanner = outcomeFeePlanner;
+            _clientTransparencyService = clientTransparencyService;
+            _logger = logger;
         }
 
         private async Task<bool> IsPeriodLocked(DateTime date)
@@ -45,7 +58,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet]
         public async Task<IActionResult> GetInvoices([FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            var query = _context.Invoices.AsQueryable();
+            var query = _context.Invoices.AsNoTracking().AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(entityId))
             {
@@ -68,7 +81,10 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetInvoice(string id)
         {
-            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            var invoice = await _context.Invoices
+                .AsNoTracking()
+                .Include(i => i.LineItems)
+                .FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
             return Ok(invoice);
         }
@@ -111,9 +127,9 @@ namespace JurisFlow.Server.Controllers
                 DueDate = dto.DueDate,
                 Notes = dto.Notes,
                 Terms = dto.Terms,
-                Discount = dto.Discount ?? 0,
-                Tax = dto.Tax ?? 0,
-                AmountPaid = 0
+                Discount = dto.Discount ?? 0m,
+                Tax = dto.Tax ?? 0m,
+                AmountPaid = 0m
             };
 
             if (dto.LineItems != null)
@@ -125,9 +141,9 @@ namespace JurisFlow.Server.Controllers
                         Id = Guid.NewGuid().ToString(),
                         Type = li.Type ?? "time",
                         Description = li.Description ?? string.Empty,
-                        Quantity = li.Quantity ?? 1,
-                        Rate = li.Rate ?? 0,
-                        Amount = (li.Quantity ?? 1) * (li.Rate ?? 0),
+                        Quantity = li.Quantity ?? 1m,
+                        Rate = li.Rate ?? 0m,
+                        Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
                         TaskCode = NormalizeUtbmsCode(li.TaskCode),
                         ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
                         ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
@@ -142,6 +158,7 @@ namespace JurisFlow.Server.Controllers
             _context.Invoices.Add(invoice);
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_create");
 
             return CreatedAtAction(nameof(GetInvoice), new { id = invoice.Id }, invoice);
         }
@@ -194,9 +211,9 @@ namespace JurisFlow.Server.Controllers
                         InvoiceId = invoice.Id,
                         Type = li.Type ?? "time",
                         Description = li.Description ?? string.Empty,
-                        Quantity = li.Quantity ?? 1,
-                        Rate = li.Rate ?? 0,
-                        Amount = (li.Quantity ?? 1) * (li.Rate ?? 0),
+                        Quantity = li.Quantity ?? 1m,
+                        Rate = li.Rate ?? 0m,
+                        Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
                         TaskCode = NormalizeUtbmsCode(li.TaskCode),
                         ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
                         ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
@@ -211,6 +228,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.update", "Invoice", invoice.Id, $"Status={invoice.Status}, Total={invoice.Total}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_update");
 
             return Ok(invoice);
         }
@@ -246,6 +264,7 @@ namespace JurisFlow.Server.Controllers
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.payment.apply", "Invoice", invoice.Id, $"Amount={amount}, Balance={invoice.Balance}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_payment_apply");
 
             return Ok(invoice);
         }
@@ -318,10 +337,11 @@ namespace JurisFlow.Server.Controllers
             }
 
             invoice.Status = InvoiceStatus.WrittenOff;
-            invoice.Balance = 0;
+            invoice.Balance = 0m;
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.writeoff", "Invoice", invoice.Id, $"Reason={dto.Reason}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_writeoff");
 
             return Ok(invoice);
         }
@@ -339,10 +359,11 @@ namespace JurisFlow.Server.Controllers
             }
 
             invoice.Status = InvoiceStatus.Cancelled;
-            invoice.Balance = 0;
+            invoice.Balance = 0m;
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.cancel", "Invoice", invoice.Id, $"Reason={dto.Reason}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_cancel");
 
             return Ok(invoice);
         }
@@ -446,6 +467,52 @@ namespace JurisFlow.Server.Controllers
             var split = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             return split.Length > 0 ? split[0].Trim() : trimmed;
         }
+
+        private async Task TryTriggerOutcomeFeePlannerAsync(Invoice invoice, string triggerType)
+        {
+            if (invoice == null || (string.IsNullOrWhiteSpace(invoice.MatterId) && string.IsNullOrWhiteSpace(invoice.Id)))
+            {
+                return;
+            }
+
+            try
+            {
+                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
+                {
+                    MatterId = invoice.MatterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(Invoice),
+                    TriggerEntityId = invoice.Id,
+                    SourceStatus = invoice.Status.ToString()
+                }, GetCurrentUserId(), HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for invoice {InvoiceId}", invoice.Id);
+            }
+
+            try
+            {
+                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
+                {
+                    MatterId = invoice.MatterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(Invoice),
+                    TriggerEntityId = invoice.Id
+                }, GetCurrentUserId(), HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Client transparency trigger failed for invoice {InvoiceId}", invoice.Id);
+            }
+        }
+
+        private string GetCurrentUserId()
+        {
+            return User.FindFirst("sub")?.Value
+                ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                ?? "system";
+        }
     }
 
     // DTOs
@@ -453,8 +520,8 @@ namespace JurisFlow.Server.Controllers
     {
         public string? Type { get; set; }
         public string? Description { get; set; }
-        public double? Quantity { get; set; }
-        public double? Rate { get; set; }
+        public decimal? Quantity { get; set; }
+        public decimal? Rate { get; set; }
         public string? TaskCode { get; set; }
         public string? ExpenseCode { get; set; }
         public string? ActivityCode { get; set; }
@@ -470,8 +537,8 @@ namespace JurisFlow.Server.Controllers
         public InvoiceStatus? Status { get; set; }
         public DateTime? IssueDate { get; set; }
         public DateTime? DueDate { get; set; }
-        public double? Tax { get; set; }
-        public double? Discount { get; set; }
+        public decimal? Tax { get; set; }
+        public decimal? Discount { get; set; }
         public string? Notes { get; set; }
         public string? Terms { get; set; }
         public List<InvoiceLineItemDto>? LineItems { get; set; }
@@ -483,7 +550,7 @@ namespace JurisFlow.Server.Controllers
 
     public class InvoicePaymentDto
     {
-        public double Amount { get; set; }
+        public decimal Amount { get; set; }
         public string? Reference { get; set; }
     }
 

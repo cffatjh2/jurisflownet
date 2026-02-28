@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
 import { Matter, Invoice } from '../../types';
+import { clientApi } from '../../services/clientApi';
 
 type ClientTab =
   | 'dashboard'
@@ -31,33 +32,16 @@ const ClientDashboard: React.FC<ClientDashboardProps> = ({ onNavigate }) => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const [mattersRes, invoicesRes, docsRes, msgRes, notifRes] = await Promise.all([
-          fetch('/api/client/matters', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/invoices', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/documents', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/messages', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/notifications', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
+        const [mattersData, invoicesData, docsData, msgData, notifData] = await Promise.all([
+          clientApi.fetchJson('/matters'),
+          clientApi.fetchJson('/invoices'),
+          clientApi.fetchJson('/documents'),
+          clientApi.fetchJson('/messages'),
+          clientApi.fetchJson('/notifications')
         ]);
 
-        const mattersData = await mattersRes.json();
-        const invoicesData = await invoicesRes.json();
-        const docsData = await docsRes.json();
-        const msgData = await msgRes.json();
-        const notifData = await notifRes.json();
-
-        setMatters(mattersData);
-        setInvoices(invoicesData);
+        setMatters(Array.isArray(mattersData) ? mattersData : []);
+        setInvoices(Array.isArray(invoicesData) ? invoicesData : []);
         setDocuments(Array.isArray(docsData) ? docsData : []);
         setMessages(Array.isArray(msgData) ? msgData : []);
         setNotifications(Array.isArray(notifData) ? notifData : []);

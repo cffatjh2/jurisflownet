@@ -21,6 +21,9 @@ namespace JurisFlow.Server.Models
         [Required]
         public string Body { get; set; } = string.Empty;
 
+        public string SenderType { get; set; } = "Client";
+        public string? SenderUserId { get; set; }
+
         public string Status { get; set; } = "Unread";
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? ReadAt { get; set; }

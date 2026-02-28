@@ -2,30 +2,36 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/expenses")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class ExpensesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly ILogger<ExpensesController> _logger;
+        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
 
-        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<ExpensesController> logger, OutcomeFeePlannerService outcomeFeePlanner)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _logger = logger;
+            _outcomeFeePlanner = outcomeFeePlanner;
         }
 
         [HttpGet]
         public async Task<IActionResult> GetExpenses([FromQuery] string? matterId = null, [FromQuery] string? approvalStatus = null)
         {
-            var query = _context.Expenses.AsQueryable();
+            var query = _context.Expenses.AsNoTracking().AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(matterId))
             {
@@ -49,6 +55,15 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Amount must be greater than zero." });
             }
 
+            if (!string.IsNullOrWhiteSpace(dto.MatterId))
+            {
+                var exists = await _context.Matters.AnyAsync(m => m.Id == dto.MatterId);
+                if (!exists)
+                {
+                    return BadRequest(new { message = "Selected matter was not found." });
+                }
+            }
+
             var userId = GetUserId();
             var isApprover = IsApprover();
 
@@ -70,11 +85,19 @@ namespace JurisFlow.Server.Controllers
                 UpdatedAt = DateTime.UtcNow
             };
 
-            _context.Expenses.Add(expense);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "expense.create", "Expense", expense.Id, $"MatterId={expense.MatterId}, Amount={expense.Amount}");
-
-            return Ok(expense);
+            try
+            {
+                _context.Expenses.Add(expense);
+                await _context.SaveChangesAsync();
+                await _auditLogger.LogAsync(HttpContext, "expense.create", "Expense", expense.Id, $"MatterId={expense.MatterId}, Amount={expense.Amount}");
+                await TryTriggerOutcomeFeePlannerAsync(expense.MatterId, "expense_create", expense.Id);
+                return Ok(expense);
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Failed to create expense.");
+                return StatusCode(500, new { message = "Failed to create expense. Please verify the matter selection." });
+            }
         }
 
         [HttpPut("{id}")]
@@ -97,6 +120,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "expense.update", "Expense", expense.Id, "Expense updated");
+            await TryTriggerOutcomeFeePlannerAsync(expense.MatterId, "expense_update", expense.Id);
 
             return Ok(expense);
         }
@@ -119,6 +143,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "expense.approve", "Expense", expense.Id, "Expense approved");
+            await TryTriggerOutcomeFeePlannerAsync(expense.MatterId, "expense_approve", expense.Id);
 
             return Ok(expense);
         }
@@ -163,6 +188,26 @@ namespace JurisFlow.Server.Controllers
             var trimmed = code.Trim();
             var split = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             return split.Length > 0 ? split[0].Trim() : trimmed;
+        }
+
+        private async Task TryTriggerOutcomeFeePlannerAsync(string? matterId, string triggerType, string entityId)
+        {
+            if (string.IsNullOrWhiteSpace(matterId)) return;
+
+            try
+            {
+                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
+                {
+                    MatterId = matterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(Expense),
+                    TriggerEntityId = entityId
+                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for expense {ExpenseId}", entityId);
+            }
         }
     }
 

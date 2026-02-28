@@ -1,12 +1,9 @@
-# Nixpacks configuration for Railway deployment
-[phases.setup]
-nixPkgs = ['nodejs_20', 'npm-10_x', 'openssl']
-
+# Nixpacks fallback configuration (.NET single-stack)
 [phases.install]
-cmds = ['npm ci']
+cmds = ['dotnet restore JurisFlow.Server/JurisFlow.Server.csproj']
 
 [phases.build]
-cmds = ['npm run build']
+cmds = ['dotnet publish JurisFlow.Server/JurisFlow.Server.csproj -c Release -o out /p:UseAppHost=false']
 
 [start]
-cmd = 'npm run start'
+cmd = 'dotnet out/JurisFlow.Server.dll'

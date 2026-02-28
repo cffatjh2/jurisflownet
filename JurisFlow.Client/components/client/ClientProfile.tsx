@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
 import { User } from '../Icons';
 import { toast } from '../Toast';
+import { clientApi } from '../../services/clientApi';
 
 const ClientProfile: React.FC = () => {
   const { client } = useClientAuth();
@@ -23,11 +24,7 @@ const ClientProfile: React.FC = () => {
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const res = await fetch('/api/client/profile', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
+        const data = await clientApi.fetchJson('/profile');
         setProfile(data);
         setFormData({
           name: data.name || '',
@@ -52,24 +49,13 @@ const ClientProfile: React.FC = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem('client_token');
-      const res = await fetch('/api/client/profile', {
+      const updated = await clientApi.fetchJson('/profile', {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(formData)
       });
-      
-      if (res.ok) {
-        const updated = await res.json();
-        setProfile(updated);
-        setEditing(false);
-        toast.success('Profile updated successfully!');
-      } else {
-        throw new Error('Update failed');
-      }
+      setProfile(updated);
+      setEditing(false);
+      toast.success('Profile updated successfully!');
     } catch (error) {
       console.error('Error updating profile:', error);
       toast.error('Failed to update profile. Please try again.');

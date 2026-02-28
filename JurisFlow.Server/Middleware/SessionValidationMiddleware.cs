@@ -16,6 +16,12 @@ namespace JurisFlow.Server.Middleware
 
         public async Task Invoke(HttpContext context, JurisFlowDbContext db, IConfiguration config, AuditLogger auditLogger)
         {
+            if (config.GetValue("Security:DisableSessionValidation", false))
+            {
+                await _next(context);
+                return;
+            }
+
             if (context.User?.Identity?.IsAuthenticated != true)
             {
                 await _next(context);
@@ -31,6 +37,8 @@ namespace JurisFlow.Server.Middleware
 
             var now = DateTime.UtcNow;
             var idleMinutes = config.GetValue("Security:IdleTimeoutMinutes", 60);
+            var sessionTimeoutMinutes = config.GetValue("Security:SessionTimeoutMinutes", 480);
+            var refreshThresholdMinutes = config.GetValue("Security:SessionRefreshThresholdMinutes", 30);
 
             var session = await db.AuthSessions.FirstOrDefaultAsync(s => s.Id == sessionId);
             if (session == null || session.RevokedAt != null || session.ExpiresAt <= now)
@@ -52,6 +60,19 @@ namespace JurisFlow.Server.Middleware
             if (session.LastSeenAt.AddMinutes(5) <= now)
             {
                 session.LastSeenAt = now;
+            }
+
+            if (sessionTimeoutMinutes > 0 && refreshThresholdMinutes > 0)
+            {
+                var refreshWindow = TimeSpan.FromMinutes(refreshThresholdMinutes);
+                if (session.ExpiresAt - now <= refreshWindow)
+                {
+                    session.ExpiresAt = now.AddMinutes(sessionTimeoutMinutes);
+                }
+            }
+
+            if (db.ChangeTracker.HasChanges())
+            {
                 await db.SaveChangesAsync();
             }
 

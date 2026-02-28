@@ -10,7 +10,7 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class NotificationsController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
@@ -34,7 +34,7 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            var query = _context.Notifications.AsQueryable();
+            var query = _context.Notifications.AsNoTracking().AsQueryable();
             query = query.Where(n => n.UserId == targetUserId);
 
             if (IsAdmin() && !string.IsNullOrWhiteSpace(clientId))

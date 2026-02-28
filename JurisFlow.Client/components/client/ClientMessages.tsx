@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Plus, Mail, Paperclip, X, Search } from '../Icons';
 import { gmailService, GmailMessage } from '../../services/gmailService';
 import { toast } from '../Toast';
+import { clientApi } from '../../services/clientApi';
+import { clearOAuthTokens, getOAuthAccessToken } from '../../services/oauthSecurity';
 
 interface ClientMessage {
   id: string;
@@ -13,6 +15,8 @@ interface ClientMessage {
   createdAt: string;
   attachmentsJson?: string | null;
   source?: 'internal' | 'gmail';
+  senderType?: 'Client' | 'Staff';
+  senderName?: string;
 }
 
 const ClientMessages: React.FC = () => {
@@ -26,16 +30,45 @@ const ClientMessages: React.FC = () => {
   const [gmailLoading, setGmailLoading] = useState(false);
   const [isGmailConnected, setIsGmailConnected] = useState(false);
   const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(
-    localStorage.getItem('gmail_access_token')
+    getOAuthAccessToken('gmail')
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
-  
+
   const [composeData, setComposeData] = useState({
     matterId: '',
     subject: '',
     message: ''
   });
+
+  const openAttachment = async (att: any) => {
+    const url = att?.filePath || att?.url;
+    if (!url) return;
+    if (url.startsWith('/api/')) {
+      const endpoint = url.replace('/api', '');
+      try {
+        const res = await clientApi.fetch(endpoint);
+        if (!res.ok) {
+          throw new Error('Download failed');
+        }
+        const blob = await res.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = att.fileName || 'attachment';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+      } catch (error) {
+        console.error('Failed to download attachment', error);
+        toast.error('Unable to download attachment.');
+      }
+      return;
+    }
+
+    window.open(url, '_blank', 'noreferrer');
+  };
   const [gmailComposeData, setGmailComposeData] = useState({
     to: '',
     subject: '',
@@ -76,15 +109,9 @@ const ClientMessages: React.FC = () => {
     setSelectedMessage(msg);
     if (msg.source !== 'internal' || msg.read) return;
     try {
-      const token = localStorage.getItem('client_token');
-      const res = await fetch(`/api/client/messages/${msg.id}/read`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, read: true } : m));
-        setSelectedMessage(prev => prev ? { ...prev, read: true } : prev);
-      }
+      await clientApi.fetchJson(`/messages/${msg.id}/read`, { method: 'POST' });
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, read: true } : m));
+      setSelectedMessage(prev => prev ? { ...prev, read: true } : prev);
     } catch (error) {
       console.error('Error marking message as read:', error);
     }
@@ -93,25 +120,17 @@ const ClientMessages: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const [messagesRes, mattersRes] = await Promise.all([
-          fetch('/api/client/messages', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/matters', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
+        const [messagesData, mattersData] = await Promise.all([
+          clientApi.fetchJson('/messages'),
+          clientApi.fetchJson('/matters')
         ]);
-        
-        const messagesData = messagesRes.ok ? await messagesRes.json() : [];
-        const mattersData = mattersRes.ok ? await mattersRes.json() : [];
 
         const normalizedMessages = Array.isArray(messagesData)
           ? messagesData.map((msg: ClientMessage) => ({ ...msg, source: 'internal' as const }))
           : [];
 
         setMessages(normalizedMessages);
-        setMatters(mattersData);
+        setMatters(Array.isArray(mattersData) ? mattersData : []);
       } catch (error) {
         console.error('Error loading messages:', error);
         toast.error('Failed to load messages.');
@@ -123,9 +142,21 @@ const ClientMessages: React.FC = () => {
     loadData();
   }, []);
 
-  const handleGmailConnect = () => {
-    const authUrl = gmailService.getAuthUrl();
-    window.location.href = authUrl;
+  const handleGmailConnect = async () => {
+    try {
+      const authUrl = await gmailService.getAuthUrl({
+        target: 'gmail',
+        returnPath: '/client'
+      });
+      if (!authUrl) {
+        toast.error('Google OAuth is not configured.');
+        return;
+      }
+      window.location.href = authUrl;
+    } catch (error) {
+      console.error('Failed to initialize Gmail OAuth', error);
+      toast.error('Failed to start Gmail connection. Please try again.');
+    }
   };
 
   const loadGmailMessages = async () => {
@@ -139,7 +170,7 @@ const ClientMessages: React.FC = () => {
     } catch (error) {
       console.error('Error loading Gmail:', error);
       toast.error('Failed to load Gmail messages. Please reconnect.');
-      localStorage.removeItem('gmail_access_token');
+      clearOAuthTokens('gmail');
       setGmailAccessToken(null);
       setIsGmailConnected(false);
     } finally {
@@ -181,8 +212,6 @@ const ClientMessages: React.FC = () => {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('client_token');
-      
       // Convert files to base64 for JSON transmission
       const attachments = await Promise.all(
         attachedFiles.map(async (file) => {
@@ -204,26 +233,15 @@ const ClientMessages: React.FC = () => {
         ...composeData,
         ...(attachments.length > 0 && { attachments })
       };
-      
-      const res = await fetch('/api/client/messages', {
+
+      const newMessage = await clientApi.fetchJson('/messages', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(payload)
       });
-      
-      if (res.ok) {
-        const newMessage = await res.json();
-        setMessages([{ ...newMessage, source: 'internal' }, ...messages]);
-        setShowCompose(false);
-        setComposeData({ matterId: '', subject: '', message: '' });
-        setAttachedFiles([]);
-      } else {
-        const error = await res.json();
-        toast.error(error.message || 'Failed to send message');
-      }
+      setMessages([{ ...newMessage, source: 'internal', senderType: 'Client' }, ...messages]);
+      setShowCompose(false);
+      setComposeData({ matterId: '', subject: '', message: '' });
+      setAttachedFiles([]);
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
@@ -405,10 +423,13 @@ const ClientMessages: React.FC = () => {
                     </span>
                     <span className="text-xs text-gray-400">{formatDate(msg.createdAt)}</span>
                   </div>
+                  <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                    <span>{msg.senderType === 'Staff' ? 'Firm' : 'You'}</span>
+                    {msg.matter && (
+                      <span className="text-blue-600">Case: {msg.matter.caseNumber}</span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 line-clamp-2">{msg.message}</p>
-                  {msg.matter && (
-                    <span className="text-xs text-blue-600 mt-1 inline-block">Case: {msg.matter.caseNumber}</span>
-                  )}
                 </div>
               ))
             )
@@ -449,16 +470,21 @@ const ClientMessages: React.FC = () => {
       {/* Message View */}
       <div className="flex-1 flex flex-col bg-gray-50">
         {selectedMessage ? (
-          <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
-                <div className="text-xs text-gray-500 mt-2">
-                  {formatDate(selectedMessage.createdAt)}
-                  {selectedMessage.matter && ` - Case: ${selectedMessage.matter.caseNumber}`}
-                  {selectedMessage.source === 'gmail' && ' - Gmail'}
+            <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
+                  <div className="text-xs text-gray-500 mt-2">
+                    {formatDate(selectedMessage.createdAt)}
+                    {selectedMessage.matter && ` - Case: ${selectedMessage.matter.caseNumber}`}
+                    {selectedMessage.source === 'gmail' && ' - Gmail'}
+                  </div>
+                  {selectedMessage.source === 'internal' && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      From {selectedMessage.senderName || (selectedMessage.senderType === 'Staff' ? 'Legal Team' : 'You')}
+                    </div>
+                  )}
                 </div>
-              </div>
               {selectedMessage.source === 'gmail' ? (
                 <button
                   onClick={() => setShowGmailCompose(true)}
@@ -481,18 +507,17 @@ const ClientMessages: React.FC = () => {
                 <div className="mt-6 space-y-2">
                   <div className="text-xs font-bold text-gray-500 uppercase">Attachments</div>
                   {selectedAttachments.map((att: any, idx: number) => (
-                    <a
+                    <button
                       key={`${att.filePath || att.url || att.fileName}-${idx}`}
-                      href={att.filePath || att.url}
-                      target="_blank"
-                      rel="noreferrer"
+                      type="button"
+                      onClick={() => openAttachment(att)}
                       className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-blue-700 hover:bg-gray-100"
                     >
                       <span className="truncate">{att.fileName || 'attachment'}</span>
                       {att.size ? (
                         <span className="text-xs text-gray-500">{Math.round(att.size / 1024)} KB</span>
                       ) : null}
-                    </a>
+                    </button>
                   ))}
                 </div>
               )}

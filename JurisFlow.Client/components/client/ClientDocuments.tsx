@@ -6,6 +6,8 @@ import { googleDocsService } from '../../services/googleDocsService';
 import { toast } from '../Toast';
 import { getGoogleClientId } from '../../services/googleConfig';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
+import { clientApi } from '../../services/clientApi';
+import { clearOAuthTokens, getOAuthAccessToken, requestOAuthState } from '../../services/oauthSecurity';
 
 const ClientDocuments: React.FC = () => {
   const { client } = useClientAuth();
@@ -23,9 +25,14 @@ const ClientDocuments: React.FC = () => {
   const [viewingDoc, setViewingDoc] = useState<DocumentFile | null>(null);
   const [docContent, setDocContent] = useState<string>('');
   const [loadingContent, setLoadingContent] = useState(false);
+  const [comments, setComments] = useState<any[]>([]);
+  const [commentDraft, setCommentDraft] = useState('');
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentSending, setCommentSending] = useState(false);
+  const [docObjectUrl, setDocObjectUrl] = useState<string | null>(null);
   const [isGoogleDocsConnected, setIsGoogleDocsConnected] = useState(false);
   const [googleDocsAccessToken, setGoogleDocsAccessToken] = useState<string | null>(
-    localStorage.getItem('google_docs_access_token')
+    getOAuthAccessToken('google-docs')
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -78,7 +85,8 @@ const ClientDocuments: React.FC = () => {
     tags: parseTags(doc.tags),
     category: doc.category,
     filePath: normalizeFilePath(doc.filePath),
-    uploadedBy: doc.uploadedBy
+    uploadedBy: doc.uploadedBy,
+    permissions: doc.permissions
   });
 
   useEffect(() => {
@@ -102,6 +110,12 @@ const ClientDocuments: React.FC = () => {
     return false;
   };
 
+  const getPermissions = (doc: DocumentFile) => ({
+    canView: doc.permissions?.canView ?? true,
+    canDownload: doc.permissions?.canDownload ?? true,
+    canComment: doc.permissions?.canComment ?? true
+  });
+
   const getSearchHaystack = (doc: DocumentFile) => {
     return [
       doc.name,
@@ -114,15 +128,71 @@ const ClientDocuments: React.FC = () => {
       .toLowerCase();
   };
 
-  const handleGoogleDocsConnect = () => {
+  const closeViewer = () => {
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+    }
+    setDocObjectUrl(null);
+    setViewingDoc(null);
+    setDocContent('');
+    setComments([]);
+    setCommentDraft('');
+  };
+
+  const loadComments = async (doc: DocumentFile) => {
+    if (!doc.filePath || !getPermissions(doc).canView) {
+      setComments([]);
+      return;
+    }
+    setCommentsLoading(true);
+    try {
+      const data = await clientApi.fetchJson(`/documents/${doc.id}/comments`);
+      setComments(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Failed to load comments:', error);
+      setComments([]);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  const handleAddComment = async () => {
+    if (!viewingDoc || !getPermissions(viewingDoc).canComment) return;
+    const body = commentDraft.trim();
+    if (!body) return;
+    setCommentSending(true);
+    try {
+      const created = await clientApi.fetchJson(`/documents/${viewingDoc.id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ body })
+      });
+      if (created) {
+        setComments(prev => [...prev, created]);
+        setCommentDraft('');
+      }
+    } catch (error) {
+      console.error('Failed to add comment:', error);
+      toast.error('Unable to add comment. Please try again.');
+    } finally {
+      setCommentSending(false);
+    }
+  };
+
+  const handleGoogleDocsConnect = async () => {
     const clientId = getGoogleClientId();
 
     if (!clientId) return;
 
-    const redirectUri = `${window.location.origin}/auth/google/callback`;
-    const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent`;
-    window.location.href = authUrl;
+    try {
+      const state = await requestOAuthState('google', 'google-docs', '/client');
+      const redirectUri = `${window.location.origin}/auth/google/callback`;
+      const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
+      window.location.href = authUrl;
+    } catch (error) {
+      console.error('Failed to initialize Google Docs OAuth', error);
+      toast.error('Failed to start Google Docs connection. Please try again.');
+    }
   };
 
   const handleGoogleDocsSync = async () => {
@@ -150,7 +220,7 @@ const ClientDocuments: React.FC = () => {
     } catch (error) {
       console.error('Google Docs sync error:', error);
       toast.error('Failed to sync Google Docs. Please reconnect.');
-      localStorage.removeItem('google_docs_access_token');
+      clearOAuthTokens('google-docs');
       setGoogleDocsAccessToken(null);
       setIsGoogleDocsConnected(false);
     }
@@ -159,20 +229,12 @@ const ClientDocuments: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const token = localStorage.getItem('client_token');
-        const [mattersRes, docsRes] = await Promise.all([
-          fetch('/api/client/matters', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch('/api/client/documents', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
+        const [mattersData, docsData] = await Promise.all([
+          clientApi.fetchJson('/matters'),
+          clientApi.fetchJson('/documents')
         ]);
-
-        const mattersData = await mattersRes.json();
         setMatters(mattersData);
 
-        const docsData = docsRes.ok ? await docsRes.json() : [];
         const serverDocs = Array.isArray(docsData) ? docsData.map(mapServerDocument) : [];
 
         const storedDocs = localStorage.getItem('client_documents') || localStorage.getItem('documents');
@@ -225,7 +287,6 @@ const ClientDocuments: React.FC = () => {
     if (!pendingFile) return;
 
     try {
-      const token = localStorage.getItem('client_token');
       const formData = new FormData();
       formData.append('file', pendingFile);
       if (selectedMatterForUpload) {
@@ -235,11 +296,8 @@ const ClientDocuments: React.FC = () => {
         formData.append('description', uploadDescription.trim());
       }
 
-      const res = await fetch('/api/client/documents/upload', {
+      const res = await clientApi.fetch('/documents/upload', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
         body: formData
       });
 
@@ -263,6 +321,12 @@ const ClientDocuments: React.FC = () => {
   };
 
   const handleOpen = async (doc: DocumentFile) => {
+    const { canView } = getPermissions(doc);
+    if (!canView) {
+      toast.error('You do not have permission to view this document.');
+      return;
+    }
+
     if (doc.content && doc.content.startsWith('http')) {
       window.open(doc.content, '_blank');
       return;
@@ -276,6 +340,13 @@ const ClientDocuments: React.FC = () => {
     setViewingDoc(doc);
     setLoadingContent(true);
     setDocContent('');
+    setComments([]);
+    setCommentDraft('');
+    loadComments(doc);
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+      setDocObjectUrl(null);
+    }
 
     try {
       if (doc.content) {
@@ -297,39 +368,73 @@ const ClientDocuments: React.FC = () => {
           setDocContent(doc.content as string);
         }
       } else if (doc.filePath) {
-        const fileUrl = normalizeFilePath(doc.filePath);
+        const response = await clientApi.fetch(`/documents/${doc.id}/download`);
+        if (!response.ok) {
+          throw new Error('Document download failed');
+        }
+        const blob = await response.blob();
         if (doc.type === 'txt') {
-          const res = await fetch(fileUrl);
-          const text = await res.text();
+          const text = await blob.text();
           setDocContent(text);
         } else if (doc.type === 'docx') {
-          const res = await fetch(fileUrl);
-          const arrayBuffer = await res.arrayBuffer();
+          const arrayBuffer = await blob.arrayBuffer();
           const result = await mammoth.convertToHtml({ arrayBuffer });
           setDocContent(result.value);
         } else {
-          setDocContent(fileUrl);
+          const url = window.URL.createObjectURL(blob);
+          setDocObjectUrl(url);
+          setDocContent(url);
         }
       }
     } catch (error) {
       console.error('Error opening document:', error);
       toast.error('An error occurred while opening the file.');
-      setViewingDoc(null);
+      closeViewer();
     } finally {
       setLoadingContent(false);
     }
   };
 
-  const handleDownload = (doc: DocumentFile) => {
-    const fileUrl = doc.content || (doc.filePath ? normalizeFilePath(doc.filePath) : '');
-    if (!fileUrl) {
+  const handleDownload = async (doc: DocumentFile) => {
+    try {
+      const { canDownload } = getPermissions(doc);
+      if (!canDownload) {
+        toast.error('You do not have permission to download this document.');
+        return;
+      }
+
+      if (doc.filePath) {
+        const response = await clientApi.fetch(`/documents/${doc.id}/download`);
+        if (!response.ok) {
+          throw new Error('File download failed');
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = doc.name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
+      if (doc.content) {
+        const link = document.createElement('a');
+        link.href = doc.content as string;
+        link.download = doc.name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
       toast.warning('No content available for this file.');
-      return;
+    } catch (error: any) {
+      console.error('Download error:', error);
+      toast.error('Failed to download file.');
     }
-    const link = document.createElement('a');
-    link.href = fileUrl;
-    link.download = doc.name;
-    link.click();
   };
 
   if (loading) {
@@ -456,6 +561,7 @@ const ClientDocuments: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {sortedDocs.map(doc => {
                 const isMine = isClientUpload(doc);
+                const { canView, canDownload } = getPermissions(doc);
                 return (
                   <div key={doc.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between mb-3">
@@ -466,14 +572,16 @@ const ClientDocuments: React.FC = () => {
                       <div className="flex gap-1">
                         <button
                           onClick={() => handleOpen(doc)}
-                          className="p-1 text-blue-600 hover:text-blue-800"
+                          disabled={!canView}
+                          className={`p-1 ${canView ? 'text-blue-600 hover:text-blue-800' : 'text-gray-300 cursor-not-allowed'}`}
                           title="View"
                         >
                           <FileText className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDownload(doc)}
-                          className="p-1 text-gray-400 hover:text-gray-600"
+                          disabled={!canDownload}
+                          className={`p-1 ${canDownload ? 'text-gray-400 hover:text-gray-600' : 'text-gray-300 cursor-not-allowed'}`}
                           title="Download"
                         >
                           <Download className="w-4 h-4" />
@@ -581,7 +689,7 @@ const ClientDocuments: React.FC = () => {
                 </p>
               </div>
               <button
-                onClick={() => { setViewingDoc(null); setDocContent(''); }}
+                onClick={closeViewer}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-6 h-6" />
@@ -616,6 +724,54 @@ const ClientDocuments: React.FC = () => {
                 />
               )}
             </div>
+
+            {viewingDoc.filePath && (
+              <div className="border-t border-gray-200 bg-gray-50 p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-800">Comments</h4>
+                  <span className="text-xs text-gray-500">{comments.length} total</span>
+                </div>
+                {commentsLoading ? (
+                  <div className="text-sm text-gray-400">Loading comments...</div>
+                ) : comments.length === 0 ? (
+                  <div className="text-sm text-gray-400">No comments yet.</div>
+                ) : (
+                  <div className="space-y-3 max-h-48 overflow-y-auto">
+                    {comments.map((comment: any) => (
+                      <div key={comment.id} className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                          <span className="font-semibold text-slate-700">
+                            {comment.author?.name || 'Unknown'}
+                          </span>
+                          <span>{new Date(comment.createdAt).toLocaleString()}</span>
+                        </div>
+                        <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.body}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {getPermissions(viewingDoc).canComment ? (
+                  <div className="flex items-center gap-3">
+                    <input
+                      value={commentDraft}
+                      onChange={(e) => setCommentDraft(e.target.value)}
+                      placeholder="Add a comment..."
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <button
+                      onClick={handleAddComment}
+                      disabled={commentSending || !commentDraft.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {commentSending ? 'Saving...' : 'Post'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400">Commenting is disabled for this document.</div>
+                )}
+              </div>
+            )}
 
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
               <button

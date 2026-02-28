@@ -1,16 +1,179 @@
-import React, { useEffect, useState } from 'react';
-import { Matter, CaseStatus, PracticeArea, FeeStructure, Client, DocumentFile, CourtType } from '../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Matter, CaseStatus, PracticeArea, FeeStructure, Client, DocumentFile, CourtType, OutcomeFeePlanDetailResult, OutcomeFeePlanVersionCompareResult, OutcomeFeePlanPortfolioMetricsResult, OutcomeFeeCalibrationEffectiveResult } from '../types';
 import { Search, ChevronRight, Filter, Plus, X, Clock, FileText, Mail, Calendar, Trash, Users } from './Icons';
 import { Can } from './common/Can';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
+import { api } from '../services/api';
 import mammoth from 'mammoth';
 import { toast } from './Toast';
 import { Combobox } from './common/Combobox';
 import ClientSelectorModal from './ClientSelectorModal';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
 
-const API_BASE_URL = ''; // Use proxy for both api and uploads
+type PlannerComplexity = 'low' | 'medium' | 'high';
+type PlannerClaimSizeBand = 'small' | 'medium' | 'large' | 'enterprise';
+type PlannerPayorProfile = 'client' | 'corporate' | 'third_party';
+
+type OutcomePlannerDraft = {
+  enabled: boolean;
+  autoSave: boolean;
+  complexity: PlannerComplexity;
+  claimSizeBand: PlannerClaimSizeBand;
+  primaryPayorProfile: PlannerPayorProfile;
+  jurisdictionCode: string;
+  baseBillableRateOverride: string;
+  notes: string;
+};
+
+type OutcomePlannerPreview = {
+  scenarios: Array<{
+    key: string;
+    name: string;
+    probability: number;
+    budgetTotal: number;
+    expectedCollected: number;
+    expectedMargin: number;
+    confidenceScore: number;
+    confidenceBand: 'low' | 'medium' | 'high';
+    dataCoverageScore: number;
+    riskFlags: string[];
+    outcomeProbabilities: { settle: number; dismiss: number; trial: number; adverse: number };
+    topDrivers: Array<{ key: string; impact: number }>;
+    inputSensitivitySummary: string;
+    driverSummary: string;
+  }>;
+  assumptions: Array<{ key: string; value: string }>;
+};
+
+type OutcomePlannerFeedbackDraft = {
+  actualOutcome: string;
+  actualFeesCollected: string;
+  actualCost: string;
+  actualMargin: string;
+  notes: string;
+};
+
+const defaultOutcomePlannerDraft = (): OutcomePlannerDraft => ({
+  enabled: true,
+  autoSave: true,
+  complexity: 'medium',
+  claimSizeBand: 'medium',
+  primaryPayorProfile: 'client',
+  jurisdictionCode: '',
+  baseBillableRateOverride: '',
+  notes: ''
+});
+
+const defaultOutcomePlannerFeedbackDraft = (): OutcomePlannerFeedbackDraft => ({
+  actualOutcome: '',
+  actualFeesCollected: '',
+  actualCost: '',
+  actualMargin: '',
+  notes: ''
+});
+
+const round2 = (value: number) => Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+
+const mapFeeStructureToPlannerArrangement = (feeStructure?: FeeStructure | string): 'hourly' | 'fixed' | 'hybrid' | 'contingency' => {
+  if (feeStructure === FeeStructure.FlatFee || String(feeStructure).toLowerCase().includes('flat')) return 'fixed';
+  if (feeStructure === FeeStructure.Contingency || String(feeStructure).toLowerCase().includes('contingency')) return 'contingency';
+  return 'hourly';
+};
+
+const buildOutcomePlannerPreview = (params: {
+  complexity: PlannerComplexity;
+  claimSizeBand: PlannerClaimSizeBand;
+  primaryPayorProfile: PlannerPayorProfile;
+  jurisdictionCode?: string;
+  courtType?: string;
+  billingArrangement: 'hourly' | 'fixed' | 'hybrid' | 'contingency';
+  billableRate: number;
+  practiceArea?: string;
+}): OutcomePlannerPreview => {
+  const complexityMultiplier = params.complexity === 'low' ? 0.75 : params.complexity === 'high' ? 1.35 : 1.0;
+  const claimSizeMultiplier = params.claimSizeBand === 'small' ? 0.70 : params.claimSizeBand === 'large' ? 1.25 : params.claimSizeBand === 'enterprise' ? 1.60 : 1.0;
+  const courtMultiplier = params.courtType?.toLowerCase().includes('federal') ? 1.20 : 1.0;
+  const arrangementMultiplier = params.billingArrangement === 'fixed' ? 0.90 : params.billingArrangement === 'contingency' ? 1.10 : params.billingArrangement === 'hybrid' ? 1.05 : 1.0;
+  const rate = round2(params.billableRate > 0 ? params.billableRate : 275);
+  const baseHours = round2(120 * complexityMultiplier * claimSizeMultiplier * courtMultiplier * arrangementMultiplier);
+
+  const defs = [
+    { key: 'conservative', name: 'Conservative', probability: 0.25, hoursMult: 1.15, collectMult: 0.84, confidence: 0.60 },
+    { key: 'base', name: 'Base', probability: 0.50, hoursMult: 1.00, collectMult: 0.90, confidence: 0.72 },
+    { key: 'aggressive', name: 'Aggressive', probability: 0.25, hoursMult: 0.85, collectMult: 0.95, confidence: 0.66 }
+  ];
+
+  const payorAdj = params.primaryPayorProfile === 'corporate' ? 0.03 : params.primaryPayorProfile === 'third_party' ? -0.04 : 0;
+  const scenarios = defs.map((def) => {
+    const totalHours = round2(baseHours * def.hoursMult);
+    const feeTotal = round2(totalHours * rate);
+    const expenseTotal = round2(feeTotal * 0.08);
+    const budgetTotal = round2(feeTotal + expenseTotal);
+    const collectedRatio = Math.min(0.99, Math.max(0.50, def.collectMult + payorAdj));
+    const expectedCollected = round2(budgetTotal * collectedRatio);
+    const expectedCost = round2((feeTotal * 0.42) + (expenseTotal * 0.55));
+    const expectedMargin = round2(expectedCollected - expectedCost);
+    const dataCoverageScore = round2(
+      0.35 +
+      (params.jurisdictionCode ? 0.15 : 0) +
+      (params.courtType ? 0.15 : 0) +
+      (params.practiceArea ? 0.10 : 0) +
+      (rate > 0 ? 0.10 : 0) +
+      0.10
+    );
+    const confidenceScore = round2(Math.min(1, Math.max(0, def.confidence * 0.75 + dataCoverageScore * 0.25)));
+    const confidenceBand: 'low' | 'medium' | 'high' = confidenceScore >= 0.8 ? 'high' : confidenceScore >= 0.6 ? 'medium' : 'low';
+    const outcomeProbabilities = {
+      settle: round2(def.key === 'aggressive' ? 0.62 : def.key === 'conservative' ? 0.42 : 0.54),
+      dismiss: round2(def.key === 'aggressive' ? 0.10 : def.key === 'conservative' ? 0.12 : 0.11),
+      trial: round2(def.key === 'aggressive' ? 0.18 : def.key === 'conservative' ? 0.28 : 0.22),
+      adverse: round2(def.key === 'aggressive' ? 0.10 : def.key === 'conservative' ? 0.18 : 0.13)
+    };
+    const riskFlags = [
+      ...(dataCoverageScore < 0.6 ? ['low_data_coverage'] : []),
+      ...(!params.jurisdictionCode ? ['jurisdiction_gap'] : []),
+      ...((params.primaryPayorProfile === 'third_party' || collectedRatio < 0.86) ? ['high_collections_risk'] : []),
+      ...((params.claimSizeBand === 'enterprise' || (params.complexity === 'high' && def.key === 'conservative')) ? ['atypical_matter'] : [])
+    ];
+    const topDrivers = [
+      { key: 'complexity', impact: round2(complexityMultiplier - 1) },
+      { key: 'claim_size_band', impact: round2(claimSizeMultiplier - 1) },
+      { key: 'court_type', impact: round2(courtMultiplier - 1) },
+      { key: 'billing_arrangement', impact: round2(arrangementMultiplier - 1) },
+      { key: 'payor_mix', impact: round2(payorAdj) }
+    ].sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
+    return {
+      key: def.key,
+      name: def.name,
+      probability: def.probability,
+      budgetTotal,
+      expectedCollected,
+      expectedMargin,
+      confidenceScore,
+      confidenceBand,
+      dataCoverageScore,
+      riskFlags,
+      outcomeProbabilities,
+      topDrivers,
+      inputSensitivitySummary: `${params.billingArrangement} + ${params.primaryPayorProfile} + ${params.complexity}`,
+      driverSummary: `${params.complexity} complexity • ${params.claimSizeBand} claim • ${params.billingArrangement} • ${params.primaryPayorProfile}`
+    };
+  });
+
+  return {
+    scenarios,
+    assumptions: [
+      { key: 'complexity', value: params.complexity },
+      { key: 'claim_size_band', value: params.claimSizeBand },
+      { key: 'billing_arrangement', value: params.billingArrangement },
+      { key: 'primary_payor_profile', value: params.primaryPayorProfile },
+      { key: 'court_type', value: params.courtType || 'unspecified' },
+      { key: 'practice_area', value: params.practiceArea || 'unspecified' },
+      { key: 'base_billable_rate', value: rate.toFixed(2) }
+    ]
+  };
+};
 
 const Matters: React.FC = () => {
   const { t, formatCurrency, formatDate } = useTranslation();
@@ -24,11 +187,53 @@ const Matters: React.FC = () => {
   const [viewingDoc, setViewingDoc] = useState<DocumentFile | null>(null);
   const [docContent, setDocContent] = useState<string>('');
   const [loadingContent, setLoadingContent] = useState(false);
+  const [docObjectUrl, setDocObjectUrl] = useState<string | null>(null);
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [showClientSelector, setShowClientSelector] = useState(false);
   const [selectedPartyName, setSelectedPartyName] = useState('');
   const [entityFilter, setEntityFilter] = useState('');
   const [officeFilter, setOfficeFilter] = useState('');
+  const [outcomePlannerDraft, setOutcomePlannerDraft] = useState<OutcomePlannerDraft>(defaultOutcomePlannerDraft);
+  const [outcomePlannerSaving, setOutcomePlannerSaving] = useState(false);
+  const [selectedMatterPlanner, setSelectedMatterPlanner] = useState<OutcomeFeePlanDetailResult | null>(null);
+  const [selectedMatterPlannerCompare, setSelectedMatterPlannerCompare] = useState<OutcomeFeePlanVersionCompareResult | null>(null);
+  const [selectedMatterPlannerLoading, setSelectedMatterPlannerLoading] = useState(false);
+  const [selectedMatterPlannerRecomputing, setSelectedMatterPlannerRecomputing] = useState(false);
+  const [outcomePlannerPortfolioMetrics, setOutcomePlannerPortfolioMetrics] = useState<OutcomeFeePlanPortfolioMetricsResult | null>(null);
+  const [outcomePlannerPortfolioMetricsLoading, setOutcomePlannerPortfolioMetricsLoading] = useState(false);
+  const [selectedMatterCalibration, setSelectedMatterCalibration] = useState<OutcomeFeeCalibrationEffectiveResult | null>(null);
+  const [selectedMatterCalibrationLoading, setSelectedMatterCalibrationLoading] = useState(false);
+  const [selectedMatterCalibrationJobRunning, setSelectedMatterCalibrationJobRunning] = useState(false);
+  const [selectedMatterCalibrationActionRunning, setSelectedMatterCalibrationActionRunning] = useState(false);
+  const [selectedMatterOutcomeFeedbackSaving, setSelectedMatterOutcomeFeedbackSaving] = useState(false);
+  const [selectedMatterOutcomeFeedbackDraft, setSelectedMatterOutcomeFeedbackDraft] = useState<OutcomePlannerFeedbackDraft>(defaultOutcomePlannerFeedbackDraft);
+  const [selectedMatterTransparencyWorkspace, setSelectedMatterTransparencyWorkspace] = useState<any | null>(null);
+  const [selectedMatterTransparencyLoading, setSelectedMatterTransparencyLoading] = useState(false);
+  const [selectedMatterTransparencyPolicySaving, setSelectedMatterTransparencyPolicySaving] = useState(false);
+  const [selectedMatterTransparencyActionSaving, setSelectedMatterTransparencyActionSaving] = useState(false);
+  const [selectedMatterTransparencyEvidenceMetrics, setSelectedMatterTransparencyEvidenceMetrics] = useState<any | null>(null);
+  const [selectedMatterTransparencyEvidenceLoading, setSelectedMatterTransparencyEvidenceLoading] = useState(false);
+  const [selectedMatterTransparencyEvidenceActionLoading, setSelectedMatterTransparencyEvidenceActionLoading] = useState(false);
+  const [selectedMatterTransparencyDraftEvidence, setSelectedMatterTransparencyDraftEvidence] = useState<any | null>(null);
+  const [selectedMatterTransparencyPublishedEvidence, setSelectedMatterTransparencyPublishedEvidence] = useState<any | null>(null);
+  const [selectedMatterTransparencyPolicyDraft, setSelectedMatterTransparencyPolicyDraft] = useState({
+    publishPolicy: 'warn_only',
+    autoPublishSafe: false,
+    reviewRequiredForDelayReason: false,
+    reviewRequiredForCostImpactChange: false,
+    costImpactChangeThreshold: '1000',
+    blockOnLowConfidence: false,
+    lowConfidenceThreshold: '0.55'
+  });
+  const [selectedMatterTransparencyRewriteDraft, setSelectedMatterTransparencyRewriteDraft] = useState({
+    snapshotSummary: '',
+    whatChangedSummary: '',
+    nextStepActionText: '',
+    nextStepBlockedByText: '',
+    reason: '',
+    assignedTo: ''
+  });
+  const [selectedMatterTransparencyDelayReasonEdits, setSelectedMatterTransparencyDelayReasonEdits] = useState<Record<string, string>>({});
   const [newClientData, setNewClientData] = useState({
     name: '',
     email: '',
@@ -57,6 +262,170 @@ const Matters: React.FC = () => {
       localStorage.removeItem('cmd_target_matter');
     }
   }, [matters]);
+
+  useEffect(() => {
+    void refreshOutcomePlannerPortfolioMetrics();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPlanner = async () => {
+      if (!selectedMatter?.id) {
+        setSelectedMatterPlanner(null);
+        setSelectedMatterPlannerCompare(null);
+        setSelectedMatterPlannerLoading(false);
+        return;
+      }
+
+      setSelectedMatterPlannerLoading(true);
+      try {
+        const detail = await api.outcomeFeePlans.getLatestForMatter(selectedMatter.id);
+        if (cancelled) return;
+        setSelectedMatterPlanner(detail || null);
+
+        if (detail?.plan?.id && (detail.versions?.length || 0) > 1) {
+          const compare = await api.outcomeFeePlans.compare(detail.plan.id);
+          if (cancelled) return;
+          setSelectedMatterPlannerCompare(compare || null);
+        } else {
+          setSelectedMatterPlannerCompare(null);
+        }
+      } catch (error) {
+        console.error('Failed to load Outcome-to-Fee planner detail', error);
+        if (!cancelled) {
+          setSelectedMatterPlanner(null);
+          setSelectedMatterPlannerCompare(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMatterPlannerLoading(false);
+        }
+      }
+    };
+
+    loadPlanner();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMatter?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncDraftsFromWorkspace = (workspace: any | null) => {
+      const policy = workspace?.policy || {};
+      setSelectedMatterTransparencyPolicyDraft({
+        publishPolicy: String(policy.publishPolicy || 'warn_only'),
+        autoPublishSafe: !!policy.autoPublishSafe,
+        reviewRequiredForDelayReason: !!policy.reviewRequiredForDelayReason,
+        reviewRequiredForCostImpactChange: !!policy.reviewRequiredForCostImpactChange,
+        costImpactChangeThreshold: String(policy.costImpactChangeThreshold ?? '1000'),
+        blockOnLowConfidence: !!policy.blockOnLowConfidence,
+        lowConfidenceThreshold: String(policy.lowConfidenceThreshold ?? '0.55')
+      });
+
+      const draft = workspace?.draft;
+      const delayRows = (draft?.delayReasons || []) as Array<any>;
+      setSelectedMatterTransparencyDelayReasonEdits(
+        delayRows.reduce((acc: Record<string, string>, row) => {
+          if (row?.id) acc[String(row.id)] = String(row.clientSafeText ?? row.text ?? '');
+          return acc;
+        }, {})
+      );
+      setSelectedMatterTransparencyRewriteDraft({
+        snapshotSummary: String(draft?.snapshot?.snapshotSummary ?? draft?.snapshot?.summary ?? ''),
+        whatChangedSummary: String(draft?.snapshot?.whatChangedSummary ?? draft?.snapshot?.whatChanged ?? ''),
+        nextStepActionText: String(draft?.nextStep?.actionText ?? ''),
+        nextStepBlockedByText: String(draft?.nextStep?.blockedByText ?? ''),
+        reason: '',
+        assignedTo: String(workspace?.pendingReviewItem?.assignedTo ?? '')
+      });
+    };
+
+      const loadTransparencyWorkspace = async () => {
+        if (!selectedMatter?.id) {
+          setSelectedMatterTransparencyWorkspace(null);
+          setSelectedMatterTransparencyEvidenceMetrics(null);
+          setSelectedMatterTransparencyDraftEvidence(null);
+          setSelectedMatterTransparencyPublishedEvidence(null);
+          setSelectedMatterTransparencyLoading(false);
+          setSelectedMatterTransparencyEvidenceLoading(false);
+          return;
+        }
+
+        setSelectedMatterTransparencyLoading(true);
+        setSelectedMatterTransparencyEvidenceLoading(true);
+        try {
+          const workspace = await api.clientTransparency.getReviewWorkspace(selectedMatter.id);
+          if (cancelled) return;
+          setSelectedMatterTransparencyWorkspace(workspace || null);
+          syncDraftsFromWorkspace(workspace || null);
+          const [metrics, draftEvidence, publishedEvidence] = await Promise.all([
+            api.clientTransparency.metrics({ days: 90, matterId: selectedMatter.id }).catch(() => null),
+            workspace?.draft?.snapshot?.id ? api.clientTransparency.getSnapshotEvidence(String(workspace.draft.snapshot.id)).catch(() => null) : Promise.resolve(null),
+            workspace?.published?.snapshot?.id ? api.clientTransparency.getSnapshotEvidence(String(workspace.published.snapshot.id)).catch(() => null) : Promise.resolve(null)
+          ]);
+          if (cancelled) return;
+          setSelectedMatterTransparencyEvidenceMetrics(metrics || null);
+          setSelectedMatterTransparencyDraftEvidence(draftEvidence || null);
+          setSelectedMatterTransparencyPublishedEvidence(publishedEvidence || null);
+        } catch (error) {
+          console.error('Failed to load client transparency review workspace', error);
+          if (!cancelled) {
+            setSelectedMatterTransparencyWorkspace(null);
+            setSelectedMatterTransparencyEvidenceMetrics(null);
+            setSelectedMatterTransparencyDraftEvidence(null);
+            setSelectedMatterTransparencyPublishedEvidence(null);
+          }
+        } finally {
+          if (!cancelled) {
+            setSelectedMatterTransparencyLoading(false);
+            setSelectedMatterTransparencyEvidenceLoading(false);
+          }
+        }
+      };
+
+    loadTransparencyWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMatter?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCalibration = async () => {
+      if (!selectedMatter?.id) {
+        setSelectedMatterCalibration(null);
+        setSelectedMatterCalibrationLoading(false);
+        setSelectedMatterOutcomeFeedbackDraft(defaultOutcomePlannerFeedbackDraft());
+        return;
+      }
+
+      setSelectedMatterCalibrationLoading(true);
+      try {
+        const result = await api.outcomeFeePlans.getEffectiveCalibrationForMatter(selectedMatter.id);
+        if (cancelled) return;
+        setSelectedMatterCalibration(result || null);
+      } catch (error) {
+        console.error('Failed to load Outcome-to-Fee planner calibration', error);
+        if (!cancelled) {
+          setSelectedMatterCalibration(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMatterCalibrationLoading(false);
+        }
+      }
+    };
+
+    setSelectedMatterOutcomeFeedbackDraft(defaultOutcomePlannerFeedbackDraft());
+    loadCalibration();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMatter?.id]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -88,7 +457,412 @@ const Matters: React.FC = () => {
   const formEntityId = editData?.entityId ?? formData.entityId;
   const formOfficeId = editData?.officeId ?? formData.officeId;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const outcomePlannerPreview = useMemo(() => {
+    if (!outcomePlannerDraft.enabled || !!editData) return null;
+    const billableRate =
+      parseFloat(outcomePlannerDraft.baseBillableRateOverride) ||
+      (editData?.billableRate ?? 400);
+    return buildOutcomePlannerPreview({
+      complexity: outcomePlannerDraft.complexity,
+      claimSizeBand: outcomePlannerDraft.claimSizeBand,
+      primaryPayorProfile: outcomePlannerDraft.primaryPayorProfile,
+      jurisdictionCode: outcomePlannerDraft.jurisdictionCode,
+      courtType: editData?.courtType || formData.courtType,
+      billingArrangement: mapFeeStructureToPlannerArrangement((editData?.feeStructure as any) || formData.feeStructure),
+      billableRate,
+      practiceArea: String(editData?.practiceArea || formData.practiceArea || '')
+    });
+  }, [outcomePlannerDraft, editData, formData.courtType, formData.feeStructure, formData.practiceArea]);
+
+  const resetOutcomePlannerState = () => {
+    setOutcomePlannerDraft(defaultOutcomePlannerDraft());
+    setOutcomePlannerSaving(false);
+  };
+
+  const persistOutcomePlannerForMatter = async (createdMatter: any) => {
+    const baseRateOverride = parseFloat(outcomePlannerDraft.baseBillableRateOverride);
+    const payload = {
+      matterId: createdMatter.id,
+      title: `${createdMatter.name} Intake Planner`,
+      complexity: outcomePlannerDraft.complexity,
+      claimSizeBand: outcomePlannerDraft.claimSizeBand,
+      billingArrangement: mapFeeStructureToPlannerArrangement(createdMatter.feeStructure || formData.feeStructure),
+      primaryPayorProfile: outcomePlannerDraft.primaryPayorProfile,
+      jurisdictionCode: outcomePlannerDraft.jurisdictionCode || undefined,
+      baseBillableRateOverride: Number.isFinite(baseRateOverride) && baseRateOverride > 0 ? baseRateOverride : undefined,
+      notes: outcomePlannerDraft.notes || undefined
+    };
+
+    const result = await api.outcomeFeePlans.generate(payload);
+    if (result?.currentVersion?.versionNumber) {
+      toast.success(`Outcome-to-Fee Planner v${result.currentVersion.versionNumber} saved.`);
+    } else {
+      toast.success('Outcome-to-Fee Planner saved.');
+    }
+  };
+
+  const refreshSelectedMatterPlanner = async (matterId: string, showErrors = false) => {
+    try {
+      const detail = await api.outcomeFeePlans.getLatestForMatter(matterId);
+      setSelectedMatterPlanner(detail || null);
+
+      if (detail?.plan?.id && (detail.versions?.length || 0) > 1) {
+        const compare = await api.outcomeFeePlans.compare(detail.plan.id);
+        setSelectedMatterPlannerCompare(compare || null);
+      } else {
+        setSelectedMatterPlannerCompare(null);
+      }
+    } catch (error) {
+      console.error('Failed to refresh Outcome-to-Fee planner detail', error);
+      if (showErrors) {
+        toast.error('Failed to refresh planner details.');
+      }
+    }
+  };
+
+  const refreshOutcomePlannerPortfolioMetrics = async (showErrors = false) => {
+    setOutcomePlannerPortfolioMetricsLoading(true);
+    try {
+      const metrics = await api.outcomeFeePlans.metrics({ days: 90 });
+      setOutcomePlannerPortfolioMetrics(metrics || null);
+    } catch (error) {
+      console.error('Failed to load Outcome-to-Fee planner portfolio metrics', error);
+      if (showErrors) {
+        toast.error('Failed to load planner portfolio metrics.');
+      }
+    } finally {
+      setOutcomePlannerPortfolioMetricsLoading(false);
+    }
+  };
+
+  const refreshSelectedMatterCalibration = async (matterId: string, showErrors = false) => {
+    setSelectedMatterCalibrationLoading(true);
+    try {
+      const result = await api.outcomeFeePlans.getEffectiveCalibrationForMatter(matterId);
+      setSelectedMatterCalibration(result || null);
+    } catch (error) {
+      console.error('Failed to refresh planner calibration', error);
+      if (showErrors) {
+        toast.error('Failed to refresh calibration details.');
+      }
+    } finally {
+      setSelectedMatterCalibrationLoading(false);
+    }
+  };
+
+  const refreshSelectedMatterTransparencyWorkspace = async (matterId: string, showErrors = false) => {
+    setSelectedMatterTransparencyLoading(true);
+    setSelectedMatterTransparencyEvidenceLoading(true);
+    try {
+      const workspace = await api.clientTransparency.getReviewWorkspace(matterId);
+      setSelectedMatterTransparencyWorkspace(workspace || null);
+      const policy = workspace?.policy || {};
+      setSelectedMatterTransparencyPolicyDraft({
+        publishPolicy: String(policy.publishPolicy || 'warn_only'),
+        autoPublishSafe: !!policy.autoPublishSafe,
+        reviewRequiredForDelayReason: !!policy.reviewRequiredForDelayReason,
+        reviewRequiredForCostImpactChange: !!policy.reviewRequiredForCostImpactChange,
+        costImpactChangeThreshold: String(policy.costImpactChangeThreshold ?? '1000'),
+        blockOnLowConfidence: !!policy.blockOnLowConfidence,
+        lowConfidenceThreshold: String(policy.lowConfidenceThreshold ?? '0.55')
+      });
+      const draft = workspace?.draft;
+      const delayRows = (draft?.delayReasons || []) as Array<any>;
+      setSelectedMatterTransparencyDelayReasonEdits(
+        delayRows.reduce((acc: Record<string, string>, row) => {
+          if (row?.id) acc[String(row.id)] = String(row.clientSafeText ?? row.text ?? '');
+          return acc;
+        }, {})
+      );
+      setSelectedMatterTransparencyRewriteDraft(prev => ({
+        ...prev,
+        snapshotSummary: String(draft?.snapshot?.snapshotSummary ?? draft?.snapshot?.summary ?? ''),
+        whatChangedSummary: String(draft?.snapshot?.whatChangedSummary ?? draft?.snapshot?.whatChanged ?? ''),
+        nextStepActionText: String(draft?.nextStep?.actionText ?? ''),
+        nextStepBlockedByText: String(draft?.nextStep?.blockedByText ?? ''),
+        assignedTo: String(workspace?.pendingReviewItem?.assignedTo ?? '')
+      }));
+
+      const [metrics, draftEvidence, publishedEvidence] = await Promise.all([
+        api.clientTransparency.metrics({ days: 90, matterId }).catch(() => null),
+        workspace?.draft?.snapshot?.id ? api.clientTransparency.getSnapshotEvidence(String(workspace.draft.snapshot.id)).catch(() => null) : Promise.resolve(null),
+        workspace?.published?.snapshot?.id ? api.clientTransparency.getSnapshotEvidence(String(workspace.published.snapshot.id)).catch(() => null) : Promise.resolve(null)
+      ]);
+      setSelectedMatterTransparencyEvidenceMetrics(metrics || null);
+      setSelectedMatterTransparencyDraftEvidence(draftEvidence || null);
+      setSelectedMatterTransparencyPublishedEvidence(publishedEvidence || null);
+    } catch (error) {
+      console.error('Failed to refresh client transparency workspace', error);
+      if (showErrors) toast.error('Failed to refresh client transparency review workspace.');
+    } finally {
+      setSelectedMatterTransparencyLoading(false);
+      setSelectedMatterTransparencyEvidenceLoading(false);
+    }
+  };
+
+  const reverifySelectedMatterTransparencyEvidence = async () => {
+    if (!selectedMatter?.id) return;
+    setSelectedMatterTransparencyEvidenceActionLoading(true);
+    try {
+      const result = await api.clientTransparency.batchReverifyEvidence({
+        matterId: selectedMatter.id,
+        onlyPublished: false,
+        onlyCurrent: false,
+        days: 365,
+        limit: 20
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success(`Evidence reverify completed (${Number((result as any)?.reverified || 0)} snapshots).`);
+    } catch (error) {
+      console.error('Failed to batch reverify transparency evidence', error);
+      toast.error('Failed to reverify transparency evidence.');
+    } finally {
+      setSelectedMatterTransparencyEvidenceActionLoading(false);
+    }
+  };
+
+  const saveSelectedMatterTransparencyPolicy = async () => {
+    if (!selectedMatter?.id) return;
+    setSelectedMatterTransparencyPolicySaving(true);
+    try {
+      await api.clientTransparency.upsertMatterPolicy(selectedMatter.id, {
+        publishPolicy: selectedMatterTransparencyPolicyDraft.publishPolicy,
+        autoPublishSafe: selectedMatterTransparencyPolicyDraft.autoPublishSafe,
+        reviewRequiredForDelayReason: selectedMatterTransparencyPolicyDraft.reviewRequiredForDelayReason,
+        reviewRequiredForCostImpactChange: selectedMatterTransparencyPolicyDraft.reviewRequiredForCostImpactChange,
+        costImpactChangeThreshold: parseFloat(selectedMatterTransparencyPolicyDraft.costImpactChangeThreshold) || 1000,
+        blockOnLowConfidence: selectedMatterTransparencyPolicyDraft.blockOnLowConfidence,
+        lowConfidenceThreshold: parseFloat(selectedMatterTransparencyPolicyDraft.lowConfidenceThreshold) || 0.55
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success('Transparency publish policy saved.');
+    } catch (error) {
+      console.error('Failed to save client transparency policy', error);
+      toast.error('Failed to save transparency publish policy.');
+    } finally {
+      setSelectedMatterTransparencyPolicySaving(false);
+    }
+  };
+
+  const rewriteSelectedMatterTransparencyDraft = async () => {
+    const snapshotId = selectedMatterTransparencyWorkspace?.draft?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterTransparencyActionSaving(true);
+    try {
+      const draftDelayReasons = (selectedMatterTransparencyWorkspace?.draft?.delayReasons || []) as Array<any>;
+      await api.clientTransparency.reviewSnapshot(snapshotId, {
+        action: 'rewrite',
+        reason: selectedMatterTransparencyRewriteDraft.reason || 'Client-safe wording refinement',
+        assignedTo: selectedMatterTransparencyRewriteDraft.assignedTo || undefined,
+        snapshotSummary: selectedMatterTransparencyRewriteDraft.snapshotSummary || undefined,
+        whatChangedSummary: selectedMatterTransparencyRewriteDraft.whatChangedSummary || undefined,
+        nextStepActionText: selectedMatterTransparencyRewriteDraft.nextStepActionText || undefined,
+        nextStepBlockedByText: selectedMatterTransparencyRewriteDraft.nextStepBlockedByText || undefined,
+        delayReasonTextUpdates: draftDelayReasons.map((d) => ({ id: d.id, clientSafeText: selectedMatterTransparencyDelayReasonEdits[String(d.id)] ?? d.clientSafeText ?? d.text ?? '' }))
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success('Transparency draft rewrite saved.');
+    } catch (error) {
+      console.error('Failed to rewrite transparency draft', error);
+      toast.error('Failed to save transparency rewrite.');
+    } finally {
+      setSelectedMatterTransparencyActionSaving(false);
+    }
+  };
+
+  const approveAndPublishSelectedMatterTransparency = async () => {
+    const snapshotId = selectedMatterTransparencyWorkspace?.draft?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterTransparencyActionSaving(true);
+    try {
+      const draftDelayReasons = (selectedMatterTransparencyWorkspace?.draft?.delayReasons || []) as Array<any>;
+      await api.clientTransparency.reviewSnapshot(snapshotId, {
+        action: 'approve',
+        reason: selectedMatterTransparencyRewriteDraft.reason || 'Approved for client portal',
+        assignedTo: selectedMatterTransparencyRewriteDraft.assignedTo || undefined,
+        snapshotSummary: selectedMatterTransparencyRewriteDraft.snapshotSummary || undefined,
+        whatChangedSummary: selectedMatterTransparencyRewriteDraft.whatChangedSummary || undefined,
+        nextStepActionText: selectedMatterTransparencyRewriteDraft.nextStepActionText || undefined,
+        nextStepBlockedByText: selectedMatterTransparencyRewriteDraft.nextStepBlockedByText || undefined,
+        delayReasonTextUpdates: draftDelayReasons.map((d) => ({ id: d.id, clientSafeText: selectedMatterTransparencyDelayReasonEdits[String(d.id)] ?? d.clientSafeText ?? d.text ?? '' })),
+        publishAfter: true
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success('Transparency snapshot approved and published.');
+    } catch (error: any) {
+      console.error('Failed to approve/publish transparency snapshot', error);
+      const msg = String(error?.message || '');
+      if (msg.toLowerCase().includes('conflict') || msg.toLowerCase().includes('blocked by policy')) {
+        toast.error('Publish blocked by policy. Use Override Publish if appropriate.');
+      } else {
+        toast.error('Failed to approve/publish transparency snapshot.');
+      }
+    } finally {
+      setSelectedMatterTransparencyActionSaving(false);
+    }
+  };
+
+  const rejectSelectedMatterTransparency = async () => {
+    const snapshotId = selectedMatterTransparencyWorkspace?.draft?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterTransparencyActionSaving(true);
+    try {
+      await api.clientTransparency.reviewSnapshot(snapshotId, {
+        action: 'reject',
+        reason: selectedMatterTransparencyRewriteDraft.reason || 'Rejected - requires further internal revision',
+        assignedTo: selectedMatterTransparencyRewriteDraft.assignedTo || undefined
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success('Transparency snapshot rejected.');
+    } catch (error) {
+      console.error('Failed to reject transparency snapshot', error);
+      toast.error('Failed to reject transparency snapshot.');
+    } finally {
+      setSelectedMatterTransparencyActionSaving(false);
+    }
+  };
+
+  const overridePublishSelectedMatterTransparency = async () => {
+    const snapshotId = selectedMatterTransparencyWorkspace?.draft?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterTransparencyActionSaving(true);
+    try {
+      await api.clientTransparency.publishSnapshot(snapshotId, {
+        reason: selectedMatterTransparencyRewriteDraft.reason || 'Override publish from reviewer panel',
+        overridePolicy: true,
+        approverReason: selectedMatterTransparencyRewriteDraft.reason || 'Reviewed and approved override'
+      });
+      await refreshSelectedMatterTransparencyWorkspace(selectedMatter.id);
+      toast.success('Transparency snapshot published with override.');
+    } catch (error) {
+      console.error('Failed to override publish transparency snapshot', error);
+      toast.error('Failed to override publish transparency snapshot.');
+    } finally {
+      setSelectedMatterTransparencyActionSaving(false);
+    }
+  };
+
+  const runOutcomePlannerCalibrationShadowJob = async () => {
+    if (!selectedMatter?.id) return;
+    setSelectedMatterCalibrationJobRunning(true);
+    try {
+      const result = await api.outcomeFeePlans.runCalibrationJob({
+        days: 365,
+        minSampleSize: 5,
+        shadowMode: true,
+        autoActivateHighConfidence: false,
+        cohortScopes: ['combined', 'practice_court_arrangement', 'practice_arrangement'],
+        notes: `Triggered from matter ${selectedMatter.id} detail`
+      });
+      await refreshSelectedMatterCalibration(selectedMatter.id);
+      toast.success(`Calibration job completed (${result?.created ?? 0} snapshots, ${result?.autoActivated ?? 0} auto-activated).`);
+    } catch (error) {
+      console.error('Outcome-to-Fee calibration job failed', error);
+      toast.error('Calibration job failed.');
+    } finally {
+      setSelectedMatterCalibrationJobRunning(false);
+    }
+  };
+
+  const activateSelectedMatterShadowCalibration = async () => {
+    const snapshotId = selectedMatterCalibration?.shadow?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterCalibrationActionRunning(true);
+    try {
+      await api.outcomeFeePlans.activateCalibrationSnapshot(snapshotId, {
+        asShadow: false,
+        reason: 'Promoted shadow calibration from matter planner panel'
+      });
+      await refreshSelectedMatterCalibration(selectedMatter.id);
+      toast.success('Shadow calibration promoted to active.');
+    } catch (error) {
+      console.error('Failed to activate calibration snapshot', error);
+      toast.error('Failed to promote shadow calibration.');
+    } finally {
+      setSelectedMatterCalibrationActionRunning(false);
+    }
+  };
+
+  const rollbackSelectedMatterActiveCalibration = async () => {
+    const snapshotId = selectedMatterCalibration?.active?.snapshot?.id;
+    if (!snapshotId || !selectedMatter?.id) return;
+    setSelectedMatterCalibrationActionRunning(true);
+    try {
+      await api.outcomeFeePlans.rollbackCalibrationSnapshot(snapshotId, {
+        reason: 'Rollback from matter planner panel'
+      });
+      await refreshSelectedMatterCalibration(selectedMatter.id);
+      toast.success('Calibration rollback applied.');
+    } catch (error) {
+      console.error('Failed to rollback calibration snapshot', error);
+      toast.error('Failed to rollback calibration.');
+    } finally {
+      setSelectedMatterCalibrationActionRunning(false);
+    }
+  };
+
+  const recordSelectedMatterPlannerOutcomeFeedback = async () => {
+    if (!selectedMatterPlanner?.plan?.id) {
+      toast.error('No planner plan found for this matter.');
+      return;
+    }
+
+    setSelectedMatterOutcomeFeedbackSaving(true);
+    try {
+      const parseDecimalOrUndefined = (value: string) => {
+        const parsed = parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      };
+
+      await api.outcomeFeePlans.recordOutcomeFeedback(selectedMatterPlanner.plan.id, {
+        actualOutcome: selectedMatterOutcomeFeedbackDraft.actualOutcome || undefined,
+        actualFeesCollected: parseDecimalOrUndefined(selectedMatterOutcomeFeedbackDraft.actualFeesCollected),
+        actualCost: parseDecimalOrUndefined(selectedMatterOutcomeFeedbackDraft.actualCost),
+        actualMargin: parseDecimalOrUndefined(selectedMatterOutcomeFeedbackDraft.actualMargin),
+        notes: selectedMatterOutcomeFeedbackDraft.notes || undefined
+      });
+      setSelectedMatterOutcomeFeedbackDraft(defaultOutcomePlannerFeedbackDraft());
+      toast.success('Outcome feedback recorded for calibration.');
+    } catch (error) {
+      console.error('Failed to record outcome feedback', error);
+      toast.error('Failed to record outcome feedback.');
+    } finally {
+      setSelectedMatterOutcomeFeedbackSaving(false);
+    }
+  };
+
+  const recomputeSelectedMatterPlanner = async () => {
+    if (!selectedMatterPlanner?.plan?.id || !selectedMatter?.id) return;
+
+    setSelectedMatterPlannerRecomputing(true);
+    try {
+      const result = await api.outcomeFeePlans.recompute(selectedMatterPlanner.plan.id, {
+        triggerType: 'manual_recompute_from_matter_detail',
+        reason: 'User-triggered recompute from Matters detail'
+      });
+
+      if (result) {
+        setSelectedMatterPlanner(result);
+        if (result.plan?.id && (result.versions?.length || 0) > 1) {
+          const compare = await api.outcomeFeePlans.compare(result.plan.id);
+          setSelectedMatterPlannerCompare(compare || null);
+        } else {
+          setSelectedMatterPlannerCompare(null);
+        }
+        await refreshOutcomePlannerPortfolioMetrics();
+        toast.success(`Planner recomputed (v${result.currentVersion?.versionNumber ?? '?'})`);
+      } else {
+        await refreshSelectedMatterPlanner(selectedMatter.id, true);
+      }
+    } catch (error) {
+      console.error('Outcome-to-Fee planner recompute failed', error);
+      toast.error('Planner recompute failed.');
+    } finally {
+      setSelectedMatterPlannerRecomputing(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const selectedClient = formData.partyType === 'client'
       ? clients.find((c) => c.id === formData.partyId)
@@ -98,22 +872,42 @@ const Matters: React.FC = () => {
       : undefined;
 
     if (!selectedClient && !selectedLead) {
+      toast.error('Select a client or lead before creating a matter.');
       return;
     }
 
-    const resolvedClient: Client = selectedClient ?? {
-      id: `lead-${selectedLead?.id || Date.now()}`,
-      name: selectedLead?.name || '',
-      email: '',
-      phone: '',
-      type: 'Individual',
-      status: 'Active'
-    };
+    let resolvedClient: Client | null = selectedClient ?? null;
 
+    if (!resolvedClient && selectedLead) {
+      if (!selectedLead.email) {
+        toast.error('Lead email is required to create a matter. Please add an email or select a client.');
+        return;
+      }
+      try {
+        resolvedClient = await addClient({
+          name: selectedLead.name,
+          email: selectedLead.email,
+          phone: selectedLead.phone || '',
+          type: 'Individual',
+          status: 'Active'
+        });
+      } catch (error) {
+        console.error('Failed to create client from lead', error);
+        toast.error('Failed to create client from lead.');
+        return;
+      }
+    }
+
+    if (!resolvedClient) {
+      toast.error('Unable to resolve client for this matter.');
+      return;
+    }
+
+    const resolvedCaseNumber = formData.caseNumber || `24-${Math.floor(Math.random() * 10000)}`;
     const newMatter: Matter = {
       id: `m${Date.now()}`,
       name: formData.name,
-      caseNumber: formData.caseNumber || `24-${Math.floor(Math.random() * 10000)}`,
+      caseNumber: resolvedCaseNumber,
       practiceArea: formData.practiceArea,
       feeStructure: formData.feeStructure,
       status: CaseStatus.Open,
@@ -129,37 +923,70 @@ const Matters: React.FC = () => {
       entityId: formData.entityId || undefined,
       officeId: formData.officeId || undefined
     };
-    addMatter({
-      ...newMatter,
-      clientId: selectedClient?.id,
-      clientName: resolvedClient.name,
-      client: resolvedClient,
-      sourceLeadId: selectedLead?.id,
-      entityId: formData.entityId || undefined,
-      officeId: formData.officeId || undefined
-    });
-    setShowModal(false);
-    setFormData({
-      name: '',
-      caseNumber: '',
-      practiceArea: PracticeArea.CivilLitigation,
-      feeStructure: FeeStructure.Hourly,
-      partyId: '',
-      partyType: 'client',
-      trustAmount: '',
-      courtType: '',
-      bailStatus: 'None',
-      bailAmount: '',
-      outcome: '',
-      entityId: '',
-      officeId: '',
-      opposingPartyName: '',
-      opposingPartyType: 'Individual',
-      opposingPartyCompany: '',
-      opposingCounselName: '',
-      opposingCounselFirm: '',
-      opposingCounselEmail: ''
-    });
+    try {
+      await addMatter({
+        ...newMatter,
+        clientId: resolvedClient.id,
+        clientName: resolvedClient.name,
+        client: resolvedClient,
+        sourceLeadId: selectedLead?.id,
+        entityId: formData.entityId || undefined,
+        officeId: formData.officeId || undefined
+      });
+
+      if (outcomePlannerDraft.enabled && outcomePlannerDraft.autoSave) {
+        try {
+          setOutcomePlannerSaving(true);
+          const allMatters = await api.getMatters();
+          const createdMatter = (Array.isArray(allMatters) ? allMatters : [])
+            .filter((m: any) =>
+              m &&
+              m.caseNumber === resolvedCaseNumber &&
+              (m.clientId === resolvedClient?.id || m.client?.id === resolvedClient?.id) &&
+              m.name === formData.name)
+            .sort((a: any, b: any) => new Date(b.openDate || b.createdAt || 0).getTime() - new Date(a.openDate || a.createdAt || 0).getTime())[0];
+
+          if (createdMatter?.id) {
+            await persistOutcomePlannerForMatter(createdMatter);
+          } else {
+            toast.warning('Matter was created, but planner version could not be auto-saved (matter lookup failed).');
+          }
+        } catch (plannerError) {
+          console.error('Outcome-to-Fee planner save failed', plannerError);
+          toast.warning('Matter created, but Outcome-to-Fee Planner could not be saved.');
+        } finally {
+          setOutcomePlannerSaving(false);
+        }
+      }
+
+      setShowModal(false);
+      setFormData({
+        name: '',
+        caseNumber: '',
+        practiceArea: PracticeArea.CivilLitigation,
+        feeStructure: FeeStructure.Hourly,
+        partyId: '',
+        partyType: 'client',
+        trustAmount: '',
+        courtType: '',
+        bailStatus: 'None',
+        bailAmount: '',
+        outcome: '',
+        entityId: '',
+        officeId: '',
+        opposingPartyName: '',
+        opposingPartyType: 'Individual',
+        opposingPartyCompany: '',
+        opposingCounselName: '',
+        opposingCounselFirm: '',
+        opposingCounselEmail: ''
+      });
+      resetOutcomePlannerState();
+    } catch (error) {
+      console.error('Failed to create matter', error);
+      toast.error('Failed to create matter.');
+      setOutcomePlannerSaving(false);
+    }
   };
 
   // Generate a mock timeline based on matter creation + related data
@@ -177,35 +1004,53 @@ const Matters: React.FC = () => {
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   };
 
+  const closeDocViewer = () => {
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+    }
+    setDocObjectUrl(null);
+    setViewingDoc(null);
+    setDocContent('');
+  };
+
   const handleOpenDoc = async (doc: DocumentFile) => {
     setViewingDoc(doc);
     setLoadingContent(true);
     setDocContent('');
+    if (docObjectUrl) {
+      URL.revokeObjectURL(docObjectUrl);
+      setDocObjectUrl(null);
+    }
 
     try {
       if (doc.filePath) {
-        const path = doc.filePath.startsWith('/') ? doc.filePath : `/${doc.filePath}`;
-        const fileUrl = `${API_BASE_URL}${path}`;
+        const response = await api.downloadDocument(doc.id);
+        if (!response) {
+          throw new Error('Document download failed');
+        }
+
         if (doc.type === 'pdf') {
-          setDocContent(fileUrl);
+          const url = window.URL.createObjectURL(response.blob);
+          setDocObjectUrl(url);
+          setDocContent(url);
         } else if (doc.type === 'txt') {
-          const response = await fetch(fileUrl);
-          const text = await response.text();
+          const text = await response.blob.text();
           setDocContent(text);
         } else if (doc.type === 'docx') {
-          const response = await fetch(fileUrl);
-          const arrayBuffer = await response.arrayBuffer();
+          const arrayBuffer = await response.blob.arrayBuffer();
           const result = await mammoth.convertToHtml({ arrayBuffer });
           setDocContent(result.value);
         } else {
-          setDocContent(fileUrl);
+          const url = window.URL.createObjectURL(response.blob);
+          setDocObjectUrl(url);
+          setDocContent(url);
         }
         return;
       }
 
       if (!doc.content) {
         toast.warning('No content is available for this file. Please upload it again.');
-        setViewingDoc(null);
+        closeDocViewer();
         return;
       }
 
@@ -229,7 +1074,7 @@ const Matters: React.FC = () => {
     } catch (error) {
       console.error('Error opening document:', error);
       toast.error('Unable to open the file.');
-      setViewingDoc(null);
+      closeDocViewer();
     } finally {
       setLoadingContent(false);
     }
@@ -238,20 +1083,15 @@ const Matters: React.FC = () => {
   const handleDownloadDoc = async (doc: DocumentFile) => {
     try {
       if (doc.filePath) {
-        const path = doc.filePath.startsWith('/') ? doc.filePath : `/${doc.filePath}`;
-        const fileUrl = `${API_BASE_URL}${path}`;
-        const token = localStorage.getItem('auth_token');
-        const response = await fetch(fileUrl, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {}
-        });
-        if (!response.ok) {
+        const response = await api.downloadDocument(doc.id);
+        if (!response) {
           throw new Error('File download failed');
         }
-        const blob = await response.blob();
+        const blob = response.blob;
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = doc.name;
+        link.download = response.filename || doc.name;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -278,12 +1118,60 @@ const Matters: React.FC = () => {
 
   const filteredMatters = matters.filter(m => {
     const q = search.toLowerCase();
-    const matchesQuery = [m.name, m.client.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));
+    const matchesQuery = [m.name, m.client?.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));
     const matchesStatus = statusFilter === 'all' ? true : m.status === statusFilter;
     const matchesEntity = !entityFilter || m.entityId === entityFilter;
     const matchesOffice = !officeFilter || m.officeId === officeFilter;
     return matchesQuery && matchesStatus && matchesEntity && matchesOffice;
   });
+
+  const selectedMatterPlannerBaseScenario = useMemo(() => {
+    if (!selectedMatterPlanner?.scenarios?.length) return null;
+    return selectedMatterPlanner.scenarios.find(s => s.scenarioKey === 'base') || selectedMatterPlanner.scenarios[0];
+  }, [selectedMatterPlanner]);
+
+  const selectedMatterPlannerCompareBaseDelta = useMemo(() => {
+    const deltas = (selectedMatterPlannerCompare?.scenarioDeltas || []) as Array<Record<string, any>>;
+    return deltas.find(d => String(d?.scenarioKey || '').toLowerCase() === 'base') || deltas[0] || null;
+  }, [selectedMatterPlannerCompare]);
+
+  const selectedMatterPlannerPhaseDeltas = useMemo(() => {
+    const rows = ((selectedMatterPlannerCompare as any)?.phaseDeltas || []) as Array<Record<string, any>>;
+    return [...rows].sort((a, b) => Number(a?.phaseOrder || 0) - Number(b?.phaseOrder || 0));
+  }, [selectedMatterPlannerCompare]);
+
+  const selectedMatterPlannerPhaseDeltaMaxFeeRatio = useMemo(() => {
+    if (!selectedMatterPlannerPhaseDeltas.length) return 0;
+    return selectedMatterPlannerPhaseDeltas.reduce((max, row) => {
+      const ratio = Math.abs(Number((row?.delta as any)?.feeDeltaRatio || 0));
+      return Math.max(max, ratio);
+    }, 0);
+  }, [selectedMatterPlannerPhaseDeltas]);
+
+  const selectedMatterPlannerDriftSummary = (selectedMatterPlannerCompare?.driftSummary || null) as Record<string, any> | null;
+  const selectedMatterPlannerActuals = (selectedMatterPlannerCompare?.actuals || null) as Record<string, any> | null;
+  const selectedMatterPlannerBaseScenarioMetadata = useMemo(() => {
+    const json = selectedMatterPlannerBaseScenario?.metadataJson;
+    if (!json) return null;
+    try {
+      return JSON.parse(json) as Record<string, any>;
+    } catch {
+      return null;
+    }
+  }, [selectedMatterPlannerBaseScenario?.metadataJson]);
+  const selectedMatterPlannerCollectionsIntel = (selectedMatterPlannerBaseScenarioMetadata?.collectionsIntelligence || null) as Record<string, any> | null;
+  const selectedMatterPlannerStaffingIntel = (selectedMatterPlannerBaseScenarioMetadata?.staffingIntelligence || null) as Record<string, any> | null;
+  const selectedMatterPlannerMarginIntel = (selectedMatterPlannerBaseScenarioMetadata?.marginIntelligence || null) as Record<string, any> | null;
+  const selectedMatterPlannerStressTests = (selectedMatterPlannerBaseScenarioMetadata?.stressTests || []) as Array<Record<string, any>>;
+  const outcomePlannerPortfolioMetricsData = (outcomePlannerPortfolioMetrics?.metrics || null) as Record<string, any> | null;
+  const selectedMatterCalibrationActive = (selectedMatterCalibration?.active || null) as Record<string, any> | null;
+  const selectedMatterCalibrationShadow = (selectedMatterCalibration?.shadow || null) as Record<string, any> | null;
+  const selectedMatterCalibrationActiveSnapshot = (selectedMatterCalibrationActive?.snapshot || null) as Record<string, any> | null;
+  const selectedMatterCalibrationShadowSnapshot = (selectedMatterCalibrationShadow?.snapshot || null) as Record<string, any> | null;
+  const selectedMatterCalibrationActiveMetrics = (selectedMatterCalibrationActive?.metrics || null) as Record<string, any> | null;
+  const selectedMatterCalibrationShadowMetrics = (selectedMatterCalibrationShadow?.metrics || null) as Record<string, any> | null;
+  const selectedMatterCalibrationActivePayload = (selectedMatterCalibrationActive?.payload || null) as Record<string, any> | null;
+  const selectedMatterCalibrationShadowPayload = (selectedMatterCalibrationShadow?.payload || null) as Record<string, any> | null;
 
   return (
     <div className="p-8 h-full flex flex-col bg-gray-50/50 relative">
@@ -294,7 +1182,7 @@ const Matters: React.FC = () => {
         </div>
         <Can perform="matter.create">
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => { resetOutcomePlannerState(); setShowModal(true); }}
             className="bg-slate-800 text-white px-5 py-2.5 rounded-lg shadow-lg hover:bg-slate-700 transition-colors text-sm font-medium flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
@@ -385,11 +1273,11 @@ const Matters: React.FC = () => {
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center text-xs font-bold uppercase">
-                          {matter.client.name.substring(0, 2)}
+                          {(matter.client?.name || '?').substring(0, 2)}
                         </div>
                         <div className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-700">{matter.client.name}</span>
-                          {matter.client.company && <span className="text-xs text-gray-400">{matter.client.company}</span>}
+                          <span className="text-sm font-semibold text-slate-700">{matter.client?.name || 'Unknown Client'}</span>
+                      {matter.client?.company && <span className="text-xs text-gray-400">{matter.client.company}</span>}
                         </div>
                       </div>
                     </td>
@@ -430,7 +1318,7 @@ const Matters: React.FC = () => {
       {selectedMatter && (
         <div className="absolute inset-0 z-20 flex justify-end">
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-[1px]" onClick={() => setSelectedMatter(null)}></div>
-          <div className="relative w-full max-w-lg bg-white h-full shadow-2xl animate-in slide-in-from-right duration-300 flex flex-col">
+          <div className="relative w-full max-w-lg bg-white h-full min-h-0 overflow-y-auto shadow-2xl animate-in slide-in-from-right duration-300 flex flex-col">
             {/* Header */}
             <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
               <div>
@@ -439,7 +1327,7 @@ const Matters: React.FC = () => {
                   <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase">{selectedMatter.status}</span>
                 </div>
                 <h2 className="text-xl font-bold text-slate-900">{selectedMatter.name}</h2>
-                <p className="text-sm text-gray-500 mt-0.5">{selectedMatter.client.name} - {selectedMatter.practiceArea} {selectedMatter.courtType && `- ${selectedMatter.courtType}`}</p>
+                <p className="text-sm text-gray-500 mt-0.5">{selectedMatter.client?.name || 'Unknown Client'} - {selectedMatter.practiceArea} {selectedMatter.courtType && `- ${selectedMatter.courtType}`}</p>
               </div>
               <button onClick={() => setSelectedMatter(null)} className="p-1 hover:bg-gray-200 rounded-full text-gray-400"><X className="w-6 h-6" /></button>
             </div>
@@ -456,8 +1344,746 @@ const Matters: React.FC = () => {
               </div>
             </div>
 
+            {/* Client Transparency Reviewer (Phase 3) */}
+            <div className="px-6 py-5 border-b border-gray-100 bg-emerald-50/30">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Client Transparency Review</h3>
+                  <p className="text-xs text-gray-500">Draft vs published snapshot, client-safe wording review, and publish policy</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => selectedMatter?.id && refreshSelectedMatterTransparencyWorkspace(selectedMatter.id, true)}
+                  disabled={!selectedMatter?.id || selectedMatterTransparencyLoading}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                >
+                  {selectedMatterTransparencyLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+
+              {selectedMatterTransparencyLoading && !selectedMatterTransparencyWorkspace ? (
+                <div className="text-xs text-gray-500">Loading transparency review workspace...</div>
+              ) : !selectedMatterTransparencyWorkspace ? (
+                <div className="text-xs text-gray-500">No transparency review workspace available yet.</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="bg-white border border-emerald-100 rounded-lg p-3">
+                      <p className="text-[11px] font-bold uppercase text-emerald-700 mb-1">Draft Snapshot</p>
+                      {selectedMatterTransparencyWorkspace?.draft?.snapshot ? (
+                        <div className="space-y-1 text-[11px] text-slate-700">
+                          <p className="font-semibold">
+                            v{selectedMatterTransparencyWorkspace.draft.snapshot.versionNumber} • {String(selectedMatterTransparencyWorkspace.draft.snapshot.status || 'generated')}
+                          </p>
+                          <p>Confidence: {Math.round(Number(selectedMatterTransparencyWorkspace.draft.snapshot.confidenceScore || 0) * 100)}%</p>
+                          <p>Data quality: {String(selectedMatterTransparencyWorkspace.draft.snapshot.dataQuality || 'unknown')}</p>
+                          <p className="text-xs text-slate-800">{String(selectedMatterTransparencyWorkspace.draft.snapshot.snapshotSummary || '')}</p>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-gray-500">No draft snapshot.</p>
+                      )}
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-lg p-3">
+                      <p className="text-[11px] font-bold uppercase text-slate-500 mb-1">Published Snapshot</p>
+                      {selectedMatterTransparencyWorkspace?.published?.snapshot ? (
+                        <div className="space-y-1 text-[11px] text-slate-700">
+                          <p className="font-semibold">
+                            v{selectedMatterTransparencyWorkspace.published.snapshot.versionNumber} • published
+                          </p>
+                          <p>
+                            {selectedMatterTransparencyWorkspace.published.snapshot.publishedAt
+                              ? new Date(selectedMatterTransparencyWorkspace.published.snapshot.publishedAt).toLocaleString()
+                              : 'Published date unavailable'}
+                          </p>
+                          <p className="text-xs text-slate-800">{String(selectedMatterTransparencyWorkspace.published.snapshot.snapshotSummary || '')}</p>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-gray-500">No published snapshot yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase text-slate-500">Publish Policy</p>
+                      <button
+                        type="button"
+                        onClick={saveSelectedMatterTransparencyPolicy}
+                        disabled={selectedMatterTransparencyPolicySaving}
+                        className="px-2 py-1 text-[11px] font-bold rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {selectedMatterTransparencyPolicySaving ? 'Saving...' : 'Save Policy'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={selectedMatterTransparencyPolicyDraft.publishPolicy}
+                        onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, publishPolicy: e.target.value }))}
+                        className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      >
+                        <option value="warn_only">warn_only</option>
+                        <option value="auto_publish_safe">auto_publish_safe</option>
+                        <option value="review_required_for_delay_reason">review_required_for_delay_reason</option>
+                        <option value="review_required_for_cost_impact_change_gt_x">review_required_for_cost_impact_change_gt_x</option>
+                        <option value="block_on_low_confidence">block_on_low_confidence</option>
+                      </select>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={selectedMatterTransparencyPolicyDraft.costImpactChangeThreshold}
+                        onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, costImpactChangeThreshold: e.target.value }))}
+                        className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                        placeholder="Cost impact threshold"
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        value={selectedMatterTransparencyPolicyDraft.lowConfidenceThreshold}
+                        onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, lowConfidenceThreshold: e.target.value }))}
+                        className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                        placeholder="Low confidence threshold"
+                      />
+                      <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-700">
+                        <label className="flex items-center gap-1"><input type="checkbox" checked={selectedMatterTransparencyPolicyDraft.autoPublishSafe} onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, autoPublishSafe: e.target.checked }))} />Auto-safe</label>
+                        <label className="flex items-center gap-1"><input type="checkbox" checked={selectedMatterTransparencyPolicyDraft.blockOnLowConfidence} onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, blockOnLowConfidence: e.target.checked }))} />Block low conf</label>
+                        <label className="flex items-center gap-1"><input type="checkbox" checked={selectedMatterTransparencyPolicyDraft.reviewRequiredForDelayReason} onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, reviewRequiredForDelayReason: e.target.checked }))} />Delay review</label>
+                        <label className="flex items-center gap-1"><input type="checkbox" checked={selectedMatterTransparencyPolicyDraft.reviewRequiredForCostImpactChange} onChange={(e) => setSelectedMatterTransparencyPolicyDraft(prev => ({ ...prev, reviewRequiredForCostImpactChange: e.target.checked }))} />Cost review</label>
+                      </div>
+                    </div>
+                    {selectedMatterTransparencyWorkspace?.draftPolicyEvaluation && (
+                      <div className="rounded border border-amber-100 bg-amber-50/40 p-2 text-[11px] text-slate-700">
+                        <p className="font-semibold text-amber-700 mb-1">
+                          Decision: {String(selectedMatterTransparencyWorkspace.draftPolicyEvaluation.publishDecision || 'unknown')}
+                        </p>
+                        <p>Requires Review: {String(!!selectedMatterTransparencyWorkspace.draftPolicyEvaluation.requiresReview)} • Blocked: {String(!!selectedMatterTransparencyWorkspace.draftPolicyEvaluation.blocked)}</p>
+                        {Array.isArray(selectedMatterTransparencyWorkspace.draftPolicyEvaluation.reasons) && selectedMatterTransparencyWorkspace.draftPolicyEvaluation.reasons.length > 0 && (
+                          <p className="mt-1">Reasons: {selectedMatterTransparencyWorkspace.draftPolicyEvaluation.reasons.map((r: string) => r.replaceAll('_', ' ')).join(', ')}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase text-slate-500">Draft vs Published Compare</p>
+                      <span className="text-[10px] text-gray-400">
+                        Review item: {selectedMatterTransparencyWorkspace?.pendingReviewItem?.status || 'none'}
+                      </span>
+                    </div>
+                    {selectedMatterTransparencyWorkspace?.draftVsPublished ? (
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-700">
+                        <p>Summary changed: {String(!!selectedMatterTransparencyWorkspace.draftVsPublished.summaryChanged)}</p>
+                        <p>What changed updated: {String(!!selectedMatterTransparencyWorkspace.draftVsPublished.whatChangedUpdated)}</p>
+                        <p>Next step changed: {String(!!selectedMatterTransparencyWorkspace.draftVsPublished.nextStepChanged)}</p>
+                        <p>Cost impact changed: {String(!!selectedMatterTransparencyWorkspace.draftVsPublished.costImpactChanged)}</p>
+                        <p className="col-span-2">
+                          Delay added: {Array.isArray(selectedMatterTransparencyWorkspace.draftVsPublished.delayAdded) && selectedMatterTransparencyWorkspace.draftVsPublished.delayAdded.length > 0
+                            ? selectedMatterTransparencyWorkspace.draftVsPublished.delayAdded.join(', ')
+                            : 'none'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-gray-500">No compare data.</div>
+                    )}
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase text-slate-500">Evidence Quality (Phase 4)</p>
+                      <button
+                        type="button"
+                        onClick={reverifySelectedMatterTransparencyEvidence}
+                        disabled={selectedMatterTransparencyEvidenceActionLoading || !selectedMatter?.id}
+                        className="px-2 py-1 text-[11px] font-bold rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                      >
+                        {selectedMatterTransparencyEvidenceActionLoading ? 'Reverifying...' : 'Batch Re-verify'}
+                      </button>
+                    </div>
+                    {selectedMatterTransparencyEvidenceLoading ? (
+                      <div className="text-[11px] text-gray-500">Loading evidence metrics...</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedMatterTransparencyEvidenceMetrics ? (
+                          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-700">
+                            <div>Coverage: {Math.round(Number(selectedMatterTransparencyEvidenceMetrics.coverageRate || 0) * 100)}%</div>
+                            <div>Stale rate: {Math.round(Number(selectedMatterTransparencyEvidenceMetrics.staleRate || 0) * 100)}%</div>
+                            <div>Snapshots: {Number(selectedMatterTransparencyEvidenceMetrics.snapshotCount || 0)}</div>
+                            <div>Pending reviews: {Number(selectedMatterTransparencyEvidenceMetrics.pendingReviewCount || 0)}</div>
+                            <div>Review burden avg: {Number(selectedMatterTransparencyEvidenceMetrics.reviewBurdenAverage || 0).toFixed(1)}</div>
+                            <div>Mean review hrs: {selectedMatterTransparencyEvidenceMetrics.meanReviewTurnaroundHours != null ? Number(selectedMatterTransparencyEvidenceMetrics.meanReviewTurnaroundHours).toFixed(1) : 'n/a'}</div>
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-gray-500">No metrics available.</div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div className="rounded border border-emerald-100 bg-emerald-50/30 p-2">
+                            <div className="text-[10px] font-bold uppercase text-emerald-700 mb-1">Draft Evidence</div>
+                            {selectedMatterTransparencyDraftEvidence?.quality ? (
+                              <div className="text-[11px] text-slate-700 space-y-1">
+                                <p>Coverage: {Math.round(Number(selectedMatterTransparencyDraftEvidence.quality.coverage || 0) * 100)}%</p>
+                                <p>Stale sources: {Number(selectedMatterTransparencyDraftEvidence.quality.staleSources || 0)}</p>
+                                <p>Total sources: {Number(selectedMatterTransparencyDraftEvidence.quality.totalSources || 0)}</p>
+                              </div>
+                            ) : <div className="text-[11px] text-gray-500">No draft evidence.</div>}
+                          </div>
+                          <div className="rounded border border-slate-200 bg-slate-50/50 p-2">
+                            <div className="text-[10px] font-bold uppercase text-slate-600 mb-1">Published Evidence</div>
+                            {selectedMatterTransparencyPublishedEvidence?.quality ? (
+                              <div className="text-[11px] text-slate-700 space-y-1">
+                                <p>Coverage: {Math.round(Number(selectedMatterTransparencyPublishedEvidence.quality.coverage || 0) * 100)}%</p>
+                                <p>Stale sources: {Number(selectedMatterTransparencyPublishedEvidence.quality.staleSources || 0)}</p>
+                                <p>Total sources: {Number(selectedMatterTransparencyPublishedEvidence.quality.totalSources || 0)}</p>
+                              </div>
+                            ) : <div className="text-[11px] text-gray-500">No published evidence.</div>}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                    <p className="text-[11px] font-bold uppercase text-slate-500">Client-Safe Wording Review</p>
+                    <input
+                      type="text"
+                      value={selectedMatterTransparencyRewriteDraft.assignedTo}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, assignedTo: e.target.value }))}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="Assign review item to user id (optional)"
+                    />
+                    <textarea
+                      value={selectedMatterTransparencyRewriteDraft.snapshotSummary}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, snapshotSummary: e.target.value }))}
+                      rows={2}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="Client-facing summary"
+                    />
+                    <textarea
+                      value={selectedMatterTransparencyRewriteDraft.whatChangedSummary}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, whatChangedSummary: e.target.value }))}
+                      rows={2}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="What changed summary"
+                    />
+                    <textarea
+                      value={selectedMatterTransparencyRewriteDraft.nextStepActionText}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, nextStepActionText: e.target.value }))}
+                      rows={2}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="Next step action text"
+                    />
+                    <input
+                      type="text"
+                      value={selectedMatterTransparencyRewriteDraft.nextStepBlockedByText}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, nextStepBlockedByText: e.target.value }))}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="Next step blocked-by text (optional)"
+                    />
+                    {Array.isArray(selectedMatterTransparencyWorkspace?.draft?.delayReasons) && selectedMatterTransparencyWorkspace.draft.delayReasons.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-semibold text-slate-600">Delay reasons (client-safe text)</p>
+                        {selectedMatterTransparencyWorkspace.draft.delayReasons.map((delay: any) => (
+                          <div key={String(delay.id)} className="rounded border border-amber-100 bg-amber-50/30 p-2">
+                            <p className="text-[10px] font-bold uppercase text-amber-700 mb-1">
+                              {String(delay.reasonCode || delay.code || 'delay').replaceAll('_', ' ')}
+                            </p>
+                            <textarea
+                              value={selectedMatterTransparencyDelayReasonEdits[String(delay.id)] ?? ''}
+                              onChange={(e) => setSelectedMatterTransparencyDelayReasonEdits(prev => ({ ...prev, [String(delay.id)]: e.target.value }))}
+                              rows={2}
+                              className="w-full px-2 py-1.5 text-xs border border-amber-100 rounded-md bg-white"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <textarea
+                      value={selectedMatterTransparencyRewriteDraft.reason}
+                      onChange={(e) => setSelectedMatterTransparencyRewriteDraft(prev => ({ ...prev, reason: e.target.value }))}
+                      rows={2}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                      placeholder="Reviewer reason / publish note"
+                    />
+                    <div className="flex flex-wrap gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={rewriteSelectedMatterTransparencyDraft}
+                        disabled={selectedMatterTransparencyActionSaving || !selectedMatterTransparencyWorkspace?.draft?.snapshot?.id}
+                        className="px-3 py-1.5 text-xs font-bold rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {selectedMatterTransparencyActionSaving ? 'Saving...' : 'Save Rewrite'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={rejectSelectedMatterTransparency}
+                        disabled={selectedMatterTransparencyActionSaving || !selectedMatterTransparencyWorkspace?.draft?.snapshot?.id}
+                        className="px-3 py-1.5 text-xs font-bold rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={approveAndPublishSelectedMatterTransparency}
+                        disabled={selectedMatterTransparencyActionSaving || !selectedMatterTransparencyWorkspace?.draft?.snapshot?.id}
+                        className="px-3 py-1.5 text-xs font-bold rounded border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                      >
+                        Approve & Publish
+                      </button>
+                      <button
+                        type="button"
+                        onClick={overridePublishSelectedMatterTransparency}
+                        disabled={selectedMatterTransparencyActionSaving || !selectedMatterTransparencyWorkspace?.draft?.snapshot?.id}
+                        className="px-3 py-1.5 text-xs font-bold rounded border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Override Publish
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Outcome-to-Fee Planner (Phase 3 Drift View) */}
+            <div className="px-6 py-5 border-b border-gray-100 bg-slate-50/60">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Outcome-to-Fee Planner</h3>
+                  <p className="text-xs text-gray-500">Dynamic forecast drift and version deltas</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!selectedMatterPlanner?.plan?.id || selectedMatterPlannerRecomputing}
+                  onClick={recomputeSelectedMatterPlanner}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {selectedMatterPlannerRecomputing ? 'Recomputing...' : 'Recompute'}
+                </button>
+              </div>
+
+              {selectedMatterPlannerLoading ? (
+                <div className="text-xs text-gray-500">Loading planner...</div>
+              ) : !selectedMatterPlanner?.plan ? (
+                <div className="text-xs text-gray-500">No planner version saved for this matter yet.</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white border border-slate-200 rounded-lg p-3">
+                      <p className="text-[11px] font-bold uppercase text-slate-500 mb-1">Current Version</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-bold text-slate-800">v{selectedMatterPlanner.currentVersion?.versionNumber ?? '?'}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 uppercase">
+                          {selectedMatterPlanner.currentVersion?.plannerMode || selectedMatterPlanner.plan.plannerMode}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        {selectedMatterPlanner.versions?.length || 0} version(s)
+                      </p>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-lg p-3">
+                      <p className="text-[11px] font-bold uppercase text-slate-500 mb-1">Base Scenario</p>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {selectedMatterPlannerBaseScenario?.name || 'Base'}
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Budget {formatCurrency(Number(selectedMatterPlannerBaseScenario?.budgetTotal || 0))} •
+                        Collected {formatCurrency(Number(selectedMatterPlannerBaseScenario?.expectedCollected || 0))}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-[11px] font-bold uppercase text-slate-500">Planner KPI Dashboard (90d)</p>
+                      <span className="text-[10px] text-gray-400">
+                        {outcomePlannerPortfolioMetricsLoading ? 'Loading...' : (outcomePlannerPortfolioMetrics?.dataQuality || 'n/a')}
+                      </span>
+                    </div>
+                    {outcomePlannerPortfolioMetricsData ? (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Forecast Accuracy</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(outcomePlannerPortfolioMetricsData.forecastAccuracy || 0) * 100)}%
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Collections Err</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(outcomePlannerPortfolioMetricsData.collectionsForecastError || 0) * 100)}%
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Margin Err</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(outcomePlannerPortfolioMetricsData.marginForecastError || 0) * 100)}%
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Staffing Var</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(outcomePlannerPortfolioMetricsData.staffingVariance || 0) * 100)}%
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500">No portfolio planner metrics available yet.</div>
+                    )}
+                  </div>
+
+                  {selectedMatterPlannerCompare && (
+                    <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-bold uppercase text-slate-500">Version Compare</p>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                          String(selectedMatterPlannerDriftSummary?.severity || 'low').toLowerCase() === 'high'
+                            ? 'bg-red-100 text-red-700'
+                            : String(selectedMatterPlannerDriftSummary?.severity || 'low').toLowerCase() === 'medium'
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-emerald-100 text-emerald-700'
+                        }`}>
+                          {String(selectedMatterPlannerDriftSummary?.severity || 'low')}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        v{selectedMatterPlannerCompare.fromVersionNumber ?? '?'} → v{selectedMatterPlannerCompare.toVersionNumber ?? '?'}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Hours Drift</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(selectedMatterPlannerDriftSummary?.hoursDriftRatio || 0) * 100)}%
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Collections Drift</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(selectedMatterPlannerDriftSummary?.collectionsDriftRatio || 0) * 100)}%
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                          <p className="text-[10px] uppercase font-bold text-gray-500">Margin Compression</p>
+                          <p className="text-sm font-bold text-slate-800">
+                            {Math.round(Number(selectedMatterPlannerDriftSummary?.marginCompressionRatio || 0) * 100)}%
+                          </p>
+                        </div>
+                      </div>
+
+                      {selectedMatterPlannerActuals && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded border border-gray-200 p-2 bg-white">
+                            <p className="text-[10px] uppercase font-bold text-gray-500">Actual Hours</p>
+                            <p className="text-sm font-semibold text-slate-800">{Number(selectedMatterPlannerActuals.actualHours || 0).toFixed(2)}</p>
+                          </div>
+                          <div className="rounded border border-gray-200 p-2 bg-white">
+                            <p className="text-[10px] uppercase font-bold text-gray-500">Collected Net</p>
+                            <p className="text-sm font-semibold text-slate-800">{formatCurrency(Number(selectedMatterPlannerActuals.collectedNet || 0))}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedMatterPlannerCompareBaseDelta && (
+                        <div className="rounded border border-slate-200 p-2 bg-slate-50">
+                          <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Base Scenario Delta</p>
+                          <p className="text-xs text-slate-700">
+                            Budget Δ {formatCurrency(Number((selectedMatterPlannerCompareBaseDelta as any)?.delta?.budgetTotal || 0))} •
+                            Collected Δ {formatCurrency(Number((selectedMatterPlannerCompareBaseDelta as any)?.delta?.expectedCollected || 0))} •
+                            Margin Δ {formatCurrency(Number((selectedMatterPlannerCompareBaseDelta as any)?.delta?.expectedMargin || 0))}
+                          </p>
+                        </div>
+                      )}
+
+                      {selectedMatterPlannerPhaseDeltas.length > 0 && (
+                        <div className="rounded border border-slate-200 p-2 bg-white">
+                          <p className="text-[10px] font-bold uppercase text-slate-500 mb-2">Phase-Level Delta Chart (Base)</p>
+                          <div className="space-y-2">
+                            {selectedMatterPlannerPhaseDeltas.slice(0, 7).map((row, idx) => {
+                              const delta = (row?.delta || {}) as Record<string, any>;
+                              const feeDelta = Number(delta.feeExpected || 0);
+                              const hoursDelta = Number(delta.hoursExpected || 0);
+                              const feeDeltaRatio = Math.abs(Number(delta.feeDeltaRatio || 0));
+                              const widthPct = selectedMatterPlannerPhaseDeltaMaxFeeRatio > 0
+                                ? Math.max(8, Math.round((feeDeltaRatio / selectedMatterPlannerPhaseDeltaMaxFeeRatio) * 100))
+                                : 8;
+                              const positive = feeDelta >= 0;
+                              return (
+                                <div key={`${String(row?.phaseCode || 'phase')}-${idx}`} className="grid grid-cols-[110px_1fr_auto] gap-2 items-center">
+                                  <div>
+                                    <p className="text-[11px] font-semibold text-slate-700 truncate">{String(row?.name || row?.phaseCode || 'Phase')}</p>
+                                    <p className="text-[10px] text-gray-500">{hoursDelta >= 0 ? '+' : ''}{hoursDelta.toFixed(1)}h</p>
+                                  </div>
+                                  <div className="h-2 rounded bg-gray-100 overflow-hidden">
+                                    <div className={`h-full rounded ${positive ? 'bg-emerald-400' : 'bg-red-400'}`} style={{ width: `${widthPct}%` }} />
+                                  </div>
+                                  <div className={`text-[10px] font-bold ${positive ? 'text-emerald-700' : 'text-red-700'}`}>
+                                    {feeDelta >= 0 ? '+' : ''}{formatCurrency(feeDelta)}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(selectedMatterPlannerCollectionsIntel || selectedMatterPlannerStaffingIntel || selectedMatterPlannerMarginIntel || selectedMatterPlannerStressTests.length > 0) && (
+                    <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-3">
+                      <p className="text-[11px] font-bold uppercase text-slate-500">Phase 4 Intelligence (Base Scenario)</p>
+
+                      {selectedMatterPlannerCollectionsIntel && (
+                        <div className="rounded border border-blue-100 bg-blue-50/40 p-2">
+                          <p className="text-[10px] font-bold uppercase text-blue-700 mb-1">Collections Intelligence</p>
+                          <div className="text-xs text-slate-700 space-y-1">
+                            <p>
+                              Trust vs Operating: {Math.round(Number(selectedMatterPlannerCollectionsIntel?.trustFundingBehavior?.trustFundedWeight || 0) * 100)}% /
+                              {' '}{Math.round(Number(selectedMatterPlannerCollectionsIntel?.trustFundingBehavior?.operatingFundedWeight || 0) * 100)}%
+                            </p>
+                            {Array.isArray(selectedMatterPlannerCollectionsIntel?.payorSegments) && selectedMatterPlannerCollectionsIntel.payorSegments.length > 0 && (
+                              <p>
+                                Payor Mix:{' '}
+                                {selectedMatterPlannerCollectionsIntel.payorSegments
+                                  .slice(0, 3)
+                                  .map((seg: any) => `${String(seg.segment)} ${Math.round(Number(seg.weight || 0) * 100)}%`)
+                                  .join(' • ')}
+                              </p>
+                            )}
+                            {selectedMatterPlannerCollectionsIntel?.paymentRailImpact && (
+                              <p>
+                                Rail Impact:{' '}
+                                {['card', 'ach', 'echeck'].map((rail) => {
+                                  const item = selectedMatterPlannerCollectionsIntel.paymentRailImpact?.[rail];
+                                  if (!item) return null;
+                                  return `${rail.toUpperCase()} speed ${Math.round(Number(item.collectionSpeedAdj || 0) * 100)}% / fee ${Math.round(Number(item.feeCostAdj || 0) * 100)}%`;
+                                }).filter(Boolean).join(' • ')}
+                              </p>
+                            )}
+                            <p className="text-[11px] text-blue-700">{String(selectedMatterPlannerCollectionsIntel?.trustFundingBehavior?.guidance || '')}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedMatterPlannerStaffingIntel && (
+                        <div className="rounded border border-violet-100 bg-violet-50/40 p-2">
+                          <p className="text-[10px] font-bold uppercase text-violet-700 mb-1">Staffing Intelligence</p>
+                          <div className="text-xs text-slate-700 space-y-1">
+                            <p>
+                              Blended Rates: Bill {formatCurrency(Number(selectedMatterPlannerStaffingIntel?.blendedRates?.bill || 0))} / Cost {formatCurrency(Number(selectedMatterPlannerStaffingIntel?.blendedRates?.cost || 0))}
+                            </p>
+                            <p>
+                              Handoff Cost: {Number(selectedMatterPlannerStaffingIntel?.handoffCost?.expectedHours || 0).toFixed(1)}h / {formatCurrency(Number(selectedMatterPlannerStaffingIntel?.handoffCost?.expectedCost || 0))}
+                            </p>
+                            {Array.isArray(selectedMatterPlannerStaffingIntel?.utilizationAwareSuggestions) && selectedMatterPlannerStaffingIntel.utilizationAwareSuggestions.length > 0 && (
+                              <div className="space-y-1">
+                                {selectedMatterPlannerStaffingIntel.utilizationAwareSuggestions.slice(0, 3).map((s: any, idx: number) => (
+                                  <p key={`${String(s.role || 'role')}-${idx}`} className="text-[11px]">
+                                    {String(s.role)}: {Number(s.suggestedHoursDelta || 0) >= 0 ? '+' : ''}{Number(s.suggestedHoursDelta || 0).toFixed(1)}h — {String(s.reason || '')}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedMatterPlannerMarginIntel && (
+                        <div className="rounded border border-emerald-100 bg-emerald-50/40 p-2">
+                          <p className="text-[10px] font-bold uppercase text-emerald-700 mb-1">Margin Intelligence</p>
+                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+                            <p>Blended Realization: {Math.round(Number(selectedMatterPlannerMarginIntel?.blendedRateRealization || 0) * 100)}%</p>
+                            <p>Gross Margin: {Math.round(Number(selectedMatterPlannerMarginIntel?.grossMargin || 0) * 100)}%</p>
+                            <p>Write-off Risk: {Math.round(Number(selectedMatterPlannerMarginIntel?.writeOffRisk || 0) * 100)}%</p>
+                            <p>Prebill Adj Risk: {Math.round(Number(selectedMatterPlannerMarginIntel?.prebillAdjustmentRisk || 0) * 100)}%</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedMatterPlannerStressTests.length > 0 && (
+                        <div className="rounded border border-amber-100 bg-amber-50/40 p-2">
+                          <p className="text-[10px] font-bold uppercase text-amber-700 mb-1">Stress Tests</p>
+                          <div className="space-y-1">
+                            {selectedMatterPlannerStressTests.slice(0, 4).map((test, idx) => (
+                              <p key={`${String(test.key || 'stress')}-${idx}`} className="text-[11px] text-slate-700">
+                                <span className="font-semibold">{String(test.key || '').replaceAll('_', ' ')}</span>:
+                                {' '}Δ Margin {formatCurrency(Number(test.deltaMargin || 0))}
+                                {typeof test.deltaHours !== 'undefined' ? ` • Δ Hours ${Number(test.deltaHours || 0).toFixed(1)}` : ''}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase text-slate-500">Phase 5 Calibration &amp; Learning Loop</p>
+                        <p className="text-[11px] text-gray-500">Cohort calibration snapshots, shadow rollout, and outcome feedback</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedMatter?.id && refreshSelectedMatterCalibration(selectedMatter.id, true)}
+                          disabled={!selectedMatter?.id || selectedMatterCalibrationLoading}
+                          className="px-2 py-1 text-[11px] font-bold rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {selectedMatterCalibrationLoading ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={runOutcomePlannerCalibrationShadowJob}
+                          disabled={!selectedMatter?.id || selectedMatterCalibrationJobRunning}
+                          className="px-2 py-1 text-[11px] font-bold rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                        >
+                          {selectedMatterCalibrationJobRunning ? 'Running...' : 'Run Shadow Calibration'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {selectedMatterCalibrationLoading && !selectedMatterCalibration ? (
+                      <div className="text-xs text-gray-500">Loading calibration...</div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div className="rounded border border-emerald-100 bg-emerald-50/40 p-2">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <p className="text-[10px] font-bold uppercase text-emerald-700">Active Calibration</p>
+                              <button
+                                type="button"
+                                onClick={rollbackSelectedMatterActiveCalibration}
+                                disabled={!selectedMatterCalibrationActiveSnapshot?.id || selectedMatterCalibrationActionRunning}
+                                className="px-2 py-0.5 text-[10px] font-bold rounded border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                              >
+                                Rollback
+                              </button>
+                            </div>
+                            {selectedMatterCalibrationActiveSnapshot ? (
+                              <div className="text-[11px] text-slate-700 space-y-1">
+                                <p className="font-semibold truncate">{String(selectedMatterCalibrationActiveSnapshot.cohortKey || 'n/a')}</p>
+                                <p>Status: {String(selectedMatterCalibrationActiveSnapshot.status || 'unknown')} • Sample {Number(selectedMatterCalibrationActiveSnapshot.sampleSize || 0)}</p>
+                                <p>As Of: {String(selectedMatterCalibrationActiveSnapshot.asOfDate || '').slice(0, 10) || 'n/a'}</p>
+                                <p>
+                                  Confidence: {Math.round(Number((selectedMatterCalibrationActiveMetrics?.confidenceScore as number) || 0) * 100)}%
+                                  {' '}• Hours x{Number((((selectedMatterCalibrationActivePayload?.tuningSuggestions as any)?.globalHoursMultiplier) || 1)).toFixed(2)}
+                                  {' '}• Collections x{Number((((selectedMatterCalibrationActivePayload?.tuningSuggestions as any)?.globalCollectionsMultiplier) || 1)).toFixed(2)}
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-gray-500">No active calibration snapshot for this cohort.</p>
+                            )}
+                          </div>
+
+                          <div className="rounded border border-amber-100 bg-amber-50/40 p-2">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <p className="text-[10px] font-bold uppercase text-amber-700">Shadow Calibration</p>
+                              <button
+                                type="button"
+                                onClick={activateSelectedMatterShadowCalibration}
+                                disabled={!selectedMatterCalibrationShadowSnapshot?.id || selectedMatterCalibrationActionRunning}
+                                className="px-2 py-0.5 text-[10px] font-bold rounded border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                              >
+                                Promote to Active
+                              </button>
+                            </div>
+                            {selectedMatterCalibrationShadowSnapshot ? (
+                              <div className="text-[11px] text-slate-700 space-y-1">
+                                <p className="font-semibold truncate">{String(selectedMatterCalibrationShadowSnapshot.cohortKey || 'n/a')}</p>
+                                <p>Status: {String(selectedMatterCalibrationShadowSnapshot.status || 'unknown')} • Sample {Number(selectedMatterCalibrationShadowSnapshot.sampleSize || 0)}</p>
+                                <p>As Of: {String(selectedMatterCalibrationShadowSnapshot.asOfDate || '').slice(0, 10) || 'n/a'}</p>
+                                <p>
+                                  Confidence: {Math.round(Number((selectedMatterCalibrationShadowMetrics?.confidenceScore as number) || 0) * 100)}%
+                                  {' '}• Hours x{Number((((selectedMatterCalibrationShadowPayload?.tuningSuggestions as any)?.globalHoursMultiplier) || 1)).toFixed(2)}
+                                  {' '}• Collections x{Number((((selectedMatterCalibrationShadowPayload?.tuningSuggestions as any)?.globalCollectionsMultiplier) || 1)).toFixed(2)}
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-gray-500">No shadow calibration snapshot available yet.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {Array.isArray(selectedMatterCalibration?.candidateCohorts) && selectedMatterCalibration.candidateCohorts.length > 0 && (
+                          <div className="rounded border border-slate-200 bg-slate-50 p-2">
+                            <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Candidate Cohorts</p>
+                            <div className="space-y-1">
+                              {selectedMatterCalibration.candidateCohorts.slice(0, 5).map((row, idx) => (
+                                <p key={`${String(row?.cohortKey || 'cohort')}-${idx}`} className="text-[11px] text-slate-700 truncate">
+                                  {String(row?.scope || 'scope')}: {String(row?.cohortKey || '')}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="rounded border border-slate-200 p-3 bg-white space-y-2">
+                          <p className="text-[10px] font-bold uppercase text-slate-500">Outcome Feedback (Calibration Labels)</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <select
+                              value={selectedMatterOutcomeFeedbackDraft.actualOutcome}
+                              onChange={(e) => setSelectedMatterOutcomeFeedbackDraft(prev => ({ ...prev, actualOutcome: e.target.value }))}
+                              className="px-2 py-1.5 text-xs border border-gray-200 rounded-md bg-white text-slate-700"
+                            >
+                              <option value="">Outcome (optional)</option>
+                              <option value="settled">Settled</option>
+                              <option value="dismissed">Dismissed</option>
+                              <option value="trial_win">Trial Win</option>
+                              <option value="trial_loss">Trial Loss</option>
+                              <option value="adverse">Adverse</option>
+                              <option value="other">Other</option>
+                            </select>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="Actual Fees Collected"
+                              value={selectedMatterOutcomeFeedbackDraft.actualFeesCollected}
+                              onChange={(e) => setSelectedMatterOutcomeFeedbackDraft(prev => ({ ...prev, actualFeesCollected: e.target.value }))}
+                              className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="Actual Cost"
+                              value={selectedMatterOutcomeFeedbackDraft.actualCost}
+                              onChange={(e) => setSelectedMatterOutcomeFeedbackDraft(prev => ({ ...prev, actualCost: e.target.value }))}
+                              className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="Actual Margin"
+                              value={selectedMatterOutcomeFeedbackDraft.actualMargin}
+                              onChange={(e) => setSelectedMatterOutcomeFeedbackDraft(prev => ({ ...prev, actualMargin: e.target.value }))}
+                              className="px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                            />
+                          </div>
+                          <textarea
+                            value={selectedMatterOutcomeFeedbackDraft.notes}
+                            onChange={(e) => setSelectedMatterOutcomeFeedbackDraft(prev => ({ ...prev, notes: e.target.value }))}
+                            placeholder="Calibration notes (optional)"
+                            rows={2}
+                            className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md"
+                          />
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={recordSelectedMatterPlannerOutcomeFeedback}
+                              disabled={!selectedMatterPlanner?.plan?.id || selectedMatterOutcomeFeedbackSaving}
+                              className="px-3 py-1.5 text-xs font-bold rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              {selectedMatterOutcomeFeedbackSaving ? 'Saving...' : 'Record Outcome Feedback'}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Timeline */}
-            <div className="flex-1 overflow-y-auto p-6 bg-white">
+            <div className="p-6 bg-white">
               <h3 className="font-bold text-slate-800 mb-6 text-sm uppercase tracking-wide flex items-center gap-2">
                 <Clock className="w-4 h-4 text-gray-400" /> Case History
               </h3>
@@ -527,6 +2153,7 @@ const Matters: React.FC = () => {
                   className="flex-1 py-2 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-100 shadow-sm"
                   onClick={() => {
                     setEditData(selectedMatter);
+                    resetOutcomePlannerState();
                     setShowModal(true);
                   }}
                 >
@@ -575,7 +2202,7 @@ const Matters: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800">{editData ? 'Edit Matter' : t('create_matter_modal')}</h3>
-              <button onClick={() => { setShowModal(false); setEditData(null); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={editData ? (e) => {
               e.preventDefault();
@@ -597,6 +2224,7 @@ const Matters: React.FC = () => {
                 });
                 setShowModal(false);
                 setEditData(null);
+                resetOutcomePlannerState();
               }
             } : handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
@@ -692,6 +2320,169 @@ const Matters: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              {!editData && (
+                <div className="pt-4 border-t border-gray-100 space-y-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800">Outcome-to-Fee Planner (MVP)</h4>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Deterministic intake forecast preview (budget, collections, margin). Can be auto-saved as version after matter creation.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-medium text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={outcomePlannerDraft.enabled}
+                        onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, enabled: e.target.checked }))}
+                      />
+                      Enable
+                    </label>
+                  </div>
+
+                  {outcomePlannerDraft.enabled && (
+                    <>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Complexity</label>
+                          <select
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                            value={outcomePlannerDraft.complexity}
+                            onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, complexity: e.target.value as PlannerComplexity }))}
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Claim Size Band</label>
+                          <select
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                            value={outcomePlannerDraft.claimSizeBand}
+                            onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, claimSizeBand: e.target.value as PlannerClaimSizeBand }))}
+                          >
+                            <option value="small">Small</option>
+                            <option value="medium">Medium</option>
+                            <option value="large">Large</option>
+                            <option value="enterprise">Enterprise</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Payor Profile</label>
+                          <select
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                            value={outcomePlannerDraft.primaryPayorProfile}
+                            onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, primaryPayorProfile: e.target.value as PlannerPayorProfile }))}
+                          >
+                            <option value="client">Client</option>
+                            <option value="corporate">Corporate</option>
+                            <option value="third_party">Third Party</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Jurisdiction Code</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. us-ca-state"
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                            value={outcomePlannerDraft.jurisdictionCode}
+                            onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, jurisdictionCode: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Billable Rate Override</label>
+                          <input
+                            type="number"
+                            placeholder="Optional"
+                            className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                            value={outcomePlannerDraft.baseBillableRateOverride}
+                            onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, baseBillableRateOverride: e.target.value }))}
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                            <input
+                              type="checkbox"
+                              checked={outcomePlannerDraft.autoSave}
+                              onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, autoSave: e.target.checked }))}
+                            />
+                            Save planner version on matter creation
+                          </label>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Planner Notes (optional)</label>
+                        <textarea
+                          rows={2}
+                          className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 outline-none"
+                          placeholder="Manual assumptions / client-specific context"
+                          value={outcomePlannerDraft.notes}
+                          onChange={(e) => setOutcomePlannerDraft(prev => ({ ...prev, notes: e.target.value }))}
+                        />
+                      </div>
+
+                      {outcomePlannerPreview && (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {outcomePlannerPreview.scenarios.map((scenario) => (
+                              <div key={scenario.key} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <p className="text-sm font-bold text-slate-800">{scenario.name}</p>
+                                  <span className="text-[10px] font-bold text-gray-500 uppercase">{Math.round(scenario.probability * 100)}%</span>
+                                </div>
+                                <div className="space-y-1 text-xs">
+                                  <div className="flex justify-between"><span className="text-gray-500">Budget</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.budgetTotal)}</span></div>
+                                  <div className="flex justify-between"><span className="text-gray-500">Collected</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.expectedCollected)}</span></div>
+                                  <div className="flex justify-between"><span className="text-gray-500">Margin</span><span className={`font-semibold ${scenario.expectedMargin >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(scenario.expectedMargin)}</span></div>
+                                  <div className="flex justify-between"><span className="text-gray-500">Confidence</span><span className="font-semibold text-slate-800">{Math.round(scenario.confidenceScore * 100)}% ({scenario.confidenceBand})</span></div>
+                                  <div className="flex justify-between"><span className="text-gray-500">Coverage</span><span className="font-semibold text-slate-800">{Math.round(scenario.dataCoverageScore * 100)}%</span></div>
+                                </div>
+                                <p className="text-[11px] text-gray-500 mt-2">{scenario.driverSummary}</p>
+                                <div className="mt-2 space-y-1">
+                                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Outcome Mix</p>
+                                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-gray-600">
+                                    <span>Settle {Math.round(scenario.outcomeProbabilities.settle * 100)}%</span>
+                                    <span>Dismiss {Math.round(scenario.outcomeProbabilities.dismiss * 100)}%</span>
+                                    <span>Trial {Math.round(scenario.outcomeProbabilities.trial * 100)}%</span>
+                                    <span>Adverse {Math.round(scenario.outcomeProbabilities.adverse * 100)}%</span>
+                                  </div>
+                                </div>
+                                {scenario.riskFlags.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {scenario.riskFlags.slice(0, 3).map(flag => (
+                                      <span key={flag} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
+                                        {flag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <p className="text-[10px] text-gray-500 mt-2">Sensitivity: {scenario.inputSensitivitySummary}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="rounded-lg border border-gray-200 bg-white p-3">
+                            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Assumptions</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+                              {outcomePlannerPreview.assumptions.map((assumption) => (
+                                <div key={assumption.key} className="flex justify-between gap-3 text-xs">
+                                  <span className="text-gray-500">{assumption.key}</span>
+                                  <span className="font-medium text-slate-700 text-right">{assumption.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-[11px] text-gray-500 mt-2">
+                              Preview uses deterministic planner assumptions. If enabled, a version is persisted immediately after matter creation.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
               {editData && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
@@ -841,8 +2632,10 @@ const Matters: React.FC = () => {
               )}
 
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowModal(false); setEditData(null); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
-                <button type="submit" className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg">{t('save')}</button>
+                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
+                <button type="submit" disabled={outcomePlannerSaving} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                  {outcomePlannerSaving ? 'Saving Planner...' : t('save')}
+                </button>
               </div>
             </form>
           </div>
@@ -900,7 +2693,7 @@ const Matters: React.FC = () => {
                 <p className="text-xs text-gray-500 mt-1">{viewingDoc.size} - {formatDate(viewingDoc.updatedAt)}</p>
               </div>
               <button
-                onClick={() => { setViewingDoc(null); setDocContent(''); }}
+                onClick={closeDocViewer}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-6 h-6" />

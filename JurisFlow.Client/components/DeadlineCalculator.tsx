@@ -28,6 +28,13 @@ interface CalculatedDeadline {
     description: string;
 }
 
+interface Holiday {
+    id: string;
+    date: string;
+    name: string;
+    jurisdiction: string;
+}
+
 interface DeadlineCalculatorProps {
     matterId?: string;
     onDeadlineCreate?: (deadline: any) => void;
@@ -42,6 +49,8 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
     const [selectedRule, setSelectedRule] = useState<string>('');
     const [triggerDate, setTriggerDate] = useState<string>(new Date().toISOString().split('T')[0]);
     const [serviceMethod, setServiceMethod] = useState<string>('Personal');
+
+    const [holidays, setHolidays] = useState<Holiday[]>([]);
 
     const [calculatedDeadline, setCalculatedDeadline] = useState<CalculatedDeadline | null>(null);
     const [calculating, setCalculating] = useState(false);
@@ -82,10 +91,14 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
 
     const loadRulesForJurisdiction = async (jurisdiction: string) => {
         try {
-            const rulesData = await api.courtRules.list({ jurisdiction });
+            const [rulesData, holidayData] = await Promise.all([
+                api.courtRules.list({ jurisdiction }),
+                api.holidays.list(jurisdiction)
+            ]);
             setRules(rulesData);
             setSelectedRule('');
             setCalculatedDeadline(null);
+            setHolidays(Array.isArray(holidayData) ? holidayData : []);
         } catch (error) {
             console.error('Failed to load rules:', error);
         }
@@ -140,6 +153,14 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
             year: 'numeric',
             month: 'long',
             day: 'numeric'
+        });
+    };
+
+    const formatShortDate = (dateString: string) => {
+        return new Date(dateString).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
         });
     };
 
@@ -358,7 +379,7 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
 
             {/* Rule Info */}
             {selectedRule && !calculatedDeadline && (
-                <div className="border-t p-4 bg-slate-50">
+                <div className="border-t p-4 bg-slate-50 space-y-4">
                     {rules.filter(r => r.id === selectedRule).map(rule => (
                         <div key={rule.id} className="text-sm text-slate-600">
                             <p><strong>Rule:</strong> {rule.name}</p>
@@ -372,6 +393,27 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                             )}
                         </div>
                     ))}
+
+                    {holidays.length > 0 && (
+                        <div className="bg-white border border-slate-200 rounded-lg p-3 text-sm text-slate-600">
+                            <div className="flex items-center justify-between">
+                                <strong>Court Holidays</strong>
+                                <span className="text-xs text-slate-500">Includes US Federal + {selectedJurisdiction}</span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {holidays
+                                    .filter(h => new Date(h.date) >= new Date())
+                                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                                    .slice(0, 6)
+                                    .map(h => (
+                                        <div key={h.id} className="flex items-center justify-between rounded-md border border-slate-100 px-2 py-1">
+                                            <span className="text-xs font-medium text-slate-700">{h.name}</span>
+                                            <span className="text-xs text-slate-500">{formatShortDate(h.date)}</span>
+                                        </div>
+                                    ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

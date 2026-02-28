@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
@@ -11,25 +11,31 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class EmployeesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly IWebHostEnvironment _env;
         private readonly FirmStructureService _firmStructure;
+        private readonly PasswordPolicyService _passwordPolicy;
+        private readonly TenantContext _tenantContext;
+        private readonly IConfiguration _configuration;
 
-        public EmployeesController(JurisFlowDbContext context, IWebHostEnvironment env, FirmStructureService firmStructure)
+        public EmployeesController(JurisFlowDbContext context, IWebHostEnvironment env, FirmStructureService firmStructure, PasswordPolicyService passwordPolicy, TenantContext tenantContext, IConfiguration configuration)
         {
             _context = context;
             _env = env;
             _firmStructure = firmStructure;
+            _passwordPolicy = passwordPolicy;
+            _tenantContext = tenantContext;
+            _configuration = configuration;
         }
 
         // GET: api/Employees
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Employee>>> GetEmployees([FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            var query = _context.Employees.AsQueryable();
+            var query = _context.Employees.AsNoTracking().AsQueryable();
             if (!string.IsNullOrWhiteSpace(entityId))
             {
                 query = query.Where(e => e.EntityId == entityId);
@@ -69,14 +75,17 @@ namespace JurisFlow.Server.Controllers
             }
 
             // Check for duplicate email and clean up orphan User records
-            var existingEmployee = await _context.Employees.FirstOrDefaultAsync(e => e.Email == dto.Email);
+            var normalizedEmail = EmailAddressNormalizer.Normalize(dto.Email);
+            var trimmedEmail = dto.Email.Trim();
+
+            var existingEmployee = await _context.Employees.FirstOrDefaultAsync(e => e.Email == trimmedEmail);
             if (existingEmployee != null)
             {
                 return Conflict(new { message = "This email address is already assigned to a staff member." });
             }
 
             // Check for orphan User record (User exists but Employee doesn't)
-            var orphanUser = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            var orphanUser = await _context.Users.FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail);
             if (orphanUser != null)
             {
                 // Orphan user found - remove it to allow re-registration
@@ -85,9 +94,19 @@ namespace JurisFlow.Server.Controllers
             }
 
             // First, create a User account for login
+            if (string.IsNullOrWhiteSpace(dto.Password))
+            {
+                return BadRequest(new { message = "Password is required." });
+            }
+
+            var passwordResult = _passwordPolicy.Validate(dto.Password, trimmedEmail, $"{dto.FirstName} {dto.LastName}");
+            if (!passwordResult.IsValid)
+            {
+                return BadRequest(new { message = passwordResult.Message });
+            }
+
             var userId = Guid.NewGuid().ToString();
-            var defaultPassword = dto.Password ?? dto.Email.Split('@')[0]; // Use provided password or email prefix
-            var passwordHash = BCrypt.Net.BCrypt.HashPassword(defaultPassword);
+            var passwordHash = PasswordHashingHelper.HashPassword(dto.Password, _configuration);
             
             // Determine user role based on employee role
             var userRole = dto.Role switch
@@ -108,7 +127,8 @@ namespace JurisFlow.Server.Controllers
             {
                 Id = userId,
                 Name = $"{dto.FirstName} {dto.LastName}",
-                Email = dto.Email,
+                Email = trimmedEmail,
+                NormalizedEmail = normalizedEmail,
                 PasswordHash = passwordHash,
                 Role = userRole,
                 CreatedAt = DateTime.UtcNow,
@@ -124,7 +144,7 @@ namespace JurisFlow.Server.Controllers
                 Id = Guid.NewGuid().ToString(),
                 FirstName = dto.FirstName,
                 LastName = dto.LastName,
-                Email = dto.Email,
+                Email = trimmedEmail,
                 Phone = dto.Phone,
                 Mobile = dto.Mobile,
                 Role = dto.Role,
@@ -279,7 +299,7 @@ namespace JurisFlow.Server.Controllers
             if (employee == null) return NotFound();
             if (file == null || file.Length == 0) return BadRequest("File is required.");
 
-            var uploadsRoot = Path.Combine(Directory.GetCurrentDirectory(), "uploads", "avatars");
+            var uploadsRoot = GetAvatarRoot();
             if (!Directory.Exists(uploadsRoot))
             {
                 Directory.CreateDirectory(uploadsRoot);
@@ -294,7 +314,7 @@ namespace JurisFlow.Server.Controllers
                 await file.CopyToAsync(stream);
             }
 
-            var relativePath = $"/uploads/avatars/{fileName}";
+            var relativePath = $"/api/files/avatars/{fileName}";
             if (employee.User != null)
             {
                 employee.User.Avatar = relativePath;
@@ -303,6 +323,16 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { url = relativePath });
+        }
+
+        private string GetAvatarRoot()
+        {
+            if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
+            {
+                throw new InvalidOperationException("Tenant context is missing.");
+            }
+
+            return Path.Combine(_env.ContentRootPath, "uploads", _tenantContext.TenantId, "avatars");
         }
     }
 }

@@ -10,6 +10,7 @@ namespace JurisFlow.Server.Models
 
         public string? UserId { get; set; }
         public string? ClientId { get; set; }
+        public string? TenantId { get; set; }
         public string? Role { get; set; }
 
         [Required]
@@ -25,6 +26,17 @@ namespace JurisFlow.Server.Models
         public string? Details { get; set; }
         public string? IpAddress { get; set; }
         public string? UserAgent { get; set; }
+
+        public long Sequence { get; set; }
+
+        [MaxLength(128)]
+        public string? PreviousHash { get; set; }
+
+        [MaxLength(128)]
+        public string? Hash { get; set; }
+
+        [MaxLength(32)]
+        public string? HashAlgorithm { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }

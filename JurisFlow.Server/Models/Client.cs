@@ -19,6 +19,11 @@ namespace JurisFlow.Server.Models
         [EmailAddress]
         public string Email { get; set; }
 
+        [Required]
+        [MaxLength(320)]
+        [JsonIgnore]
+        public string NormalizedEmail { get; set; } = string.Empty;
+
         public string? Phone { get; set; }
         public string? Mobile { get; set; }
         public string? Company { get; set; }
@@ -44,6 +49,7 @@ namespace JurisFlow.Server.Models
         public string? Notes { get; set; }
 
         // Portal Access
+        [JsonIgnore]
         public string? PasswordHash { get; set; }
         public bool PortalEnabled { get; set; } = false;
         public DateTime? LastLogin { get; set; }

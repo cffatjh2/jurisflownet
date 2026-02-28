@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace JurisFlow.Server.Models
 {
@@ -27,14 +28,15 @@ namespace JurisFlow.Server.Models
         [MaxLength(255)]
         public string Description { get; set; } = string.Empty;
 
-        public double Quantity { get; set; } = 1;
-        public double Rate { get; set; } = 0;
-        public double Amount { get; set; } = 0;
+        public decimal Quantity { get; set; } = 1;
+        public decimal Rate { get; set; } = 0;
+        public decimal Amount { get; set; } = 0;
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation
+        [JsonIgnore]
         public Invoice Invoice { get; set; } = null!;
     }
 }

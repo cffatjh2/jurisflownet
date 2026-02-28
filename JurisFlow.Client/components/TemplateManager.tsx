@@ -180,7 +180,7 @@ const TemplateManager: React.FC = () => {
     return (
         <div className="h-full flex flex-col bg-gray-50/50">
             {/* Header */}
-            <div className="px-8 py-6 border-b border-gray-200 bg-white">
+            <div className="px-6 py-4 border-b border-gray-200 bg-white">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <FileText className="w-6 h-6 text-slate-800" />

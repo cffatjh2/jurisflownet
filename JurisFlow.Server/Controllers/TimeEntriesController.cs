@@ -2,30 +2,36 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/time-entries")]
     [ApiController]
-    [Authorize]
+    [Authorize(Policy = "StaffOnly")]
     public class TimeEntriesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly ILogger<TimeEntriesController> _logger;
+        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
 
-        public TimeEntriesController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public TimeEntriesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<TimeEntriesController> logger, OutcomeFeePlannerService outcomeFeePlanner)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _logger = logger;
+            _outcomeFeePlanner = outcomeFeePlanner;
         }
 
         [HttpGet]
         public async Task<IActionResult> GetTimeEntries([FromQuery] string? matterId = null, [FromQuery] string? approvalStatus = null)
         {
-            var query = _context.TimeEntries.AsQueryable();
+            var query = _context.TimeEntries.AsNoTracking().AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(matterId))
             {
@@ -47,6 +53,15 @@ namespace JurisFlow.Server.Controllers
             if (dto.Duration <= 0)
             {
                 return BadRequest(new { message = "Duration must be greater than zero." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.MatterId))
+            {
+                var exists = await _context.Matters.AnyAsync(m => m.Id == dto.MatterId);
+                if (!exists)
+                {
+                    return BadRequest(new { message = "Selected matter was not found." });
+                }
             }
 
             var userId = GetUserId();
@@ -72,11 +87,19 @@ namespace JurisFlow.Server.Controllers
                 UpdatedAt = DateTime.UtcNow
             };
 
-            _context.TimeEntries.Add(entry);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "time.create", "TimeEntry", entry.Id, $"MatterId={entry.MatterId}, Duration={entry.Duration}");
-
-            return Ok(entry);
+            try
+            {
+                _context.TimeEntries.Add(entry);
+                await _context.SaveChangesAsync();
+                await _auditLogger.LogAsync(HttpContext, "time.create", "TimeEntry", entry.Id, $"MatterId={entry.MatterId}, Duration={entry.Duration}");
+                await TryTriggerOutcomeFeePlannerAsync(entry.MatterId, "time_entry_create", entry.Id);
+                return Ok(entry);
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Failed to create time entry.");
+                return StatusCode(500, new { message = "Failed to create time entry. Please verify the matter selection." });
+            }
         }
 
         [HttpPut("{id}")]
@@ -101,6 +124,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "time.update", "TimeEntry", entry.Id, "Time entry updated");
+            await TryTriggerOutcomeFeePlannerAsync(entry.MatterId, "time_entry_update", entry.Id);
 
             return Ok(entry);
         }
@@ -123,6 +147,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "time.approve", "TimeEntry", entry.Id, "Time entry approved");
+            await TryTriggerOutcomeFeePlannerAsync(entry.MatterId, "time_entry_approve", entry.Id);
 
             return Ok(entry);
         }
@@ -167,6 +192,28 @@ namespace JurisFlow.Server.Controllers
             var trimmed = code.Trim();
             var split = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             return split.Length > 0 ? split[0].Trim() : trimmed;
+        }
+
+        private async Task TryTriggerOutcomeFeePlannerAsync(string? matterId, string triggerType, string entityId)
+        {
+            if (string.IsNullOrWhiteSpace(matterId)) return;
+
+            try
+            {
+                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
+                {
+                    MatterId = matterId,
+                    TriggerType = triggerType,
+                    TriggerEntityType = nameof(TimeEntry),
+                    TriggerEntityId = entityId,
+                    QueueReviewOnDrift = true,
+                    QueueNotificationOnDrift = true
+                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for time entry {TimeEntryId}", entityId);
+            }
         }
     }
 

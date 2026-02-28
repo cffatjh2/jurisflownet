@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import GoogleAuthCallback from './components/GoogleAuthCallback';
 import MicrosoftAuthCallback from './components/MicrosoftAuthCallback';
 import ZoomAuthCallback from './components/ZoomAuthCallback';
+import IntegrationOAuthCallback from './components/IntegrationOAuthCallback';
 import { LayoutDashboard, Briefcase, Scale, BrainCircuit, Plus, Calendar as CalendarIcon, CreditCard, Bell, Folder, Mail, Users, Settings as SettingsIcon, Search, Timer, CheckSquare, Video, BarChart3, FileText } from './components/Icons';
 import Dashboard from './components/Dashboard';
 import Matters from './components/Matters';
@@ -162,29 +163,29 @@ const MainLayout = () => {
 
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50 relative">
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 z-10 sticky top-0">
-          <div className="relative w-96 hidden md:block">
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-10 sticky top-0">
+          <div className="relative w-80 lg:w-96 hidden md:block">
             {/* Added CMD+K hint */}
-            <div className="absolute right-3 top-2.5 flex items-center gap-1 pointer-events-none">
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
               <kbd className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 font-bold font-sans">Cmd + K</kbd>
             </div>
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <button
               onClick={() => setIsCmdOpen(true)}
-              className="w-full pl-9 pr-12 py-2 bg-gray-100 border-transparent hover:bg-white border hover:border-primary-300 rounded-lg text-sm text-left text-gray-400 transition-all"
+              className="w-full h-10 pl-9 pr-16 bg-gray-100 border-transparent hover:bg-white border hover:border-primary-300 rounded-lg text-sm text-left text-gray-400 transition-all whitespace-nowrap overflow-hidden text-ellipsis"
             >
-              {t('search_placeholder')}
+              {String(t('search_placeholder')).replace(/\s*\(Cmd\+K\)\s*$/i, '')}
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="relative">
               <GlobalTimer />
             </div>
             <Notifications />
             <button
               onClick={() => setActiveTab('matters')}
-              className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-all shadow-sm"
+              className="flex items-center gap-2 bg-slate-800 text-white px-3.5 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-all shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span>{t('create_btn')}</span>
@@ -226,16 +227,13 @@ const ComponentSwitcher = ({ activeTab }: { activeTab: ActiveTab }) => {
 }
 
 const AppContent = () => {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'App.tsx:193', message: 'AppContent render started', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-  // #endregion
   const { isAuthenticated: isClientAuthenticated, loading: isClientLoading } = useClientAuth();
   const { isAuthenticated } = useAuth();
 
   // Handle OAuth callback
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('code')) {
+    if (urlParams.get('code') || urlParams.get('error')) {
       if (window.location.pathname.includes('/auth/google/callback')) {
         // GoogleAuthCallback will handle this
         return;
@@ -248,18 +246,25 @@ const AppContent = () => {
         // ZoomAuthCallback will handle this
         return;
       }
+      if (window.location.pathname.includes('/auth/integrations/') && window.location.pathname.includes('/callback')) {
+        // IntegrationOAuthCallback will handle this
+        return;
+      }
     }
   }, []);
 
   const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('code') && window.location.pathname.includes('/auth/google/callback')) {
+  if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/google/callback')) {
     return <GoogleAuthCallback />;
   }
-  if (urlParams.get('code') && window.location.pathname.includes('/auth/microsoft/callback')) {
+  if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/microsoft/callback')) {
     return <MicrosoftAuthCallback />;
   }
-  if (urlParams.get('code') && window.location.pathname.includes('/auth/zoom/callback')) {
+  if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/zoom/callback')) {
     return <ZoomAuthCallback />;
+  }
+  if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/integrations/') && window.location.pathname.includes('/callback')) {
+    return <IntegrationOAuthCallback />;
   }
 
   // Check if client portal route (using hash or pathname)
@@ -287,16 +292,10 @@ const AppContent = () => {
     return <ResetPassword />;
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'App.tsx:196', message: 'AppContent auth check', data: { isAuthenticated }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-  // #endregion
   return isAuthenticated ? <MainLayout /> : <Login />;
 }
 
 const App = () => {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'App.tsx:198', message: 'App component render started', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-  // #endregion
   try {
     return (
       <ThemeProvider>
@@ -316,9 +315,6 @@ const App = () => {
       </ThemeProvider>
     );
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'App.tsx:210', message: 'App render error caught', data: { errorMessage: error instanceof Error ? error.message : String(error) }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
     throw error;
   }
 }

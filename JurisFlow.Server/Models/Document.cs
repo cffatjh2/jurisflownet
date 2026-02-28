@@ -22,6 +22,19 @@ namespace JurisFlow.Server.Models
 
         public long FileSize { get; set; }
         public string MimeType { get; set; } 
+        public bool IsEncrypted { get; set; } = false;
+
+        [MaxLength(64)]
+        public string? EncryptionKeyId { get; set; }
+
+        [MaxLength(64)]
+        public string? EncryptionIv { get; set; }
+
+        [MaxLength(64)]
+        public string? EncryptionTag { get; set; }
+
+        [MaxLength(32)]
+        public string? EncryptionAlgorithm { get; set; }
 
         public string? MatterId { get; set; }
 

@@ -16,6 +16,10 @@ const TimeTracker = () => {
     const [activeTab, setActiveTab] = useState<'time' | 'expense'>('time');
     const [showBilled, setShowBilled] = useState(false);
     const [approvalFilter, setApprovalFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+    const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+    const [rejectReason, setRejectReason] = useState('');
+    const [rejectTarget, setRejectTarget] = useState<TimeEntry | Expense | null>(null);
+    const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
     // Display-only state (synced with activeTimer)
     const [timerDisplay, setTimerDisplay] = useState(0);
@@ -64,6 +68,12 @@ const TimeTracker = () => {
         }
     }, [selectedMatterId, matters, activeTimer]);
 
+    useEffect(() => {
+        if (matters.length > 0 && selectedMatterId && !matters.some(matter => matter.id === selectedMatterId)) {
+            setSelectedMatterId('');
+            toast.warning('Selected matter is no longer available. Please reselect.');
+        }
+    }, [matters, selectedMatterId]);
 
     // Expense Form State
     const [expenseAmount, setExpenseAmount] = useState('');
@@ -72,6 +82,13 @@ const TimeTracker = () => {
     const [expenseMatterId, setExpenseMatterId] = useState('');
     const [isScanning, setIsScanning] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (matters.length > 0 && expenseMatterId && !matters.some(matter => matter.id === expenseMatterId)) {
+            setExpenseMatterId('');
+            toast.warning('Selected matter is no longer available. Please reselect.');
+        }
+    }, [matters, expenseMatterId]);
 
     const handleScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -160,26 +177,36 @@ const TimeTracker = () => {
     const handleSaveTimeEntry = async () => {
         if (!activeTimer) return;
 
-        // Stop and Save (handled by Context)
-        await stopTimer();
-        toast.success('Time Entry Saved');
+        if (matters.length > 0 && activeTimer.matterId && !matters.some(matter => matter.id === activeTimer.matterId)) {
+            toast.warning('Selected matter was not found. Time entry will be logged as unassigned.');
+        }
 
-        // Reset form
+        const saved = await stopTimer();
+        if (!saved) {
+            toast.error('Failed to save time entry. Please try again.');
+            return;
+        }
+
+        toast.success('Time Entry Saved');
         setTimerDisplay(0);
         setDescription('');
-        // retain matter choice for convenience? or reset? Let's keep matter, reset description.
     };
 
-    const saveExpenseEntry = () => {
+    const saveExpenseEntry = async () => {
         // Only amount is required, matter is optional (can be "Free/Unassigned")
         if (!expenseAmount) {
             toast.error('Please fill in required fields.');
             return;
         }
 
+        const hasValidMatter = !expenseMatterId || matters.some(matter => matter.id === expenseMatterId);
+        if (expenseMatterId && matters.length > 0 && !hasValidMatter) {
+            toast.warning('Selected matter was not found. Expense will be logged as unassigned.');
+        }
+
         const newExpense: Expense = {
             id: `e${Date.now()}`,
-            matterId: expenseMatterId || undefined, // Optional - can be null for "Free/Unassigned"
+            matterId: hasValidMatter ? expenseMatterId || undefined : undefined, // Optional - can be null for "Free/Unassigned"
             description: expenseDesc || expenseCategory,
             amount: parseFloat(expenseAmount),
             date: new Date().toISOString(),
@@ -189,11 +216,17 @@ const TimeTracker = () => {
             expenseCode: expenseCategory
         };
 
-        addExpense(newExpense);
-        toast.success('Expense Logged');
-        setExpenseAmount('');
-        setExpenseDesc('');
-        setExpenseMatterId(''); // Reset matter selection
+        const saved = await addExpense(newExpense);
+        if (saved) {
+            toast.success('Expense Logged');
+            setExpenseAmount('');
+            setExpenseDesc('');
+            if (!hasValidMatter) {
+                setExpenseMatterId('');
+            }
+        } else {
+            toast.error('Failed to log expense. Please try again.');
+        }
     };
 
     const normalizeApprovalStatus = (status?: string) => {
@@ -213,22 +246,38 @@ const TimeTracker = () => {
     };
 
     const handleApproveEntry = async (entry: TimeEntry | Expense) => {
-        if (entry.type === 'expense') {
-            await approveExpense(entry.id);
+        const ok = entry.type === 'expense'
+            ? await approveExpense(entry.id)
+            : await approveTimeEntry(entry.id);
+        if (ok) {
+            toast.success('Entry approved');
         } else {
-            await approveTimeEntry(entry.id);
+            toast.error('Approval failed. Please try again.');
         }
-        toast.success('Entry approved');
     };
 
-    const handleRejectEntry = async (entry: TimeEntry | Expense) => {
-        const reason = prompt('Rejection reason (optional):') || undefined;
-        if (entry.type === 'expense') {
-            await rejectExpense(entry.id, reason);
+    const handleRejectEntry = (entry: TimeEntry | Expense) => {
+        setRejectTarget(entry);
+        setRejectReason('');
+        setRejectDialogOpen(true);
+    };
+
+    const submitRejectEntry = async () => {
+        if (!rejectTarget) return;
+        setRejectSubmitting(true);
+        const reason = rejectReason.trim() || undefined;
+        const ok = rejectTarget.type === 'expense'
+            ? await rejectExpense(rejectTarget.id, reason)
+            : await rejectTimeEntry(rejectTarget.id, reason);
+        setRejectSubmitting(false);
+        setRejectDialogOpen(false);
+        setRejectTarget(null);
+        setRejectReason('');
+        if (ok) {
+            toast.success('Entry rejected');
         } else {
-            await rejectTimeEntry(entry.id, reason);
+            toast.error('Rejection failed. Please try again.');
         }
-        toast.success('Entry rejected');
     };
 
     const formatSeconds = (sec: number) => {
@@ -306,7 +355,7 @@ const TimeTracker = () => {
                                     className="border border-gray-300 rounded-lg p-2.5 bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 outline-none"
                                     value={selectedMatterId}
                                     onChange={e => setSelectedMatterId(e.target.value)}
-                                    disabled={hasActiveTimer} // Disable changing matter while timer active for now
+                                    disabled={isRunning} // Disable changing matter while timer is running
                                 >
                                     <option value="">Free/Unassigned</option>
                                     {matters.map(m => <option key={m.id} value={m.id}>{m.caseNumber} - {m.name}</option>)}
@@ -320,7 +369,7 @@ const TimeTracker = () => {
                                     placeholder="Drafting motions..."
                                     value={description}
                                     onChange={e => setDescription(e.target.value)}
-                                    disabled={hasActiveTimer} // Disable desc change for simplicity
+                                    disabled={isRunning} // Disable desc change while timer is running
                                 />
                             </div>
                             <div className="flex flex-col">
@@ -329,7 +378,7 @@ const TimeTracker = () => {
                                     className="border border-gray-300 rounded-lg p-2.5 bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 outline-none"
                                     value={activityCode}
                                     onChange={e => setActivityCode(e.target.value)}
-                                    disabled={hasActiveTimer}
+                                    disabled={isRunning}
                                 >
                                     {Object.values(ActivityCode).map(code => (
                                         <option key={code} value={code}>{code}</option>
@@ -544,8 +593,9 @@ const TimeTracker = () => {
                                     {filteredEntries.map((entry) => {
                                         const matter = matters.find(m => m.id === entry.matterId);
                                         const isExp = entry.type === 'expense';
+                                        const isLocalOnly = entry.id.startsWith('te-') || entry.id.startsWith('e-');
                                         const approvalStatus = normalizeApprovalStatus(entry.approvalStatus);
-                                        const canReview = canApprove && approvalStatus === 'Pending' && !entry.billed;
+                                        const canReview = canApprove && approvalStatus === 'Pending' && !entry.billed && !isLocalOnly;
                                         // Calculate cost correctly: Expense Amount OR (Minutes / 60) * Rate
                                         const cost = isExp
                                             ? (entry as Expense).amount
@@ -613,6 +663,63 @@ const TimeTracker = () => {
                     </div>
                 </div>
             </div>
+            {rejectDialogOpen && (
+                <div className="fixed inset-0 z-[10000] bg-black/50 flex items-center justify-center p-4">
+                    <div className="w-full max-w-md bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-bold text-slate-900">Reject Entry</h3>
+                                <p className="text-sm text-gray-500">Provide an optional reason for this rejection.</p>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    if (!rejectSubmitting) {
+                                        setRejectDialogOpen(false);
+                                        setRejectTarget(null);
+                                        setRejectReason('');
+                                    }
+                                }}
+                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                                aria-label="Close"
+                            >
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Rejection reason</label>
+                            <textarea
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                rows={3}
+                                className="w-full border border-gray-200 rounded-lg p-2 text-sm"
+                                placeholder="Optional context for the submitter..."
+                            />
+                        </div>
+                        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => {
+                                    if (!rejectSubmitting) {
+                                        setRejectDialogOpen(false);
+                                        setRejectTarget(null);
+                                        setRejectReason('');
+                                    }
+                                }}
+                                className="px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-lg"
+                                disabled={rejectSubmitting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={submitRejectEntry}
+                                className="px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg"
+                                disabled={rejectSubmitting}
+                            >
+                                Reject Entry
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

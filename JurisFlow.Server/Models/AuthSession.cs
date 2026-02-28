@@ -12,6 +12,8 @@ namespace JurisFlow.Server.Models
 
         public string? ClientId { get; set; }
 
+        public string? TenantId { get; set; }
+
         public string SubjectType { get; set; } = "User"; // User | Client
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -27,5 +29,13 @@ namespace JurisFlow.Server.Models
         public DateTime? RevokedAt { get; set; }
 
         public string? RevokedReason { get; set; }
+
+        public string? RefreshTokenHash { get; set; }
+
+        public DateTime? RefreshTokenIssuedAt { get; set; }
+
+        public DateTime? RefreshTokenExpiresAt { get; set; }
+
+        public DateTime? RefreshTokenRotatedAt { get; set; }
     }
 }

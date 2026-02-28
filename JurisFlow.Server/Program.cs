@@ -5,9 +5,17 @@ using JurisFlow.Server.Services;
 using JurisFlow.Server.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Text;
+using Serilog;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Data.Sqlite;
+using System.IO;
+using System.Globalization;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+const string CorsPolicyName = "AppCors";
 
 // Add services to the container.
 
@@ -17,26 +25,279 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
         options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase, allowIntegerValues: true));
     });
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient();
+
+var authLoginPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:PermitLimit", 8), 1, 200);
+var authLoginWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:WindowSeconds", 60), 1, 3600);
+var clientAuthLoginPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientAuthLogin:PermitLimit", authLoginPermitLimit), 1, 200);
+var clientAuthLoginWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientAuthLogin:WindowSeconds", authLoginWindowSeconds), 1, 3600);
+var authMfaPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthMfa:PermitLimit", 10), 1, 200);
+var authMfaWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthMfa:WindowSeconds", 60), 1, 3600);
+var authRefreshPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthRefresh:PermitLimit", 30), 1, 500);
+var authRefreshWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthRefresh:WindowSeconds", 60), 1, 3600);
+var clientAuthRefreshPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientAuthRefresh:PermitLimit", authRefreshPermitLimit), 1, 500);
+var clientAuthRefreshWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientAuthRefresh:WindowSeconds", authRefreshWindowSeconds), 1, 3600);
+var clientMessagingSendPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientMessagingSend:PermitLimit", 12), 1, 200);
+var clientMessagingSendWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientMessagingSend:WindowSeconds", 60), 1, 3600);
+var crmConflictSearchPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:PermitLimit", 20), 1, 200);
+var crmConflictSearchWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:WindowSeconds", 60), 1, 3600);
+var adminDangerousOpsPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:PermitLimit", 3), 1, 50);
+var adminDangerousOpsWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:WindowSeconds", 300), 1, 3600);
+var integrationWebhookPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:PermitLimit", 120), 1, 5000);
+var integrationWebhookWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:WindowSeconds", 60), 1, 3600);
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, token) =>
+    {
+        var retryAfterSeconds = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+            ? Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
+            : 60;
+
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new
+            {
+                message = "Too many requests. Please retry later.",
+                retryAfterSeconds
+            },
+            cancellationToken: token);
+    };
+
+    options.AddPolicy("AuthLogin", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "auth-login"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = authLoginPermitLimit,
+                Window = TimeSpan.FromSeconds(authLoginWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("ClientAuthLogin", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "client-auth-login"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = clientAuthLoginPermitLimit,
+                Window = TimeSpan.FromSeconds(clientAuthLoginWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("AuthMfa", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "auth-mfa"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = authMfaPermitLimit,
+                Window = TimeSpan.FromSeconds(authMfaWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("AuthRefresh", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "auth-refresh"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = authRefreshPermitLimit,
+                Window = TimeSpan.FromSeconds(authRefreshWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("ClientAuthRefresh", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "client-auth-refresh"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = clientAuthRefreshPermitLimit,
+                Window = TimeSpan.FromSeconds(clientAuthRefreshWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("ClientMessagingSend", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "client-messaging-send"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = clientMessagingSendPermitLimit,
+                Window = TimeSpan.FromSeconds(clientMessagingSendWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("CrmConflictSearch", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "crm-conflict-search"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = crmConflictSearchPermitLimit,
+                Window = TimeSpan.FromSeconds(crmConflictSearchWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("AdminDangerousOps", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "admin-dangerous-ops"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = adminDangerousOpsPermitLimit,
+                Window = TimeSpan.FromSeconds(adminDangerousOpsWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("IntegrationWebhook", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "integration-webhook"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = integrationWebhookPermitLimit,
+                Window = TimeSpan.FromSeconds(integrationWebhookWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 // builder.Services.AddOpenApi(); // Commented out to avoid dependency issues for now if package missing
 
+builder.Host.UseSerilog((ctx, lc) =>
+{
+    lc.ReadFrom.Configuration(ctx.Configuration)
+      .Enrich.FromLogContext();
+});
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException("DefaultConnection is missing.");
+}
+
+var sqliteBuilder = new SqliteConnectionStringBuilder(connectionString);
+if (!string.IsNullOrWhiteSpace(sqliteBuilder.DataSource) && sqliteBuilder.DataSource != ":memory:" && !Path.IsPathRooted(sqliteBuilder.DataSource))
+{
+    var contentRoot = builder.Environment.ContentRootPath;
+    var serverRoot = contentRoot;
+    if (!File.Exists(Path.Combine(contentRoot, "JurisFlow.Server.csproj")))
+    {
+        var candidate = Path.Combine(contentRoot, "JurisFlow.Server");
+        if (File.Exists(Path.Combine(candidate, "JurisFlow.Server.csproj")))
+        {
+            serverRoot = candidate;
+        }
+    }
+
+    var dataDir = Path.Combine(serverRoot, "App_Data");
+    Directory.CreateDirectory(dataDir);
+    var appDataPath = Path.Combine(dataDir, sqliteBuilder.DataSource);
+    var legacyPath = Path.Combine(serverRoot, sqliteBuilder.DataSource);
+
+    if (File.Exists(legacyPath) && !File.Exists(appDataPath))
+    {
+        File.Copy(legacyPath, appDataPath, true);
+    }
+    else if (File.Exists(legacyPath) && File.Exists(appDataPath))
+    {
+        var legacyInfo = new FileInfo(legacyPath);
+        var appDataInfo = new FileInfo(appDataPath);
+        if (appDataInfo.Length < 200 * 1024 && legacyInfo.Length > appDataInfo.Length)
+        {
+            var backupPath = $"{appDataPath}.bak-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            File.Copy(appDataPath, backupPath, true);
+            File.Copy(legacyPath, appDataPath, true);
+        }
+    }
+
+    sqliteBuilder.DataSource = appDataPath;
+}
+
+var (allowedCorsOrigins, invalidCorsOrigins) = ResolveCorsOrigins(builder.Configuration);
+if (invalidCorsOrigins.Count > 0)
+{
+    throw new InvalidOperationException(
+        $"Invalid CORS origins in configuration: {string.Join(", ", invalidCorsOrigins)}");
+}
+
+if (builder.Environment.IsProduction())
+{
+    EnsureProductionSecurityRequirements(builder.Configuration);
+
+    if (allowedCorsOrigins.Count == 0)
+    {
+        throw new InvalidOperationException(
+            "CORS origin whitelist is empty in production. Configure Cors:AllowedOrigins (or Cors:AllowedOriginsCsv).");
+    }
+}
+else if (allowedCorsOrigins.Count == 0)
+{
+    allowedCorsOrigins.AddRange(new[]
+    {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    });
+}
+
 builder.Services.AddDbContext<JurisFlowDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlite(sqliteBuilder.ToString()));
+
+builder.Services.AddSingleton<DbEncryptionService>();
+builder.Services.AddSingleton<DocumentEncryptionService>();
+builder.Services.AddSingleton<DocumentTextExtractor>();
+builder.Services.AddScoped<TenantContext>();
+builder.Services.AddSingleton<TenantJobRunner>();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy(CorsPolicyName, policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins(allowedCorsOrigins.ToArray())
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
-    });
+});
+
+
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<JurisFlowDbContext>("db");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        var jwtKey = builder.Configuration["Jwt:Key"];
+        if (string.IsNullOrWhiteSpace(jwtKey))
+        {
+            throw new InvalidOperationException("JWT Key is missing in configuration.");
+        }
+        if (!builder.Environment.IsDevelopment())
+        {
+            if (jwtKey.Contains("DevPurposeOnly", StringComparison.OrdinalIgnoreCase) ||
+                jwtKey.Contains("ChangeInProduction", StringComparison.OrdinalIgnoreCase) ||
+                jwtKey.Length < 32)
+            {
+                throw new InvalidOperationException("JWT Key is not production-safe. Set a strong secret in Jwt:Key.");
+            }
+        }
+
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -45,18 +306,91 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            ClockSkew = TimeSpan.FromMinutes(1)
         };
     });
 
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("SecurityAdminOnly", policy =>
+    {
+        policy.RequireRole("SecurityAdmin");
+    });
+
+    options.AddPolicy("StaffOnly", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager");
+    });
+
+    options.AddPolicy("StaffOrClient", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager", "Client");
+    });
+});
+
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditLogger>();
+builder.Services.AddScoped<AuditLogIntegrityService>();
+builder.Services.AddSingleton<BackupJobQueue>();
+builder.Services.AddScoped<BackupService>();
+builder.Services.AddHostedService<BackupJobHostedService>();
 builder.Services.AddScoped<FirmStructureService>();
+builder.Services.AddSingleton<StripePaymentService>();
 builder.Services.AddScoped<PaymentPlanService>();
 builder.Services.AddScoped<DocumentIndexService>();
 builder.Services.AddScoped<RetentionService>();
+builder.Services.AddSingleton<PasswordPolicyService>();
+builder.Services.AddSingleton<SessionTokenService>();
+builder.Services.AddSingleton<LoginAttemptService>();
+builder.Services.AddScoped<TrustComplianceService>();
+builder.Services.AddScoped<TwilioSmsService>();
+builder.Services.AddScoped<SmsReminderService>();
+builder.Services.AddScoped<OutboundEmailService>();
+builder.Services.AddScoped<HolidaySeedService>();
+builder.Services.AddScoped<EfilingAutomationService>();
+builder.Services.AddScoped<JurisdictionRulesPlatformService>();
+builder.Services.AddScoped<TrustRiskRadarService>();
+builder.Services.AddScoped<LegalBillingEngineService>();
+builder.Services.AddScoped<OutcomeFeePlannerService>();
+builder.Services.AddScoped<ClientTransparencyService>();
+builder.Services.AddSingleton<IntegrationPiiMinimizationService>();
+builder.Services.AddScoped<IIntegrationOperationsGuard, IntegrationOperationsGuard>();
+builder.Services.AddScoped<IntegrationConnectorService>();
+builder.Services.AddScoped<IntegrationWebhookService>();
+builder.Services.AddScoped<AppDirectoryOnboardingService>();
+builder.Services.AddSingleton<IIntegrationSecretAccessPolicy, IntegrationSecretAccessPolicy>();
+builder.Services.AddSingleton<IIntegrationSecretKeyProvider, IntegrationSecretKeyProvider>();
+builder.Services.AddSingleton<IIntegrationSecretCryptoService, IntegrationSecretCryptoService>();
+builder.Services.AddScoped<IIntegrationSecretStore, IntegrationSecretStore>();
+builder.Services.AddScoped<IIntegrationConnector, StripeIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, GoogleCalendarIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, QuickBooksIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, XeroIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, OutlookCalendarIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, GoogleGmailIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, OutlookMailIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, SharePointOneDriveIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, GoogleDriveIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, NetDocumentsIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, IManageIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, BusinessCentralIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, NetSuiteIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, CourtListenerDocketsIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, CourtListenerRecapIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, OneLegalEfileIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, FileAndServeXpressEfileIntegrationConnector>();
+builder.Services.AddScoped<IIntegrationConnector, LegacyIntegrationConnector>();
+builder.Services.AddScoped<IntegrationConnectorRegistry>();
+builder.Services.AddScoped<IntegrationSyncRunner>();
+builder.Services.AddScoped<IntegrationCanonicalActionRunner>();
 builder.Services.AddHostedService<RetentionHostedService>();
 builder.Services.AddScoped<DeadlineReminderService>();
 builder.Services.AddHostedService<DeadlineReminderHostedService>();
+builder.Services.AddHostedService<OperationsJobHostedService>();
+builder.Services.AddHostedService<IntegrationSecretMaintenanceHostedService>();
+builder.Services.AddScoped<SignatureAuditTrailService>();
+builder.Services.AddScoped<SignatureLifecycleService>();
 
 var app = builder.Build();
 
@@ -66,28 +400,32 @@ if (app.Environment.IsDevelopment())
     // app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
-
-app.UseCors("AllowAll");
-
-// Serve static files from uploads folder
-var uploadsPath = Path.Combine(Directory.GetCurrentDirectory(), "uploads");
-if (!Directory.Exists(uploadsPath))
+app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
-    Directory.CreateDirectory(uploadsPath);
-}
-
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(uploadsPath),
-    RequestPath = "/uploads"
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
 
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+
+app.UseSerilogRequestLogging();
+
+app.UseMiddleware<SecurityHeadersMiddleware>();
+
+app.UseCors(CorsPolicyName);
+app.UseRateLimiter();
+
 app.UseAuthentication();
+app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 // Seeding
 using (var scope = app.Services.CreateScope())
@@ -98,56 +436,124 @@ using (var scope = app.Services.CreateScope())
         var context = services.GetRequiredService<JurisFlowDbContext>();
         context.Database.Migrate();
 
-        var adminEmail = builder.Configuration["Seed:AdminEmail"] ?? "admin@jurisflow.local";
-        var simplePassword = builder.Configuration["Seed:AdminPassword"] ?? "ChangeMe123!";
-        var passwordHash = BCrypt.Net.BCrypt.HashPassword(simplePassword);
+        var tenantContext = services.GetRequiredService<TenantContext>();
+        var defaultTenantName = builder.Configuration["Tenancy:DefaultTenantName"] ?? "JurisFlow Legal";
+        var defaultTenantSlug = TenantSeedHelper.NormalizeSlug(builder.Configuration["Tenancy:DefaultTenantSlug"] ?? "default");
 
-        var adminUser = context.Users.FirstOrDefault(u => u.Email == adminEmail);
-        if (adminUser == null)
+        var tenant = context.Tenants.FirstOrDefault(t => t.Slug == defaultTenantSlug)
+                     ?? context.Tenants.FirstOrDefault();
+        if (tenant == null)
         {
-            context.Users.Add(new JurisFlow.Server.Models.User
+            tenant = new Tenant
             {
-                Email = adminEmail,
-                Name = "Admin User",
-                Role = "Admin",
-                PasswordHash = passwordHash
-            });
-        }
-        else
-        {
-            // Always reset password to ensure access
-            adminUser.PasswordHash = passwordHash;
-        }
-
-        // Seed a portal-enabled demo client so you can log in as a client user
-        var demoClientEmail = builder.Configuration["Seed:PortalClientEmail"] ?? "client.demo@jurisflow.local";
-        var demoClientPassword = builder.Configuration["Seed:PortalClientPassword"] ?? "ChangeMe123!";
-        var demoClient = context.Clients.FirstOrDefault(c => c.Email == demoClientEmail);
-        if (demoClient == null)
-        {
-            demoClient = new Client
-            {
-                Name = "Demo Client",
-                Email = demoClientEmail,
-                Phone = "555-0101",
-                Type = "Individual",
-                Status = "Active",
-                ClientNumber = "CLT-1001",
-                PortalEnabled = true,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(demoClientPassword),
+                Name = defaultTenantName,
+                Slug = defaultTenantSlug,
+                IsActive = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-            context.Clients.Add(demoClient);
-        }
-        else
-        {
-            demoClient.PasswordHash = BCrypt.Net.BCrypt.HashPassword(demoClientPassword);
-            demoClient.PortalEnabled = true;
-            demoClient.Status = "Active";
+            context.Tenants.Add(tenant);
+            context.SaveChanges();
         }
 
-        context.SaveChanges();
+        tenantContext.Set(tenant.Id, tenant.Slug);
+        await TenantSeedHelper.BackfillTenantIdsAsync(context, tenant.Id);
+
+        var seedEnabled = builder.Configuration.GetValue("Seed:Enabled", app.Environment.IsDevelopment());
+        if (seedEnabled)
+        {
+            var passwordPolicy = services.GetRequiredService<PasswordPolicyService>();
+            var resetSeedPasswords = builder.Configuration.GetValue("Seed:ResetPasswords", false);
+
+            var adminEmail = builder.Configuration["Seed:AdminEmail"] ?? "admin@jurisflow.local";
+            var adminPassword = builder.Configuration["Seed:AdminPassword"] ?? "ChangeMe123!";
+
+            var adminPasswordResult = passwordPolicy.Validate(adminPassword, adminEmail, "Admin User");
+            if (!adminPasswordResult.IsValid)
+            {
+                throw new InvalidOperationException("Seed admin password does not meet security requirements.");
+            }
+
+            var normalizedAdminEmail = EmailAddressNormalizer.Normalize(adminEmail);
+            var passwordHash = PasswordHashingHelper.HashPassword(adminPassword, builder.Configuration);
+            var adminUser = context.Users.FirstOrDefault(u => u.NormalizedEmail == normalizedAdminEmail);
+            if (adminUser == null)
+            {
+                context.Users.Add(new JurisFlow.Server.Models.User
+                {
+                    Email = adminEmail,
+                    NormalizedEmail = normalizedAdminEmail,
+                    Name = "Admin User",
+                    Role = "Admin",
+                    PasswordHash = passwordHash
+                });
+            }
+            else if (resetSeedPasswords)
+            {
+                adminUser.PasswordHash = passwordHash;
+                adminUser.NormalizedEmail = normalizedAdminEmail;
+            }
+
+            var portalSeedEnabled = builder.Configuration.GetValue("Seed:PortalClientEnabled", false);
+            var demoClientEmail = builder.Configuration["Seed:PortalClientEmail"] ?? "client.demo@jurisflow.local";
+
+            if (portalSeedEnabled)
+            {
+                // Seed a portal-enabled demo client so you can log in as a client user
+                var demoClientPassword = builder.Configuration["Seed:PortalClientPassword"] ?? "ChangeMe123!";
+
+                var demoPasswordResult = passwordPolicy.Validate(demoClientPassword, demoClientEmail, "Demo Client");
+                if (!demoPasswordResult.IsValid)
+                {
+                    throw new InvalidOperationException("Seed client password does not meet security requirements.");
+                }
+
+                var normalizedDemoClientEmail = EmailAddressNormalizer.Normalize(demoClientEmail);
+                var demoClient = context.Clients.FirstOrDefault(c => c.NormalizedEmail == normalizedDemoClientEmail);
+                if (demoClient == null)
+                {
+                    demoClient = new Client
+                    {
+                        Name = "Demo Client",
+                        Email = demoClientEmail,
+                        NormalizedEmail = normalizedDemoClientEmail,
+                        Phone = "555-0101",
+                        Type = "Individual",
+                        Status = "Active",
+                        ClientNumber = "CLT-1001",
+                        PortalEnabled = true,
+                        PasswordHash = PasswordHashingHelper.HashPassword(demoClientPassword, builder.Configuration),
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    };
+                    context.Clients.Add(demoClient);
+                }
+                else
+                {
+                    if (resetSeedPasswords)
+                    {
+                        demoClient.PasswordHash = PasswordHashingHelper.HashPassword(demoClientPassword, builder.Configuration);
+                    }
+                    demoClient.NormalizedEmail = normalizedDemoClientEmail;
+                    demoClient.PortalEnabled = true;
+                    demoClient.Status = "Active";
+                }
+            }
+            else
+            {
+                var normalizedDemoClientEmail = EmailAddressNormalizer.Normalize(demoClientEmail);
+                var demoClient = context.Clients.FirstOrDefault(c => c.NormalizedEmail == normalizedDemoClientEmail);
+                if (demoClient != null)
+                {
+                    demoClient.PortalEnabled = false;
+                    demoClient.PasswordHash = null;
+                    demoClient.Status = "Inactive";
+                    demoClient.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+
+            context.SaveChanges();
+        }
 
         if (!context.BillingSettings.Any())
         {
@@ -178,6 +584,15 @@ using (var scope = app.Services.CreateScope())
             });
             context.SaveChanges();
         }
+
+        var holidaysSeedEnabled = builder.Configuration.GetValue("Holidays:SeedEnabled", seedEnabled);
+        if (holidaysSeedEnabled)
+        {
+            var holidaySeedService = services.GetRequiredService<HolidaySeedService>();
+            var startYear = builder.Configuration.GetValue("Holidays:SeedStartYear", DateTime.UtcNow.Year);
+            var yearsAhead = builder.Configuration.GetValue("Holidays:SeedYearsAhead", 2);
+            await holidaySeedService.EnsureSeededAsync(context, startYear, yearsAhead);
+        }
     }
     catch (Exception ex)
     {
@@ -187,3 +602,192 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static (List<string> validOrigins, List<string> invalidOrigins) ResolveCorsOrigins(IConfiguration configuration)
+{
+    var configuredOrigins = new List<string>();
+
+    var sectionOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+    if (sectionOrigins != null)
+    {
+        configuredOrigins.AddRange(sectionOrigins);
+    }
+
+    var csvOrigins = configuration["Cors:AllowedOriginsCsv"];
+    if (!string.IsNullOrWhiteSpace(csvOrigins))
+    {
+        configuredOrigins.AddRange(csvOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    var validOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var invalidOrigins = new List<string>();
+
+    foreach (var rawOrigin in configuredOrigins.Where(o => !string.IsNullOrWhiteSpace(o)))
+    {
+        if (TryNormalizeOrigin(rawOrigin, out var normalizedOrigin))
+        {
+            validOrigins.Add(normalizedOrigin);
+        }
+        else
+        {
+            invalidOrigins.Add(rawOrigin);
+        }
+    }
+
+    return (validOrigins.OrderBy(o => o, StringComparer.OrdinalIgnoreCase).ToList(), invalidOrigins);
+}
+
+static bool TryNormalizeOrigin(string rawOrigin, out string normalizedOrigin)
+{
+    normalizedOrigin = string.Empty;
+    var value = rawOrigin.Trim();
+
+    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+    {
+        return false;
+    }
+
+    if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    if ((!string.IsNullOrEmpty(uri.AbsolutePath) && uri.AbsolutePath != "/") ||
+        !string.IsNullOrEmpty(uri.Query) ||
+        !string.IsNullOrEmpty(uri.Fragment))
+    {
+        return false;
+    }
+
+    normalizedOrigin = uri.GetLeftPart(UriPartial.Authority);
+    return true;
+}
+
+static string BuildRateLimitPartitionKey(HttpContext context, string policyName)
+{
+    var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var tenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+    var tenantSlug = context.Request.Headers["X-Tenant-Slug"].FirstOrDefault()
+                     ?? context.Request.Query["tenantSlug"].FirstOrDefault()
+                     ?? context.Request.Query["tenant"].FirstOrDefault();
+
+    var tenant = !string.IsNullOrWhiteSpace(tenantId)
+        ? tenantId
+        : !string.IsNullOrWhiteSpace(tenantSlug)
+            ? tenantSlug
+            : "no-tenant";
+
+    return $"{policyName}:{tenant}:{ip}";
+}
+
+static void EnsureProductionSecurityRequirements(IConfiguration configuration)
+{
+    var errors = new List<string>();
+
+    RequireFlagEnabled(configuration, "Security:MfaEnforced", errors);
+    RequireFlagEnabled(configuration, "Security:DocumentEncryptionEnabled", errors);
+    RequireFlagEnabled(configuration, "Security:DbEncryptionEnabled", errors);
+    RequireFlagEnabled(configuration, "Security:AuditLogImmutable", errors);
+    RequireFlagEnabled(configuration, "Security:AuditLogFailClosed", errors);
+
+    RequireBase64Key(configuration, "Security:DocumentEncryptionKey", exactBytes: 32, minBytes: null, errors);
+    RequireBase64Key(configuration, "Security:DbEncryptionKey", exactBytes: 32, minBytes: null, errors);
+    RequireBase64Key(configuration, "Security:AuditLogKey", exactBytes: null, minBytes: 32, errors);
+    RequireIntegrationSecretProtection(configuration, errors);
+
+    if (errors.Count > 0)
+    {
+        throw new InvalidOperationException(
+            $"Production security requirements are not satisfied:{Environment.NewLine}- {string.Join(Environment.NewLine + "- ", errors)}");
+    }
+}
+
+static void RequireIntegrationSecretProtection(IConfiguration configuration, List<string> errors)
+{
+    var provider = (configuration["Security:IntegrationSecrets:Provider"] ?? "config")
+        .Trim()
+        .ToLowerInvariant();
+
+    if (configuration.GetValue("Security:IntegrationSecrets:LegacyPlaintextAllowed", false))
+    {
+        errors.Add("Security:IntegrationSecrets:LegacyPlaintextAllowed must be false in production.");
+    }
+
+    string activeKeyIdKey;
+    string keysPrefix;
+    switch (provider)
+    {
+        case "keyvault":
+            activeKeyIdKey = "Security:IntegrationSecrets:KeyVault:ActiveKeyId";
+            keysPrefix = "Security:IntegrationSecrets:KeyVault:DataKeys";
+            break;
+        case "kms":
+            activeKeyIdKey = "Security:IntegrationSecrets:Kms:ActiveKeyId";
+            keysPrefix = "Security:IntegrationSecrets:Kms:DataKeys";
+            break;
+        case "config":
+            errors.Add("Security:IntegrationSecrets:Provider must be 'kms' or 'keyvault' in production.");
+            activeKeyIdKey = "Security:IntegrationSecrets:ActiveKeyId";
+            keysPrefix = "Security:IntegrationSecrets:Keys";
+            break;
+        default:
+            errors.Add("Security:IntegrationSecrets:Provider must be one of: config, kms, keyvault.");
+            return;
+    }
+
+    var activeKeyId = configuration[activeKeyIdKey]?.Trim();
+    if (string.IsNullOrWhiteSpace(activeKeyId))
+    {
+        errors.Add($"{activeKeyIdKey} is required.");
+        return;
+    }
+
+    var activeKeyPath = $"{keysPrefix}:{activeKeyId}";
+    RequireBase64Key(configuration, activeKeyPath, exactBytes: 32, minBytes: null, errors);
+}
+
+static void RequireFlagEnabled(IConfiguration configuration, string key, List<string> errors)
+{
+    if (!configuration.GetValue(key, false))
+    {
+        errors.Add($"{key} must be set to true.");
+    }
+}
+
+static void RequireBase64Key(
+    IConfiguration configuration,
+    string key,
+    int? exactBytes,
+    int? minBytes,
+    List<string> errors)
+{
+    var raw = configuration[key];
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        errors.Add($"{key} is required.");
+        return;
+    }
+
+    try
+    {
+        var bytes = Convert.FromBase64String(raw);
+
+        if (exactBytes.HasValue && bytes.Length != exactBytes.Value)
+        {
+            errors.Add($"{key} must decode to exactly {exactBytes.Value} bytes.");
+            return;
+        }
+
+        if (minBytes.HasValue && bytes.Length < minBytes.Value)
+        {
+            errors.Add($"{key} must decode to at least {minBytes.Value.ToString(CultureInfo.InvariantCulture)} bytes.");
+        }
+    }
+    catch (FormatException)
+    {
+        errors.Add($"{key} must be valid base64.");
+    }
+}
+
+public partial class Program { }
