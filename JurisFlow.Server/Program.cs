@@ -10,6 +10,7 @@ using System.Text;
 using Serilog;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Data.Sqlite;
+using Npgsql;
 using System.IO;
 using System.Globalization;
 using System.Threading.RateLimiting;
@@ -192,42 +193,9 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException("DefaultConnection is missing.");
 }
 
-var sqliteBuilder = new SqliteConnectionStringBuilder(connectionString);
-if (!string.IsNullOrWhiteSpace(sqliteBuilder.DataSource) && sqliteBuilder.DataSource != ":memory:" && !Path.IsPathRooted(sqliteBuilder.DataSource))
-{
-    var contentRoot = builder.Environment.ContentRootPath;
-    var serverRoot = contentRoot;
-    if (!File.Exists(Path.Combine(contentRoot, "JurisFlow.Server.csproj")))
-    {
-        var candidate = Path.Combine(contentRoot, "JurisFlow.Server");
-        if (File.Exists(Path.Combine(candidate, "JurisFlow.Server.csproj")))
-        {
-            serverRoot = candidate;
-        }
-    }
-
-    var dataDir = ResolveWritableDataDirectory(serverRoot);
-    var appDataPath = Path.Combine(dataDir, sqliteBuilder.DataSource);
-    var legacyPath = Path.Combine(serverRoot, sqliteBuilder.DataSource);
-
-    if (File.Exists(legacyPath) && !File.Exists(appDataPath))
-    {
-        File.Copy(legacyPath, appDataPath, true);
-    }
-    else if (File.Exists(legacyPath) && File.Exists(appDataPath))
-    {
-        var legacyInfo = new FileInfo(legacyPath);
-        var appDataInfo = new FileInfo(appDataPath);
-        if (appDataInfo.Length < 200 * 1024 && legacyInfo.Length > appDataInfo.Length)
-        {
-            var backupPath = $"{appDataPath}.bak-{DateTime.UtcNow:yyyyMMddHHmmss}";
-            File.Copy(appDataPath, backupPath, true);
-            File.Copy(legacyPath, appDataPath, true);
-        }
-    }
-
-    sqliteBuilder.DataSource = appDataPath;
-}
+var databaseProvider = ResolveDatabaseProvider(builder.Configuration, connectionString);
+var resolvedConnectionString = ResolveDatabaseConnectionString(databaseProvider, connectionString, builder.Environment.ContentRootPath);
+var databaseBootstrapMode = ResolveDatabaseBootstrapMode(builder.Configuration, databaseProvider);
 
 var (allowedCorsOrigins, invalidCorsOrigins) = ResolveCorsOrigins(builder.Configuration);
 if (invalidCorsOrigins.Count > 0)
@@ -258,7 +226,7 @@ else if (allowedCorsOrigins.Count == 0)
 }
 
 builder.Services.AddDbContext<JurisFlowDbContext>(options =>
-    options.UseSqlite(sqliteBuilder.ToString()));
+    ConfigureDatabaseProvider(options, databaseProvider, resolvedConnectionString));
 
 builder.Services.AddSingleton<DbEncryptionService>();
 builder.Services.AddSingleton<DocumentEncryptionService>();
@@ -435,7 +403,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<JurisFlowDbContext>();
-        context.Database.Migrate();
+        InitializeDatabase(context, databaseBootstrapMode);
 
         var tenantContext = services.GetRequiredService<TenantContext>();
         var defaultTenantName = builder.Configuration["Tenancy:DefaultTenantName"] ?? "JurisFlow Legal";
@@ -808,6 +776,197 @@ static void ConfigureRuntimePortBinding(WebApplicationBuilder builder)
     }
 
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+
+static string ResolveDatabaseProvider(IConfiguration configuration, string connectionString)
+{
+    var configuredProvider = configuration["Database:Provider"]?.Trim().ToLowerInvariant();
+    if (!string.IsNullOrWhiteSpace(configuredProvider))
+    {
+        return configuredProvider switch
+        {
+            "sqlite" => "sqlite",
+            "postgres" => "postgres",
+            "postgresql" => "postgres",
+            _ => throw new InvalidOperationException("Database:Provider must be 'sqlite' or 'postgres'.")
+        };
+    }
+
+    var normalizedConnection = connectionString.TrimStart();
+    if (normalizedConnection.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+        normalizedConnection.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase) ||
+        normalizedConnection.Contains("Host=", StringComparison.OrdinalIgnoreCase))
+    {
+        return "postgres";
+    }
+
+    return "sqlite";
+}
+
+static string ResolveDatabaseConnectionString(string provider, string connectionString, string contentRoot)
+{
+    return provider switch
+    {
+        "sqlite" => ResolveSqliteConnectionString(connectionString, contentRoot),
+        "postgres" => NormalizePostgresConnectionString(connectionString),
+        _ => throw new InvalidOperationException($"Unsupported database provider '{provider}'.")
+    };
+}
+
+static void ConfigureDatabaseProvider(DbContextOptionsBuilder options, string provider, string connectionString)
+{
+    switch (provider)
+    {
+        case "sqlite":
+            options.UseSqlite(connectionString);
+            break;
+        case "postgres":
+            options.UseNpgsql(connectionString, npgsqlOptions =>
+            {
+                npgsqlOptions.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null);
+            });
+            break;
+        default:
+            throw new InvalidOperationException($"Unsupported database provider '{provider}'.");
+    }
+}
+
+static void InitializeDatabase(JurisFlowDbContext context, string bootstrapMode)
+{
+    if (string.Equals(bootstrapMode, "ensure-created", StringComparison.OrdinalIgnoreCase))
+    {
+        context.Database.EnsureCreated();
+        return;
+    }
+
+    context.Database.Migrate();
+}
+
+static string ResolveDatabaseBootstrapMode(IConfiguration configuration, string provider)
+{
+    var configuredMode = configuration["Database:BootstrapMode"]?.Trim().ToLowerInvariant();
+    if (!string.IsNullOrWhiteSpace(configuredMode))
+    {
+        return configuredMode switch
+        {
+            "migrate" => "migrate",
+            "ensure-created" => "ensure-created",
+            "ensurecreated" => "ensure-created",
+            _ => throw new InvalidOperationException("Database:BootstrapMode must be 'migrate' or 'ensure-created'.")
+        };
+    }
+
+    return string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase)
+        ? "ensure-created"
+        : "migrate";
+}
+
+static string ResolveSqliteConnectionString(string connectionString, string contentRoot)
+{
+    var sqliteBuilder = new SqliteConnectionStringBuilder(connectionString);
+    if (string.IsNullOrWhiteSpace(sqliteBuilder.DataSource) ||
+        sqliteBuilder.DataSource == ":memory:" ||
+        Path.IsPathRooted(sqliteBuilder.DataSource))
+    {
+        return sqliteBuilder.ToString();
+    }
+
+    var serverRoot = contentRoot;
+    if (!File.Exists(Path.Combine(contentRoot, "JurisFlow.Server.csproj")))
+    {
+        var candidate = Path.Combine(contentRoot, "JurisFlow.Server");
+        if (File.Exists(Path.Combine(candidate, "JurisFlow.Server.csproj")))
+        {
+            serverRoot = candidate;
+        }
+    }
+
+    var dataDir = ResolveWritableDataDirectory(serverRoot);
+    var appDataPath = Path.Combine(dataDir, sqliteBuilder.DataSource);
+    var legacyPath = Path.Combine(serverRoot, sqliteBuilder.DataSource);
+
+    if (File.Exists(legacyPath) && !File.Exists(appDataPath))
+    {
+        File.Copy(legacyPath, appDataPath, true);
+    }
+    else if (File.Exists(legacyPath) && File.Exists(appDataPath))
+    {
+        var legacyInfo = new FileInfo(legacyPath);
+        var appDataInfo = new FileInfo(appDataPath);
+        if (appDataInfo.Length < 200 * 1024 && legacyInfo.Length > appDataInfo.Length)
+        {
+            var backupPath = $"{appDataPath}.bak-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            File.Copy(appDataPath, backupPath, true);
+            File.Copy(legacyPath, appDataPath, true);
+        }
+    }
+
+    sqliteBuilder.DataSource = appDataPath;
+    return sqliteBuilder.ToString();
+}
+
+static string NormalizePostgresConnectionString(string connectionString)
+{
+    var normalized = connectionString.Trim();
+    if (normalized.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+        normalized.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    {
+        return ConvertPostgresUriToConnectionString(normalized);
+    }
+
+    return normalized;
+}
+
+static string ConvertPostgresUriToConnectionString(string uriValue)
+{
+    if (!Uri.TryCreate(uriValue, UriKind.Absolute, out var uri))
+    {
+        throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not a valid PostgreSQL URI.");
+    }
+
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = uri.AbsolutePath.Trim('/'),
+        SslMode = SslMode.Require
+    };
+
+    if (!string.IsNullOrWhiteSpace(uri.UserInfo))
+    {
+        var userInfoParts = uri.UserInfo.Split(':', 2);
+        builder.Username = Uri.UnescapeDataString(userInfoParts[0]);
+        if (userInfoParts.Length > 1)
+        {
+            builder.Password = Uri.UnescapeDataString(userInfoParts[1]);
+        }
+    }
+
+    if (!string.IsNullOrWhiteSpace(uri.Query))
+    {
+        var query = uri.Query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var pair in query)
+        {
+            var parts = pair.Split('=', 2);
+            var key = Uri.UnescapeDataString(parts[0]);
+            var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            builder[key] = value;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(builder.Database))
+    {
+        throw new InvalidOperationException("ConnectionStrings:DefaultConnection PostgreSQL URI must include a database name.");
+    }
+
+    return builder.ToString();
 }
 
 static string ResolveWritableDataDirectory(string serverRoot)
