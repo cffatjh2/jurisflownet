@@ -17,7 +17,7 @@ namespace JurisFlow.Server.Controllers
     public class ClientMessagesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly AuditLogger _auditLogger;
         private readonly TenantContext _tenantContext;
         private const int MaxAttachmentCount = 10;
@@ -39,10 +39,10 @@ namespace JurisFlow.Server.Controllers
             ["text/plain"] = ".txt"
         };
 
-        public ClientMessagesController(JurisFlowDbContext context, IWebHostEnvironment env, AuditLogger auditLogger, TenantContext tenantContext)
+        public ClientMessagesController(JurisFlowDbContext context, IAppFileStorage fileStorage, AuditLogger auditLogger, TenantContext tenantContext)
         {
             _context = context;
-            _env = env;
+            _fileStorage = fileStorage;
             _auditLogger = auditLogger;
             _tenantContext = tenantContext;
         }
@@ -481,9 +481,6 @@ namespace JurisFlow.Server.Controllers
                 throw new InvalidOperationException($"A maximum of {MaxAttachmentCount} attachments is allowed per message.");
             }
 
-            var root = GetMessageAttachmentRoot();
-            if (!Directory.Exists(root)) Directory.CreateDirectory(root);
-
             long totalBytes = 0;
             foreach (var att in attachments)
             {
@@ -503,8 +500,7 @@ namespace JurisFlow.Server.Controllers
                 }
 
                 var fileName = $"{Guid.NewGuid():N}{ext}";
-                var savePath = Path.Combine(root, fileName);
-                await System.IO.File.WriteAllBytesAsync(savePath, bytes);
+                await _fileStorage.SaveBytesAsync(GetMessageAttachmentPath(fileName), bytes, mimeType);
 
                 result.Add(new MessageAttachment
                 {
@@ -517,13 +513,14 @@ namespace JurisFlow.Server.Controllers
             return result;
         }
 
-        private string GetMessageAttachmentRoot()
+        private string GetMessageAttachmentPath(string fileName)
         {
             if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
             {
                 throw new InvalidOperationException("Tenant context is missing.");
             }
-            return Path.Combine(_env.ContentRootPath, "uploads", _tenantContext.TenantId, "message-attachments");
+
+            return $"uploads/{_tenantContext.TenantId}/message-attachments/{fileName}";
         }
 
         private static (string MimeType, string Base64Payload) ParseAttachmentData(AttachmentDto attachment)

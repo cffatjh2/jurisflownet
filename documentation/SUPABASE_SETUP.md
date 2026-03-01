@@ -1,12 +1,14 @@
-# Supabase Database Setup
+# Supabase Database and Storage Setup
 
-This project now supports running the backend against Supabase Postgres in addition to local SQLite.
+This project now supports running the backend against Supabase Postgres and Supabase Storage in addition to local SQLite + local disk.
 
 ## What Changed
 
 - `Database:Provider` now supports `sqlite` and `postgres`.
 - PostgreSQL connection strings can be supplied in standard key/value form or as a `postgresql://...` URI.
 - PostgreSQL startup defaults to `Database:BootstrapMode=ensure-created` so a fresh Supabase database can be initialized from the current EF Core model without replaying the existing SQLite migration chain.
+- `Storage:Provider` now supports `local` and `supabase`.
+- When `Storage:Provider=supabase`, document files, client portal uploads, message attachments, avatars, and imported integration artifacts are stored in a private Supabase Storage bucket instead of the app filesystem.
 
 ## Required Backend Variables
 
@@ -15,7 +17,11 @@ Use `supabase.backend.env.example` as the baseline. The database-specific values
 ```env
 Database__Provider=postgres
 Database__BootstrapMode=ensure-created
-ConnectionStrings__DefaultConnection=Host=db.your-project-ref.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=replace-me;SSL Mode=Require
+ConnectionStrings__DefaultConnection=Host=aws-0-us-east-1.pooler.supabase.com;Port=5432;Database=postgres;Username=postgres.your-project-ref;Password=replace-me;SSL Mode=Require
+Storage__Provider=supabase
+Storage__Supabase__Url=https://your-project-ref.supabase.co
+Storage__Supabase__ServiceRoleKey=replace-with-your-supabase-service-role-key
+Storage__Supabase__Bucket=jurisflow-files
 ```
 
 You can also use the URI form Supabase shows in the dashboard:
@@ -25,6 +31,8 @@ ConnectionStrings__DefaultConnection=postgresql://postgres:replace-me@db.your-pr
 ```
 
 The app normalizes the URI into an Npgsql connection string automatically.
+
+For Railway and similar IPv4-only platforms, prefer the Supabase `Session Pooler` connection instead of `Direct connection`.
 
 ## Important Limitation
 
@@ -36,21 +44,28 @@ That means:
 - do not point this at an existing production PostgreSQL schema that needs incremental EF migrations
 - if you want full PostgreSQL migration history later, create a PostgreSQL migration baseline before switching `Database__BootstrapMode` to `migrate`
 
-## Storage Note
+## Storage Notes
 
-This change prepares the relational database layer only. Document binaries are still stored on the app filesystem today, so production-grade file storage should still be moved to Supabase Storage or another object store in a follow-up change.
+- Use a private bucket and provide the backend with the Supabase `service_role` key via `Storage__Supabase__ServiceRoleKey`.
+- The backend auto-creates the configured bucket if it does not exist yet.
+- Existing `FilePath` values continue to use logical app-relative keys such as `uploads/{tenantId}/...`; the storage provider now resolves those keys to local disk or Supabase Storage.
+- Backup ZIP files are still generated locally by the application when you trigger backups. The runtime file store for documents and attachments is what moved to Supabase Storage.
 
 ## Supabase Console Steps
 
 1. Create a new Supabase project.
 2. In Supabase, open `Project Settings -> Database`.
-3. Copy the direct connection string or URI.
-4. Put that value into `ConnectionStrings__DefaultConnection`.
-5. Add the remaining backend security variables from `supabase.backend.env.example`.
-6. Deploy/redeploy the backend.
+3. Open the connection dialog and switch the database connection method to `Session Pooler`.
+4. Copy the pooler host/port/username/password into `ConnectionStrings__DefaultConnection`.
+5. Open `Project Settings -> API` and copy the `service_role` key.
+6. Put that key into `Storage__Supabase__ServiceRoleKey`.
+7. Add the remaining backend security variables from `supabase.backend.env.example`.
+8. Deploy/redeploy the backend.
 
 ## Current References
 
 - Supabase database overview: https://supabase.com/docs/guides/database/overview
 - Supabase connecting to Postgres: https://supabase.com/docs/guides/database/connecting-to-postgres
 - Supabase connection strings: https://supabase.com/docs/guides/database/connecting-to-postgres#connection-strings
+- Supabase Storage overview: https://supabase.com/docs/guides/storage
+- Supabase API keys: https://supabase.com/docs/guides/api/api-keys

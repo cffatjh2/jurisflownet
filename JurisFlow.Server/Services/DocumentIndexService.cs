@@ -14,18 +14,18 @@ namespace JurisFlow.Server.Services
         private const int MaxTokenCount = 500;
         private const int MinTokenLength = 3;
         private readonly JurisFlowDbContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly DocumentEncryptionService _documentEncryptionService;
         private readonly DocumentTextExtractor _textExtractor;
 
         public DocumentIndexService(
             JurisFlowDbContext context,
-            IWebHostEnvironment env,
+            IAppFileStorage fileStorage,
             DocumentEncryptionService documentEncryptionService,
             DocumentTextExtractor textExtractor)
         {
             _context = context;
-            _env = env;
+            _fileStorage = fileStorage;
             _documentEncryptionService = documentEncryptionService;
             _textExtractor = textExtractor;
         }
@@ -37,18 +37,25 @@ namespace JurisFlow.Server.Services
                 return null;
             }
 
-            var fullPath = Path.Combine(_env.ContentRootPath, document.FilePath);
-            return await UpsertIndexAsync(document, fullPath);
-        }
-
-        public async Task<DocumentContentIndex?> UpsertIndexAsync(Document document, string fullPath)
-        {
-            if (!File.Exists(fullPath))
+            try
+            {
+                var content = await LoadContentAsync(document);
+                return await UpsertIndexAsync(document, content);
+            }
+            catch (FileNotFoundException)
             {
                 return null;
             }
+        }
 
-            var content = await LoadContentAsync(document, fullPath);
+        public async Task<DocumentContentIndex?> UpsertIndexAsync(Document document, byte[] plaintextContent)
+        {
+            var content = await _textExtractor.ExtractTextAsync(plaintextContent, document.FileName);
+            return await UpsertIndexAsync(document, content);
+        }
+
+        private async Task<DocumentContentIndex?> UpsertIndexAsync(Document document, string content)
+        {
             var normalized = NormalizeContent(content);
             var contentHash = ComputeSha256(normalized);
             var truncated = normalized.Length > MaxIndexLength ? normalized[..MaxIndexLength] : normalized;
@@ -133,8 +140,12 @@ namespace JurisFlow.Server.Services
                 {
                     continue;
                 }
-                var fullPath = ResolveIndexedFilePath(doc.FilePath, tenantId);
-                var indexed = await UpsertIndexAsync(doc, fullPath);
+                if (!IsTenantFilePath(doc.FilePath, tenantId))
+                {
+                    continue;
+                }
+
+                var indexed = await UpsertIndexAsync(doc);
                 if (indexed != null)
                 {
                     count += 1;
@@ -144,38 +155,17 @@ namespace JurisFlow.Server.Services
             return count;
         }
 
-        private string ResolveIndexedFilePath(string relativePath, string? tenantId)
+        private bool IsTenantFilePath(string relativePath, string? tenantId)
         {
-            var normalizedRelativePath = relativePath
-                .Replace(Path.DirectorySeparatorChar, '/')
-                .Replace(Path.AltDirectorySeparatorChar, '/')
-                .TrimStart('/');
+            var normalizedRelativePath = _fileStorage.NormalizeRelativePath(relativePath);
 
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 var expectedPrefix = $"uploads/{tenantId}/";
-                if (!normalizedRelativePath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException("Stored file path is outside the tenant upload root.");
-                }
+                return normalizedRelativePath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase);
             }
 
-            var fullPath = Path.GetFullPath(Path.Combine(_env.ContentRootPath, normalizedRelativePath));
-            if (!string.IsNullOrWhiteSpace(tenantId))
-            {
-                var tenantRoot = Path.GetFullPath(Path.Combine(_env.ContentRootPath, "uploads", tenantId));
-                var tenantBoundary = tenantRoot.EndsWith(Path.DirectorySeparatorChar)
-                    ? tenantRoot
-                    : tenantRoot + Path.DirectorySeparatorChar;
-
-                if (!fullPath.StartsWith(tenantBoundary, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(fullPath, tenantRoot, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException("Resolved file path is outside the tenant upload root.");
-                }
-            }
-
-            return fullPath;
+            return true;
         }
 
         public static List<string> TokenizeQuery(string input, int maxTokens = 8)
@@ -206,10 +196,11 @@ namespace JurisFlow.Server.Services
             return tokens.ToList();
         }
 
-        private async Task<string> LoadContentAsync(Document document, string fullPath)
+        private async Task<string> LoadContentAsync(Document document)
         {
             try
             {
+                var storedBytes = await _fileStorage.ReadBytesAsync(document.FilePath);
                 if (document.IsEncrypted)
                 {
                     if (string.IsNullOrWhiteSpace(document.EncryptionIv) || string.IsNullOrWhiteSpace(document.EncryptionTag))
@@ -217,11 +208,11 @@ namespace JurisFlow.Server.Services
                         return string.Empty;
                     }
 
-                    var plaintext = await _documentEncryptionService.DecryptFileAsync(fullPath, document.EncryptionIv, document.EncryptionTag);
+                    var plaintext = _documentEncryptionService.DecryptBytes(storedBytes, document.EncryptionIv, document.EncryptionTag);
                     return await _textExtractor.ExtractTextAsync(plaintext, document.FileName);
                 }
 
-                return await _textExtractor.ExtractTextAsync(fullPath);
+                return await _textExtractor.ExtractTextAsync(storedBytes, document.FileName);
             }
             catch
             {

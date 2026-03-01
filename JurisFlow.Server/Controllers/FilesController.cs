@@ -16,14 +16,14 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOrClient")]
     public class FilesController : ControllerBase
     {
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly JurisFlowDbContext _context;
         private readonly TenantContext _tenantContext;
         private readonly FileExtensionContentTypeProvider _contentTypeProvider = new();
 
-        public FilesController(IWebHostEnvironment env, JurisFlowDbContext context, TenantContext tenantContext)
+        public FilesController(IAppFileStorage fileStorage, JurisFlowDbContext context, TenantContext tenantContext)
         {
-            _env = env;
+            _fileStorage = fileStorage;
             _context = context;
             _tenantContext = tenantContext;
         }
@@ -43,17 +43,18 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            var path = Path.Combine(_env.ContentRootPath, "uploads", tenantId, "message-attachments", safeName);
-            if (!System.IO.File.Exists(path))
+            var path = $"uploads/{tenantId}/message-attachments/{safeName}";
+            if (!await _fileStorage.ExistsAsync(path))
             {
                 return NotFound(new { message = "File not found." });
             }
 
-            return PhysicalFile(path, GetContentType(path), safeName);
+            var bytes = await _fileStorage.ReadBytesAsync(path);
+            return File(bytes, GetContentType(safeName), safeName);
         }
 
         [HttpGet("avatars/{fileName}")]
-        public IActionResult GetAvatar(string fileName)
+        public async Task<IActionResult> GetAvatar(string fileName)
         {
             var tenantId = RequireTenantId();
             var safeName = Path.GetFileName(fileName);
@@ -62,13 +63,14 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Invalid file name." });
             }
 
-            var path = Path.Combine(_env.ContentRootPath, "uploads", tenantId, "avatars", safeName);
-            if (!System.IO.File.Exists(path))
+            var path = $"uploads/{tenantId}/avatars/{safeName}";
+            if (!await _fileStorage.ExistsAsync(path))
             {
                 return NotFound(new { message = "File not found." });
             }
 
-            return PhysicalFile(path, GetContentType(path), safeName);
+            var bytes = await _fileStorage.ReadBytesAsync(path);
+            return File(bytes, GetContentType(safeName), safeName);
         }
 
         private string RequireTenantId()

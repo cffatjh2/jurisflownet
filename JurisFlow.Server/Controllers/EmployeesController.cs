@@ -15,16 +15,16 @@ namespace JurisFlow.Server.Controllers
     public class EmployeesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly FirmStructureService _firmStructure;
         private readonly PasswordPolicyService _passwordPolicy;
         private readonly TenantContext _tenantContext;
         private readonly IConfiguration _configuration;
 
-        public EmployeesController(JurisFlowDbContext context, IWebHostEnvironment env, FirmStructureService firmStructure, PasswordPolicyService passwordPolicy, TenantContext tenantContext, IConfiguration configuration)
+        public EmployeesController(JurisFlowDbContext context, IAppFileStorage fileStorage, FirmStructureService firmStructure, PasswordPolicyService passwordPolicy, TenantContext tenantContext, IConfiguration configuration)
         {
             _context = context;
-            _env = env;
+            _fileStorage = fileStorage;
             _firmStructure = firmStructure;
             _passwordPolicy = passwordPolicy;
             _tenantContext = tenantContext;
@@ -299,20 +299,18 @@ namespace JurisFlow.Server.Controllers
             if (employee == null) return NotFound();
             if (file == null || file.Length == 0) return BadRequest("File is required.");
 
-            var uploadsRoot = GetAvatarRoot();
-            if (!Directory.Exists(uploadsRoot))
-            {
-                Directory.CreateDirectory(uploadsRoot);
-            }
-
             var extension = Path.GetExtension(file.FileName);
             var fileName = $"{Guid.NewGuid()}{extension}";
-            var savePath = Path.Combine(uploadsRoot, fileName);
-
-            using (var stream = new FileStream(savePath, FileMode.Create))
+            var savePath = GetAvatarPath(fileName);
+            byte[] avatarBytes;
+            await using (var stream = file.OpenReadStream())
+            using (var buffer = new MemoryStream())
             {
-                await file.CopyToAsync(stream);
+                await stream.CopyToAsync(buffer);
+                avatarBytes = buffer.ToArray();
             }
+
+            await _fileStorage.SaveBytesAsync(savePath, avatarBytes, file.ContentType);
 
             var relativePath = $"/api/files/avatars/{fileName}";
             if (employee.User != null)
@@ -325,14 +323,14 @@ namespace JurisFlow.Server.Controllers
             return Ok(new { url = relativePath });
         }
 
-        private string GetAvatarRoot()
+        private string GetAvatarPath(string fileName)
         {
             if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
             {
                 throw new InvalidOperationException("Tenant context is missing.");
             }
 
-            return Path.Combine(_env.ContentRootPath, "uploads", _tenantContext.TenantId, "avatars");
+            return $"uploads/{_tenantContext.TenantId}/avatars/{fileName}";
         }
     }
 }

@@ -19,7 +19,7 @@ namespace JurisFlow.Server.Controllers
     public class ClientPortalController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly AuditLogger _auditLogger;
         private readonly PaymentPlanService _paymentPlanService;
         private readonly DocumentIndexService _documentIndexService;
@@ -51,7 +51,7 @@ namespace JurisFlow.Server.Controllers
 
         public ClientPortalController(
             JurisFlowDbContext context,
-            IWebHostEnvironment env,
+            IAppFileStorage fileStorage,
             AuditLogger auditLogger,
             PaymentPlanService paymentPlanService,
             DocumentIndexService documentIndexService,
@@ -61,7 +61,7 @@ namespace JurisFlow.Server.Controllers
             ClientTransparencyService clientTransparencyService)
         {
             _context = context;
-            _env = env;
+            _fileStorage = fileStorage;
             _auditLogger = auditLogger;
             _paymentPlanService = paymentPlanService;
             _documentIndexService = documentIndexService;
@@ -356,8 +356,6 @@ namespace JurisFlow.Server.Controllers
                 }
             }
 
-            var uploadsFolder = GetTenantUploadsFolder();
-
             var originalFileName = Path.GetFileName(file.FileName);
             if (string.IsNullOrWhiteSpace(originalFileName))
             {
@@ -379,17 +377,17 @@ namespace JurisFlow.Server.Controllers
 
             var displayFileName = NormalizeUploadDisplayFileName(originalFileName, storageExtension);
             var uniqueFileName = $"{Guid.NewGuid():N}{storageExtension}";
-            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+            var filePath = GetTenantRelativePath(uniqueFileName);
             DocumentEncryptionPayload? encryptionPayload = null;
 
             if (_documentEncryptionService.Enabled)
             {
-                await using var stream = new MemoryStream(fileBytes, writable: false);
-                encryptionPayload = await _documentEncryptionService.EncryptFileAsync(stream, filePath);
+                encryptionPayload = _documentEncryptionService.EncryptBytes(fileBytes);
+                await _fileStorage.SaveBytesAsync(filePath, encryptionPayload.Ciphertext, normalizedMimeType);
             }
             else
             {
-                await System.IO.File.WriteAllBytesAsync(filePath, fileBytes);
+                await _fileStorage.SaveBytesAsync(filePath, fileBytes, normalizedMimeType);
             }
 
             var now = DateTime.UtcNow;
@@ -440,7 +438,7 @@ namespace JurisFlow.Server.Controllers
             bool indexingQueuedForRetry = false;
             try
             {
-                await _documentIndexService.UpsertIndexAsync(document, filePath);
+                await _documentIndexService.UpsertIndexAsync(document, fileBytes);
             }
             catch (Exception ex)
             {
@@ -1047,17 +1045,6 @@ namespace JurisFlow.Server.Controllers
             return query.Where(e => EF.Property<string>(e, "TenantId") == tenantId);
         }
 
-        private string GetTenantUploadsFolder()
-        {
-            var tenantId = RequireTenantId();
-            var uploadsFolder = Path.Combine(_env.ContentRootPath, "uploads", tenantId);
-            if (!Directory.Exists(uploadsFolder))
-            {
-                Directory.CreateDirectory(uploadsFolder);
-            }
-            return uploadsFolder;
-        }
-
         private string GetTenantRelativePath(string fileName)
         {
             var tenantId = RequireTenantId();
@@ -1072,31 +1059,22 @@ namespace JurisFlow.Server.Controllers
             string? encryptionIv,
             string? encryptionTag)
         {
-            var safePath = relativePath.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var tenantId = RequireTenantId();
-            var normalizedRelativePath = safePath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+            var normalizedRelativePath = _fileStorage.NormalizeRelativePath(relativePath);
             var expectedRelativePrefix = $"uploads/{tenantId}/";
             if (!normalizedRelativePath.StartsWith(expectedRelativePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 return BadRequest(new { message = "Invalid file path." });
             }
 
-            var tenantRoot = Path.GetFullPath(Path.Combine(_env.ContentRootPath, "uploads", tenantId));
-            var normalizedTenantRoot = tenantRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var tenantRootPrefix = normalizedTenantRoot + Path.DirectorySeparatorChar;
-            var fullPath = Path.GetFullPath(Path.Combine(_env.ContentRootPath, safePath));
-            if (!string.Equals(fullPath, normalizedTenantRoot, StringComparison.OrdinalIgnoreCase) &&
-                !fullPath.StartsWith(tenantRootPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return BadRequest(new { message = "Invalid file path." });
-            }
-            if (!System.IO.File.Exists(fullPath))
+            if (!await _fileStorage.ExistsAsync(normalizedRelativePath))
             {
                 return NotFound(new { message = "File not found" });
             }
 
             Response.Headers["X-Content-Type-Options"] = "nosniff";
 
+            var storedBytes = await _fileStorage.ReadBytesAsync(normalizedRelativePath);
             if (isEncrypted)
             {
                 if (string.IsNullOrWhiteSpace(encryptionIv) || string.IsNullOrWhiteSpace(encryptionTag))
@@ -1104,11 +1082,11 @@ namespace JurisFlow.Server.Controllers
                     return BadRequest(new { message = "Encrypted file metadata is missing." });
                 }
 
-                var bytes = await _documentEncryptionService.DecryptFileAsync(fullPath, encryptionIv, encryptionTag);
+                var bytes = _documentEncryptionService.DecryptBytes(storedBytes, encryptionIv, encryptionTag);
                 return File(bytes, mimeType ?? "application/octet-stream", fileName);
             }
 
-            return PhysicalFile(fullPath, mimeType ?? "application/octet-stream", fileName);
+            return File(storedBytes, mimeType ?? "application/octet-stream", fileName);
         }
 
         private string? GetClientId()

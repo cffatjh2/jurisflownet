@@ -21,7 +21,7 @@ namespace JurisFlow.Server.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<IntegrationConnectorService> _logger;
         private readonly IIntegrationSecretStore _secretStore;
-        private readonly IWebHostEnvironment _env;
+        private readonly IAppFileStorage _fileStorage;
         private readonly TenantContext _tenantContext;
         private readonly DocumentEncryptionService _documentEncryptionService;
         private readonly DocumentIndexService _documentIndexService;
@@ -35,7 +35,7 @@ namespace JurisFlow.Server.Services
             IConfiguration configuration,
             ILogger<IntegrationConnectorService> logger,
             IIntegrationSecretStore secretStore,
-            IWebHostEnvironment env,
+            IAppFileStorage fileStorage,
             TenantContext tenantContext,
             DocumentEncryptionService documentEncryptionService,
             DocumentIndexService documentIndexService,
@@ -47,7 +47,7 @@ namespace JurisFlow.Server.Services
             _configuration = configuration;
             _logger = logger;
             _secretStore = secretStore;
-            _env = env;
+            _fileStorage = fileStorage;
             _tenantContext = tenantContext;
             _documentEncryptionService = documentEncryptionService;
             _documentIndexService = documentIndexService;
@@ -5580,20 +5580,19 @@ namespace JurisFlow.Server.Services
                 return null;
             }
 
-            var uploadsFolder = GetTenantUploadsFolder();
             var safeFileName = SanitizeFileName(attachment.FileName);
             var uniqueFileName = $"{Guid.NewGuid()}_{safeFileName}";
-            var absolutePath = Path.Combine(uploadsFolder, uniqueFileName);
+            var absolutePath = GetTenantRelativeUploadPath(uniqueFileName);
             DocumentEncryptionPayload? encryptionPayload = null;
 
             if (_documentEncryptionService.Enabled)
             {
-                await using var input = new MemoryStream(attachment.ContentBytes, writable: false);
-                encryptionPayload = await _documentEncryptionService.EncryptFileAsync(input, absolutePath, cancellationToken);
+                encryptionPayload = _documentEncryptionService.EncryptBytes(attachment.ContentBytes);
+                await _fileStorage.SaveBytesAsync(absolutePath, encryptionPayload.Ciphertext, attachment.MimeType, cancellationToken);
             }
             else
             {
-                await File.WriteAllBytesAsync(absolutePath, attachment.ContentBytes, cancellationToken);
+                await _fileStorage.SaveBytesAsync(absolutePath, attachment.ContentBytes, attachment.MimeType, cancellationToken);
             }
 
             var now = DateTime.UtcNow;
@@ -5650,7 +5649,7 @@ namespace JurisFlow.Server.Services
 
             try
             {
-                await _documentIndexService.UpsertIndexAsync(document, absolutePath);
+                await _documentIndexService.UpsertIndexAsync(document, attachment.ContentBytes);
             }
             catch (Exception ex)
             {
@@ -6799,20 +6798,19 @@ namespace JurisFlow.Server.Services
             string sha256,
             CancellationToken cancellationToken)
         {
-            var uploadsFolder = GetTenantUploadsFolder();
             var safeFileName = SanitizeFileName(artifact.FileName);
             var uniqueFileName = $"{Guid.NewGuid()}_{safeFileName}";
-            var absolutePath = Path.Combine(uploadsFolder, uniqueFileName);
+            var absolutePath = GetTenantRelativeUploadPath(uniqueFileName);
             DocumentEncryptionPayload? encryptionPayload = null;
 
             if (_documentEncryptionService.Enabled)
             {
-                await using var input = new MemoryStream(contentBytes, writable: false);
-                encryptionPayload = await _documentEncryptionService.EncryptFileAsync(input, absolutePath, cancellationToken);
+                encryptionPayload = _documentEncryptionService.EncryptBytes(contentBytes);
+                await _fileStorage.SaveBytesAsync(absolutePath, encryptionPayload.Ciphertext, artifact.MimeType, cancellationToken);
             }
             else
             {
-                await File.WriteAllBytesAsync(absolutePath, contentBytes, cancellationToken);
+                await _fileStorage.SaveBytesAsync(absolutePath, contentBytes, artifact.MimeType, cancellationToken);
             }
 
             var now = DateTime.UtcNow;
@@ -6869,7 +6867,7 @@ namespace JurisFlow.Server.Services
 
             try
             {
-                await _documentIndexService.UpsertIndexAsync(document, absolutePath);
+                await _documentIndexService.UpsertIndexAsync(document, contentBytes);
             }
             catch (Exception ex)
             {
@@ -9080,18 +9078,6 @@ namespace JurisFlow.Server.Services
             }
 
             return _tenantContext.TenantId;
-        }
-
-        private string GetTenantUploadsFolder()
-        {
-            var tenantId = RequireTenantIdForIntegrationFiles();
-            var uploadsFolder = Path.Combine(_env.ContentRootPath, "uploads", tenantId);
-            if (!Directory.Exists(uploadsFolder))
-            {
-                Directory.CreateDirectory(uploadsFolder);
-            }
-
-            return uploadsFolder;
         }
 
         private string GetTenantRelativeUploadPath(string fileName)

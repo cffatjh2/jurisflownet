@@ -30,6 +30,7 @@ builder.Services.AddControllers()
     });
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IAppFileStorage, AppFileStorage>();
 
 var authLoginPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:PermitLimit", 8), 1, 200);
 var authLoginWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:WindowSeconds", 60), 1, 3600);
