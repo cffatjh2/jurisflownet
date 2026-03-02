@@ -886,29 +886,40 @@ static void InitializePostgresSchema(JurisFlowDbContext context)
 
 static bool PostgresTableExists(JurisFlowDbContext context, string tableName)
 {
-    using var connection = context.Database.GetDbConnection();
-    if (connection.State != System.Data.ConnectionState.Open)
+    var connection = context.Database.GetDbConnection();
+    var shouldCloseConnection = connection.State != System.Data.ConnectionState.Open;
+    if (shouldCloseConnection)
     {
         connection.Open();
     }
 
-    using var command = connection.CreateCommand();
-    command.CommandText = """
-        select exists (
-            select 1
-            from information_schema.tables
-            where table_schema = current_schema()
-              and table_name = @tableName
-        );
-        """;
+    try
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            select exists (
+                select 1
+                from information_schema.tables
+                where table_schema = current_schema()
+                  and table_name = @tableName
+            );
+            """;
 
-    var tableNameParameter = command.CreateParameter();
-    tableNameParameter.ParameterName = "@tableName";
-    tableNameParameter.Value = tableName;
-    command.Parameters.Add(tableNameParameter);
+        var tableNameParameter = command.CreateParameter();
+        tableNameParameter.ParameterName = "@tableName";
+        tableNameParameter.Value = tableName;
+        command.Parameters.Add(tableNameParameter);
 
-    var scalar = command.ExecuteScalar();
-    return scalar is bool exists && exists;
+        var scalar = command.ExecuteScalar();
+        return scalar is bool exists && exists;
+    }
+    finally
+    {
+        if (shouldCloseConnection)
+        {
+            connection.Close();
+        }
+    }
 }
 
 static string ResolveDatabaseBootstrapMode(IConfiguration configuration, string provider)
