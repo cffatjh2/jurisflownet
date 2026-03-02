@@ -147,6 +147,7 @@ namespace JurisFlow.Server.Data
 
             ApplyEncryption(modelBuilder);
             ApplyTenantFilters(modelBuilder);
+            var defaultFlagIndexFilter = Database.IsNpgsql() ? "\"IsDefault\" = TRUE" : "\"IsDefault\" = 1";
 
             modelBuilder.Entity<Tenant>()
                 .HasIndex(t => t.Slug)
@@ -653,7 +654,7 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<FirmEntity>()
                 .HasIndex("TenantId", nameof(FirmEntity.IsDefault))
-                .HasFilter("IsDefault = 1")
+                .HasFilter(defaultFlagIndexFilter)
                 .IsUnique();
 
             modelBuilder.Entity<Office>()
@@ -661,7 +662,7 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<Office>()
                 .HasIndex("TenantId", nameof(Office.EntityId), nameof(Office.IsDefault))
-                .HasFilter("IsDefault = 1")
+                .HasFilter(defaultFlagIndexFilter)
                 .IsUnique();
 
             modelBuilder.Entity<DocumentContentIndex>()
