@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
@@ -404,26 +406,41 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<JurisFlowDbContext>();
-        InitializeDatabase(context, databaseBootstrapMode);
+        InitializeDatabase(context, databaseProvider, databaseBootstrapMode);
 
         var tenantContext = services.GetRequiredService<TenantContext>();
         var defaultTenantName = builder.Configuration["Tenancy:DefaultTenantName"] ?? "JurisFlow Legal";
         var defaultTenantSlug = TenantSeedHelper.NormalizeSlug(builder.Configuration["Tenancy:DefaultTenantSlug"] ?? "default");
 
-        var tenant = context.Tenants.FirstOrDefault(t => t.Slug == defaultTenantSlug)
-                     ?? context.Tenants.FirstOrDefault();
+        var tenant = context.Tenants.FirstOrDefault(t => t.Slug == defaultTenantSlug);
         if (tenant == null)
         {
-            tenant = new Tenant
+            var existingTenants = context.Tenants
+                .OrderBy(t => t.CreatedAt)
+                .ToList();
+
+            if (existingTenants.Count == 1)
             {
-                Name = defaultTenantName,
-                Slug = defaultTenantSlug,
-                IsActive = true,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-            context.Tenants.Add(tenant);
-            context.SaveChanges();
+                tenant = existingTenants[0];
+                tenant.Slug = defaultTenantSlug;
+                tenant.Name = defaultTenantName;
+                tenant.IsActive = true;
+                tenant.UpdatedAt = DateTime.UtcNow;
+                context.SaveChanges();
+            }
+            else
+            {
+                tenant = new Tenant
+                {
+                    Name = defaultTenantName,
+                    Slug = defaultTenantSlug,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                context.Tenants.Add(tenant);
+                context.SaveChanges();
+            }
         }
 
         tenantContext.Set(tenant.Id, tenant.Slug);
@@ -458,10 +475,17 @@ using (var scope = app.Services.CreateScope())
                     PasswordHash = passwordHash
                 });
             }
-            else if (resetSeedPasswords)
+            else
             {
-                adminUser.PasswordHash = passwordHash;
+                adminUser.Email = adminEmail;
                 adminUser.NormalizedEmail = normalizedAdminEmail;
+                adminUser.Name = "Admin User";
+                adminUser.Role = "Admin";
+
+                if (resetSeedPasswords || string.IsNullOrWhiteSpace(adminUser.PasswordHash))
+                {
+                    adminUser.PasswordHash = passwordHash;
+                }
             }
 
             var portalSeedEnabled = builder.Configuration.GetValue("Seed:PortalClientEnabled", false);
@@ -832,15 +856,59 @@ static void ConfigureDatabaseProvider(DbContextOptionsBuilder options, string pr
     }
 }
 
-static void InitializeDatabase(JurisFlowDbContext context, string bootstrapMode)
+static void InitializeDatabase(JurisFlowDbContext context, string provider, string bootstrapMode)
 {
     if (string.Equals(bootstrapMode, "ensure-created", StringComparison.OrdinalIgnoreCase))
     {
+        if (string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase))
+        {
+            InitializePostgresSchema(context);
+            return;
+        }
+
         context.Database.EnsureCreated();
         return;
     }
 
     context.Database.Migrate();
+}
+
+static void InitializePostgresSchema(JurisFlowDbContext context)
+{
+    if (PostgresTableExists(context, "Tenants"))
+    {
+        return;
+    }
+
+    // Supabase pre-provisions system tables, so EnsureCreated() no-ops even when the app schema is empty.
+    context.GetService<IRelationalDatabaseCreator>().CreateTables();
+}
+
+static bool PostgresTableExists(JurisFlowDbContext context, string tableName)
+{
+    using var connection = context.Database.GetDbConnection();
+    if (connection.State != System.Data.ConnectionState.Open)
+    {
+        connection.Open();
+    }
+
+    using var command = connection.CreateCommand();
+    command.CommandText = """
+        select exists (
+            select 1
+            from information_schema.tables
+            where table_schema = current_schema()
+              and table_name = @tableName
+        );
+        """;
+
+    var tableNameParameter = command.CreateParameter();
+    tableNameParameter.ParameterName = "@tableName";
+    tableNameParameter.Value = tableName;
+    command.Parameters.Add(tableNameParameter);
+
+    var scalar = command.ExecuteScalar();
+    return scalar is bool exists && exists;
 }
 
 static string ResolveDatabaseBootstrapMode(IConfiguration configuration, string provider)
