@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JurisFlow.Server.Tests", "J
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JurisFlow.Server", "JurisFlow.Server\JurisFlow.Server.csproj", "{2767DD73-51D6-42D3-B11C-49C3EF31EBFD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JurisFlow.AdminTool", "JurisFlow.AdminTool\JurisFlow.AdminTool.csproj", "{7AE58AB1-2939-4067-B91F-6F2DC71569B1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,18 @@ Global
 		{2767DD73-51D6-42D3-B11C-49C3EF31EBFD}.Release|x64.Build.0 = Release|Any CPU
 		{2767DD73-51D6-42D3-B11C-49C3EF31EBFD}.Release|x86.ActiveCfg = Release|Any CPU
 		{2767DD73-51D6-42D3-B11C-49C3EF31EBFD}.Release|x86.Build.0 = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|x64.Build.0 = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Debug|x86.Build.0 = Debug|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|x64.ActiveCfg = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|x64.Build.0 = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|x86.ActiveCfg = Release|Any CPU
+		{7AE58AB1-2939-4067-B91F-6F2DC71569B1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
