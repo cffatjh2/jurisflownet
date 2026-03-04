@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Services;
@@ -125,6 +126,8 @@ internal static class ProvisioningCli
             "create" => await RunUserCreateAsync(provider, options, forceAdmin: false),
             "create-admin" => await RunUserCreateAsync(provider, options, forceAdmin: true),
             "reset-password" => await RunResetPasswordAsync(provider, options),
+            "disable" => await RunDisableUserAsync(provider, options),
+            "delete" => await RunDeleteUserAsync(provider, options),
             _ => FailUnknownCommand($"Unknown user command '{args[0]}'.")
         };
     }
@@ -325,11 +328,7 @@ internal static class ProvisioningCli
         var normalizedEmail = EmailAddressNormalizer.Normalize(RequireOption(options, "email"));
         var password = ResolvePassword(options);
 
-        var user = await context.Users.FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail);
-        if (user is null)
-        {
-            throw new InvalidOperationException($"User '{normalizedEmail}' was not found in tenant '{tenant.Slug}'.");
-        }
+        var user = await RequireScopedUserAsync(context, normalizedEmail, tenant.Slug);
 
         user.PasswordHash = PasswordHashingHelper.HashPassword(password, configuration);
         user.UpdatedAt = DateTime.UtcNow;
@@ -337,6 +336,59 @@ internal static class ProvisioningCli
         await context.SaveChangesAsync();
 
         Console.WriteLine($"Reset password for '{user.Email}' in tenant '{tenant.Slug}'.");
+        return 0;
+    }
+
+    private static async Task<int> RunDisableUserAsync(ServiceProvider provider, IReadOnlyDictionary<string, string?> options)
+    {
+        using var scope = provider.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+
+        await EnsureDatabaseConnectivityAsync(context);
+
+        var tenant = await RequireTenantAsync(context, NormalizeTenantSlug(RequireOption(options, "tenant")));
+        tenantContext.Set(tenant.Id, tenant.Slug);
+
+        var normalizedEmail = EmailAddressNormalizer.Normalize(RequireOption(options, "email"));
+        var user = await RequireScopedUserAsync(context, normalizedEmail, tenant.Slug);
+
+        // There is no soft-disable column yet, so lock access by rotating the password hash
+        // to a cryptographically random value that the operator never sees.
+        var disabledPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        user.PasswordHash = PasswordHashingHelper.HashPassword(disabledPassword, configuration);
+        user.MfaEnabled = false;
+        user.MfaSecret = null;
+        user.MfaBackupCodesJson = null;
+        user.MfaVerifiedAt = null;
+        user.MfaLastUsedAt = null;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await context.SaveChangesAsync();
+
+        Console.WriteLine($"Disabled '{user.Email}' in tenant '{tenant.Slug}'. Use user reset-password to re-enable access.");
+        return 0;
+    }
+
+    private static async Task<int> RunDeleteUserAsync(ServiceProvider provider, IReadOnlyDictionary<string, string?> options)
+    {
+        using var scope = provider.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+
+        await EnsureDatabaseConnectivityAsync(context);
+
+        var tenant = await RequireTenantAsync(context, NormalizeTenantSlug(RequireOption(options, "tenant")));
+        tenantContext.Set(tenant.Id, tenant.Slug);
+
+        var normalizedEmail = EmailAddressNormalizer.Normalize(RequireOption(options, "email"));
+        var user = await RequireScopedUserAsync(context, normalizedEmail, tenant.Slug);
+
+        context.Users.Remove(user);
+        await context.SaveChangesAsync();
+
+        Console.WriteLine($"Deleted '{user.Email}' from tenant '{tenant.Slug}'.");
         return 0;
     }
 
@@ -349,6 +401,17 @@ internal static class ProvisioningCli
         }
 
         return tenant;
+    }
+
+    private static async Task<User> RequireScopedUserAsync(JurisFlowDbContext context, string normalizedEmail, string tenantSlug)
+    {
+        var user = await context.Users.FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail);
+        if (user is null)
+        {
+            throw new InvalidOperationException($"User '{normalizedEmail}' was not found in tenant '{tenantSlug}'.");
+        }
+
+        return user;
     }
 
     private static async Task EnsureDatabaseConnectivityAsync(JurisFlowDbContext context)
@@ -555,6 +618,8 @@ internal static class ProvisioningCli
         Console.WriteLine("  dotnet run --project JurisFlow.AdminTool -p:UseAppHost=false -- user create --tenant juris-flow --email admin@jurisflow.local --name \"Admin User\" --role Admin --password \"...\"");
         Console.WriteLine("  dotnet run --project JurisFlow.AdminTool -p:UseAppHost=false -- user create-admin --tenant juris-flow --email admin@jurisflow.local --password \"...\" [--name \"Admin User\"]");
         Console.WriteLine("  dotnet run --project JurisFlow.AdminTool -p:UseAppHost=false -- user reset-password --tenant juris-flow --email admin@jurisflow.local --password \"...\"");
+        Console.WriteLine("  dotnet run --project JurisFlow.AdminTool -p:UseAppHost=false -- user disable --tenant juris-flow --email admin@jurisflow.local");
+        Console.WriteLine("  dotnet run --project JurisFlow.AdminTool -p:UseAppHost=false -- user delete --tenant juris-flow --email former-user@jurisflow.local");
         Console.WriteLine();
         Console.WriteLine("Production note:");
         Console.WriteLine("  The tool reads the same environment variables as the server. Prefer --password-env ADMIN_PASSWORD to avoid shell history exposure.");
@@ -574,6 +639,8 @@ internal static class ProvisioningCli
         Console.WriteLine("  user create --tenant juris-flow --email user@example.com --name \"Display Name\" --role Admin --password \"...\"");
         Console.WriteLine("  user create-admin --tenant juris-flow --email admin@jurisflow.local --password \"...\" [--name \"Admin User\"]");
         Console.WriteLine("  user reset-password --tenant juris-flow --email user@example.com --password \"...\"");
+        Console.WriteLine("  user disable --tenant juris-flow --email user@example.com");
+        Console.WriteLine("  user delete --tenant juris-flow --email user@example.com");
         Console.WriteLine();
         Console.WriteLine("You can replace --password with --password-env YOUR_ENV_VAR.");
     }
