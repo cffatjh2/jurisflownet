@@ -72,7 +72,7 @@ namespace JurisFlow.Server.Services
             return new Holiday
             {
                 Id = Guid.NewGuid().ToString(),
-                Date = source.Date,
+                Date = NormalizeUtcDate(source.Date),
                 Name = source.Name,
                 Jurisdiction = jurisdiction,
                 IsCourtHoliday = source.IsCourtHoliday,
@@ -90,7 +90,7 @@ namespace JurisFlow.Server.Services
                 holidays.Add(new Holiday
                 {
                     Id = Guid.NewGuid().ToString(),
-                    Date = observed,
+                    Date = NormalizeUtcDate(observed),
                     Name = name + (observed.Date != date.Date ? " (Observed)" : string.Empty),
                     Jurisdiction = "US-Federal",
                     IsCourtHoliday = true,
@@ -99,17 +99,17 @@ namespace JurisFlow.Server.Services
                 });
             }
 
-            AddObserved(new DateTime(year, 1, 1), "New Year's Day");
+            AddObserved(UtcDate(year, 1, 1), "New Year's Day");
             holidays.Add(CreateHoliday(NthWeekday(year, 1, DayOfWeek.Monday, 3), "Martin Luther King Jr. Day", "US-Federal"));
             holidays.Add(CreateHoliday(NthWeekday(year, 2, DayOfWeek.Monday, 3), "Presidents' Day", "US-Federal"));
             holidays.Add(CreateHoliday(LastWeekday(year, 5, DayOfWeek.Monday), "Memorial Day", "US-Federal"));
-            AddObserved(new DateTime(year, 6, 19), "Juneteenth");
-            AddObserved(new DateTime(year, 7, 4), "Independence Day");
+            AddObserved(UtcDate(year, 6, 19), "Juneteenth");
+            AddObserved(UtcDate(year, 7, 4), "Independence Day");
             holidays.Add(CreateHoliday(NthWeekday(year, 9, DayOfWeek.Monday, 1), "Labor Day", "US-Federal"));
             holidays.Add(CreateHoliday(NthWeekday(year, 10, DayOfWeek.Monday, 2), "Columbus Day", "US-Federal"));
-            AddObserved(new DateTime(year, 11, 11), "Veterans Day");
+            AddObserved(UtcDate(year, 11, 11), "Veterans Day");
             holidays.Add(CreateHoliday(NthWeekday(year, 11, DayOfWeek.Thursday, 4), "Thanksgiving Day", "US-Federal"));
-            AddObserved(new DateTime(year, 12, 25), "Christmas Day");
+            AddObserved(UtcDate(year, 12, 25), "Christmas Day");
 
             return holidays;
         }
@@ -119,8 +119,8 @@ namespace JurisFlow.Server.Services
             var items = new List<Holiday>();
             if (string.Equals(jurisdiction, "US-CA", StringComparison.OrdinalIgnoreCase))
             {
-                items.Add(CreateHoliday(new DateTime(year, 3, 31), "Cesar Chavez Day", jurisdiction));
-                items.Add(CreateHoliday(new DateTime(year, 9, 9), "California Admission Day", jurisdiction));
+                items.Add(CreateHoliday(UtcDate(year, 3, 31), "Cesar Chavez Day", jurisdiction));
+                items.Add(CreateHoliday(UtcDate(year, 9, 9), "California Admission Day", jurisdiction));
             }
             else if (string.Equals(jurisdiction, "US-NY", StringComparison.OrdinalIgnoreCase))
             {
@@ -128,12 +128,12 @@ namespace JurisFlow.Server.Services
             }
             else if (string.Equals(jurisdiction, "US-TX", StringComparison.OrdinalIgnoreCase))
             {
-                items.Add(CreateHoliday(new DateTime(year, 3, 2), "Texas Independence Day", jurisdiction));
-                items.Add(CreateHoliday(new DateTime(year, 4, 21), "San Jacinto Day", jurisdiction));
+                items.Add(CreateHoliday(UtcDate(year, 3, 2), "Texas Independence Day", jurisdiction));
+                items.Add(CreateHoliday(UtcDate(year, 4, 21), "San Jacinto Day", jurisdiction));
             }
             else if (string.Equals(jurisdiction, "US-FL", StringComparison.OrdinalIgnoreCase))
             {
-                items.Add(CreateHoliday(new DateTime(year, 11, 11), "Florida Veterans Day (State)", jurisdiction));
+                items.Add(CreateHoliday(UtcDate(year, 11, 11), "Florida Veterans Day (State)", jurisdiction));
             }
 
             return items;
@@ -144,7 +144,7 @@ namespace JurisFlow.Server.Services
             return new Holiday
             {
                 Id = Guid.NewGuid().ToString(),
-                Date = date,
+                Date = NormalizeUtcDate(date),
                 Name = name,
                 Jurisdiction = jurisdiction,
                 IsCourtHoliday = true,
@@ -165,14 +165,14 @@ namespace JurisFlow.Server.Services
 
         private static DateTime NthWeekday(int year, int month, DayOfWeek day, int nth)
         {
-            var first = new DateTime(year, month, 1);
+            var first = UtcDate(year, month, 1);
             var offset = ((int)day - (int)first.DayOfWeek + 7) % 7;
             return first.AddDays(offset + (nth - 1) * 7);
         }
 
         private static DateTime LastWeekday(int year, int month, DayOfWeek day)
         {
-            var last = new DateTime(year, month, DateTime.DaysInMonth(year, month));
+            var last = UtcDate(year, month, DateTime.DaysInMonth(year, month));
             var offset = ((int)last.DayOfWeek - (int)day + 7) % 7;
             return last.AddDays(-offset);
         }
@@ -181,6 +181,21 @@ namespace JurisFlow.Server.Services
         {
             var firstMonday = NthWeekday(year, month, DayOfWeek.Monday, 1);
             return firstMonday.AddDays(1);
+        }
+
+        private static DateTime UtcDate(int year, int month, int day)
+        {
+            return new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc);
+        }
+
+        private static DateTime NormalizeUtcDate(DateTime value)
+        {
+            if (value.Kind == DateTimeKind.Utc)
+            {
+                return value.Date;
+            }
+
+            return DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
         }
     }
 }
