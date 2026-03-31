@@ -154,6 +154,10 @@ namespace JurisFlow.Server.Services
             {
                 activeKeyId = keys.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).Last();
             }
+            else
+            {
+                activeKeyId = IntegrationSecretConfigurationResolver.FindEquivalentKeyId(keys.Keys, activeKeyId) ?? activeKeyId;
+            }
 
             if (!keys.ContainsKey(activeKeyId))
             {
@@ -258,11 +262,17 @@ namespace JurisFlow.Server.Services
                 throw new InvalidOperationException("Integration secret payload is malformed.");
             }
 
-            var keyId = parts[0];
+            var requestedKeyId = parts[0];
+            var keyId = requestedKeyId;
             if (!ring.Keys.TryGetValue(keyId, out var key))
             {
+                keyId = IntegrationSecretConfigurationResolver.FindEquivalentKeyId(ring.Keys.Keys, requestedKeyId) ?? keyId;
+            }
+
+            if (!ring.Keys.TryGetValue(keyId, out key))
+            {
                 throw new InvalidOperationException(
-                    $"Integration secret key '{keyId}' is not available in current key ring.");
+                    $"Integration secret key '{requestedKeyId}' is not available in current key ring.");
             }
 
             var iv = Convert.FromBase64String(parts[1]);
@@ -276,8 +286,8 @@ namespace JurisFlow.Server.Services
             return new IntegrationSecretDecryptedPayload
             {
                 Plaintext = Encoding.UTF8.GetString(plaintextBytes),
-                KeyId = keyId,
-                ShouldRotate = !string.Equals(keyId, ring.ActiveKeyId, StringComparison.Ordinal)
+                KeyId = requestedKeyId,
+                ShouldRotate = !IntegrationSecretConfigurationResolver.IsEquivalentKeyId(requestedKeyId, ring.ActiveKeyId)
             };
         }
     }

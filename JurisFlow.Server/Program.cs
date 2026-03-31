@@ -736,15 +736,26 @@ static void RequireIntegrationSecretProtection(IConfiguration configuration, Lis
         return;
     }
 
+    if (!IntegrationSecretConfigurationResolver.TryResolveConfiguredKeyValue(
+        configuration,
+        keysPrefix,
+        activeKeyId,
+        out var resolvedActiveKeyId,
+        out var configuredKey))
+    {
+        errors.Add($"{keysPrefix}:{activeKeyId} is required.");
+        return;
+    }
+
     var activeKeyPath = $"{keysPrefix}:{activeKeyId}";
-    RequireBase64Key(configuration, activeKeyPath, exactBytes: 32, minBytes: null, errors);
+    RequireBase64KeyValue(configuredKey, activeKeyPath, exactBytes: 32, minBytes: null, errors);
 
     if (provider == "config")
     {
-        var configuredKey = configuration[activeKeyPath];
         if (string.Equals(configuredKey, "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", StringComparison.Ordinal))
         {
-            errors.Add($"{activeKeyPath} must be overridden in production.");
+            var resolvedPath = $"{keysPrefix}:{resolvedActiveKeyId}";
+            errors.Add($"{resolvedPath} must be overridden in production.");
         }
     }
 }
@@ -764,10 +775,19 @@ static void RequireBase64Key(
     int? minBytes,
     List<string> errors)
 {
-    var raw = configuration[key];
+    RequireBase64KeyValue(configuration[key], key, exactBytes, minBytes, errors);
+}
+
+static void RequireBase64KeyValue(
+    string? raw,
+    string displayKey,
+    int? exactBytes,
+    int? minBytes,
+    List<string> errors)
+{
     if (string.IsNullOrWhiteSpace(raw))
     {
-        errors.Add($"{key} is required.");
+        errors.Add($"{displayKey} is required.");
         return;
     }
 
@@ -777,18 +797,18 @@ static void RequireBase64Key(
 
         if (exactBytes.HasValue && bytes.Length != exactBytes.Value)
         {
-            errors.Add($"{key} must decode to exactly {exactBytes.Value} bytes.");
+            errors.Add($"{displayKey} must decode to exactly {exactBytes.Value} bytes.");
             return;
         }
 
         if (minBytes.HasValue && bytes.Length < minBytes.Value)
         {
-            errors.Add($"{key} must decode to at least {minBytes.Value.ToString(CultureInfo.InvariantCulture)} bytes.");
+            errors.Add($"{displayKey} must decode to at least {minBytes.Value.ToString(CultureInfo.InvariantCulture)} bytes.");
         }
     }
     catch (FormatException)
     {
-        errors.Add($"{key} must be valid base64.");
+        errors.Add($"{displayKey} must be valid base64.");
     }
 }
 
