@@ -406,7 +406,9 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<JurisFlowDbContext>();
+        var startupLogger = services.GetRequiredService<ILogger<Program>>();
         InitializeDatabase(context, databaseProvider, databaseBootstrapMode);
+        await PostgresSchemaCompatibility.EnsureCriticalColumnsAsync(context, startupLogger);
 
         var tenantContext = services.GetRequiredService<TenantContext>();
         var defaultTenantName = builder.Configuration["Tenancy:DefaultTenantName"] ?? "JurisFlow Legal";

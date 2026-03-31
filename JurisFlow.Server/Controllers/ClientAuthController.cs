@@ -25,6 +25,7 @@ namespace JurisFlow.Server.Controllers
         private readonly SessionTokenService _sessionTokenService;
         private readonly TenantContext _tenantContext;
         private readonly LoginAttemptService _loginAttemptService;
+        private readonly ILogger<ClientAuthController> _logger;
 
         public ClientAuthController(
             JurisFlowDbContext context,
@@ -32,7 +33,8 @@ namespace JurisFlow.Server.Controllers
             AuditLogger auditLogger,
             SessionTokenService sessionTokenService,
             TenantContext tenantContext,
-            LoginAttemptService loginAttemptService)
+            LoginAttemptService loginAttemptService,
+            ILogger<ClientAuthController> logger)
         {
             _context = context;
             _configuration = configuration;
@@ -40,6 +42,7 @@ namespace JurisFlow.Server.Controllers
             _sessionTokenService = sessionTokenService;
             _tenantContext = tenantContext;
             _loginAttemptService = loginAttemptService;
+            _logger = logger;
         }
 
         public class ClientLoginDto
@@ -111,16 +114,32 @@ namespace JurisFlow.Server.Controllers
 
             _loginAttemptService.RegisterSuccess(tenantId, email, ipAddress);
 
-            var now = DateTime.UtcNow;
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-            client.LastLogin = now;
-            var (session, refreshToken) = BuildSession(client.Id, "Client", now);
-            _context.AuthSessions.Add(session);
-            await _context.SaveChangesAsync();
-            await transaction.CommitAsync();
+            string token;
+            string refreshToken;
+            AuthSession session;
+            try
+            {
+                var now = DateTime.UtcNow;
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                client.LastLogin = now;
+                (session, refreshToken) = BuildSession(client.Id, "Client", now);
+                _context.AuthSessions.Add(session);
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
 
-            var accessTokenExpiresAt = GetAccessTokenExpiry();
-            var token = GenerateClientJwtToken(client, session.Id, accessTokenExpiresAt);
+                var accessTokenExpiresAt = GetAccessTokenExpiry();
+                token = GenerateClientJwtToken(client, session.Id, accessTokenExpiresAt);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Client login failed after credential validation. TenantId={TenantId} ClientId={ClientId} Email={Email}",
+                    tenantId,
+                    client.Id,
+                    email);
+                throw;
+            }
 
             var response = new
             {
