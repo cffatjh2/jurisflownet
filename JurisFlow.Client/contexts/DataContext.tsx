@@ -238,8 +238,65 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setTaskTemplates([]);
   };
 
+  const applyBootstrapPayload = (payload: any) => {
+    if (!payload || typeof payload !== 'object') return;
+    if (Array.isArray(payload.matters)) setMatters(payload.matters);
+    if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
+    if (Array.isArray(payload.timeEntries)) setTimeEntries(payload.timeEntries);
+    if (Array.isArray(payload.expenses)) setExpenses(payload.expenses);
+    if (Array.isArray(payload.clients)) setClients(payload.clients);
+    if (Array.isArray(payload.leads)) setLeads(payload.leads);
+    if (Array.isArray(payload.events)) setEvents(payload.events);
+    if (Array.isArray(payload.invoices)) setInvoices(payload.invoices);
+    if (Array.isArray(payload.notifications)) setNotifications(payload.notifications);
+    if (Array.isArray(payload.documents)) setDocuments(payload.documents.map(normalizeDocument));
+    if (Array.isArray(payload.taskTemplates)) setTaskTemplates(payload.taskTemplates);
+  };
+
   // --- INITIAL LOAD ---
   useEffect(() => {
+    let disposed = false;
+
+    const loadInitialFallback = async () => {
+      const [m, t, te, e, n] = await Promise.all([
+        api.getMatters().catch(() => null),
+        api.getTasks().catch(() => null),
+        api.getTimeEntries().catch(() => null),
+        api.getEvents().catch(() => null),
+        api.getNotifications(user?.id).catch(() => [])
+      ]);
+
+      if (disposed) return;
+
+      if (Array.isArray(m)) setMatters(m);
+      if (Array.isArray(t)) setTasks(t);
+      if (Array.isArray(te)) setTimeEntries(te);
+      if (Array.isArray(e)) setEvents(e);
+      if (Array.isArray(n)) setNotifications(n);
+      console.log('Initial data loaded via endpoint fallback');
+    };
+
+    const loadDeferredFallback = async () => {
+      const [ex, c, l, i, docs, templates] = await Promise.all([
+        api.getExpenses().catch(() => null),
+        api.getClients().catch(() => null),
+        api.getLeads().catch(() => null),
+        api.getInvoices().catch(() => null),
+        api.getDocuments().catch(() => []),
+        api.getTaskTemplates().catch(() => [])
+      ]);
+
+      if (disposed) return;
+
+      if (Array.isArray(ex)) setExpenses(ex);
+      if (Array.isArray(c)) setClients(c);
+      if (Array.isArray(l)) setLeads(l);
+      if (Array.isArray(i)) setInvoices(i);
+      if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
+      if (Array.isArray(templates)) setTaskTemplates(templates);
+      console.log('Deferred data loaded via endpoint fallback');
+    };
+
     const loadData = async () => {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       try {
@@ -248,70 +305,58 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           return;
         }
 
-        console.log('Fetching data from API...');
+        console.log('Fetching initial data from API...');
 
-        // --- Try consolidated bootstrap endpoint first (1 request instead of 11) ---
-        let bootstrapSucceeded = false;
+        let initialLoaded = false;
         try {
-          const bootstrap = await api.bootstrap();
-          if (bootstrap && typeof bootstrap === 'object') {
-            if (Array.isArray(bootstrap.matters)) setMatters(bootstrap.matters);
-            if (Array.isArray(bootstrap.tasks)) setTasks(bootstrap.tasks);
-            if (Array.isArray(bootstrap.timeEntries)) setTimeEntries(bootstrap.timeEntries);
-            if (Array.isArray(bootstrap.expenses)) setExpenses(bootstrap.expenses);
-            if (Array.isArray(bootstrap.clients)) setClients(bootstrap.clients);
-            if (Array.isArray(bootstrap.leads)) setLeads(bootstrap.leads);
-            if (Array.isArray(bootstrap.events)) setEvents(bootstrap.events);
-            if (Array.isArray(bootstrap.invoices)) setInvoices(bootstrap.invoices);
-            if (Array.isArray(bootstrap.notifications)) setNotifications(bootstrap.notifications);
-            if (Array.isArray(bootstrap.documents)) setDocuments(bootstrap.documents.map(normalizeDocument));
-            if (Array.isArray(bootstrap.taskTemplates)) setTaskTemplates(bootstrap.taskTemplates);
-            bootstrapSucceeded = true;
-            console.log('Data loaded successfully via bootstrap endpoint');
+          const bootstrap = await api.bootstrap('initial');
+          if (!disposed && bootstrap && typeof bootstrap === 'object') {
+            applyBootstrapPayload(bootstrap);
+            initialLoaded = true;
+            console.log('Initial data loaded via bootstrap endpoint');
           }
         } catch (bootstrapError) {
-          console.warn('Bootstrap endpoint unavailable, falling back to individual calls', bootstrapError);
+          console.warn('Initial bootstrap unavailable, falling back to endpoint calls', bootstrapError);
         }
 
-        // --- Fallback: individual parallel calls (backward compat) ---
-        if (!bootstrapSucceeded) {
-          const [m, t, te, ex, c, l, e, i, n, docs, templates] = await Promise.all([
-            api.getMatters().catch(() => null),
-            api.getTasks().catch(() => null),
-            api.getTimeEntries().catch(() => null),
-            api.getExpenses().catch(() => null),
-            api.getClients().catch(() => null),
-            api.getLeads().catch(() => null),
-            api.getEvents().catch(() => null),
-            api.getInvoices().catch(() => null),
-            api.getNotifications(user?.id).catch(() => []),
-            api.getDocuments().catch(() => []),
-            api.getTaskTemplates().catch(() => [])
-          ]);
-
-          if (Array.isArray(m)) setMatters(m);
-          if (Array.isArray(t)) setTasks(t);
-          if (Array.isArray(te)) setTimeEntries(te);
-          if (Array.isArray(ex)) setExpenses(ex);
-          if (Array.isArray(c)) setClients(c);
-          if (Array.isArray(l)) setLeads(l);
-          if (Array.isArray(e)) setEvents(e);
-          if (Array.isArray(i)) setInvoices(i);
-          if (Array.isArray(n)) setNotifications(n);
-          if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
-          if (Array.isArray(templates)) setTaskTemplates(templates);
-          console.log('Data loaded successfully from individual API calls');
+        if (!initialLoaded) {
+          await loadInitialFallback();
         }
 
+        if (disposed) return;
+
+        const loadDeferred = async () => {
+          let deferredLoaded = false;
+          try {
+            const bootstrap = await api.bootstrap('deferred');
+            if (!disposed && bootstrap && typeof bootstrap === 'object') {
+              applyBootstrapPayload(bootstrap);
+              deferredLoaded = true;
+              console.log('Deferred data loaded via bootstrap endpoint');
+            }
+          } catch (bootstrapError) {
+            console.warn('Deferred bootstrap unavailable, falling back to endpoint calls', bootstrapError);
+          }
+
+          if (!deferredLoaded) {
+            await loadDeferredFallback();
+          }
+        };
+
+        void loadDeferred();
       } catch (error) {
         console.warn('Failed to load data from backend.', error);
-        if (!isAuthenticated || !token) {
+        if ((!isAuthenticated || !token) && !disposed) {
           clearLoadedData();
         }
       }
     };
+
     loadData();
-  }, [isAuthenticated]);
+    return () => {
+      disposed = true;
+    };
+  }, [isAuthenticated, user?.id]);
 
   // --- NOTIFICATION POLLING ---
   useEffect(() => {
@@ -332,7 +377,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     // Poll every 60 seconds
     const interval = setInterval(fetchNotifications, 60000);
     return () => clearInterval(interval);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.id]);
 
   // --- EVENT REMINDER SYSTEM ---
   useEffect(() => {

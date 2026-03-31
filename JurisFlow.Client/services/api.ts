@@ -187,7 +187,10 @@ export const api = {
         return fetchJson(normalized, { method: 'POST', body: JSON.stringify(data) });
     },
     // Bootstrap — single request for initial data load
-    bootstrap: () => fetchJson('/bootstrap'),
+    bootstrap: (scope: 'initial' | 'deferred' | 'full' = 'full') => {
+        const query = scope === 'full' ? '' : `?scope=${encodeURIComponent(scope)}`;
+        return fetchJson(`/bootstrap${query}`);
+    },
     // Auth
     login: (data: { email: string; password: string }) => fetchJson('/login', { method: 'POST', body: JSON.stringify(data) }),
     mfa: {
@@ -1326,3 +1329,4 @@ export const api = {
             fetchJson(`/staffmessages/${id}/read`, { method: 'POST' }),
     },
 };
+
