@@ -5,6 +5,7 @@ import { Can } from './common/Can';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
 import { api } from '../services/api';
+import { passwordRequirementsText, validatePassword } from '../services/passwordPolicy';
 import mammoth from 'mammoth';
 import { toast } from './Toast';
 import { Combobox } from './common/Combobox';
@@ -2748,12 +2749,33 @@ const Matters: React.FC = () => {
             <form onSubmit={async (e) => {
               e.preventDefault();
               try {
-                const newClient = await addClient(newClientData);
+                const trimmedPassword = newClientData.password.trim();
+                if (trimmedPassword) {
+                  const passwordResult = validatePassword(trimmedPassword, {
+                    email: newClientData.email,
+                    name: newClientData.name
+                  });
+                  if (!passwordResult.isValid) {
+                    toast.error(passwordResult.message);
+                    return;
+                  }
+                }
+
+                const payload = trimmedPassword
+                  ? { ...newClientData, password: trimmedPassword }
+                  : (() => {
+                      const { password, ...rest } = newClientData;
+                      return rest;
+                    })();
+
+                const newClient = await addClient(payload);
                 setFormData({ ...formData, partyId: newClient.id, partyType: 'client' });
                 setShowNewClientModal(false);
                 setNewClientData({ name: '', email: '', phone: '', mobile: '', company: '', type: 'Individual', status: 'Active', address: '', city: '', state: '', zipCode: '', country: '', taxId: '', notes: '', password: '' });
-              } catch (error) {
-                toast.error('Error creating client.');
+              } catch (error: any) {
+                const message = error?.message || 'Error creating client.';
+                toast.error(message);
+                return;
               }
             }} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -2769,7 +2791,8 @@ const Matters: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Portal Password</label>
-                <input type="password" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: Leave blank to use email prefix" value={newClientData.password} onChange={e => setNewClientData({ ...newClientData, password: e.target.value })} />
+                <input type="password" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData({ ...newClientData, password: e.target.value })} />
+                <p className="mt-1 text-xs text-gray-500">Optional. If you set one, {passwordRequirementsText.toLowerCase()}</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

@@ -139,14 +139,15 @@ namespace JurisFlow.Server.Controllers
             };
 
             // Password handling for portal access - only if explicitly provided
-            if (!string.IsNullOrEmpty(dto.Password))
+            var trimmedPassword = string.IsNullOrWhiteSpace(dto.Password) ? null : dto.Password.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmedPassword))
             {
-                var passwordResult = _passwordPolicy.Validate(dto.Password, dto.Email, dto.Name);
+                var passwordResult = _passwordPolicy.Validate(trimmedPassword, dto.Email, dto.Name);
                 if (!passwordResult.IsValid)
                 {
                     return BadRequest(new { message = passwordResult.Message });
                 }
-                client.PasswordHash = PasswordHashingHelper.HashPassword(dto.Password, _configuration);
+                client.PasswordHash = PasswordHashingHelper.HashPassword(trimmedPassword, _configuration);
                 client.PortalEnabled = true;
             }
 
