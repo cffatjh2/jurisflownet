@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using Task = System.Threading.Tasks.Task;
@@ -22,15 +23,41 @@ namespace JurisFlow.Server.Services
 
             foreach (var entityType in entityTypes)
             {
+                var tenantIdProperty = entityType.FindProperty("TenantId");
                 var tableName = entityType.GetTableName();
-                if (string.IsNullOrWhiteSpace(tableName))
+                if (tenantIdProperty == null || string.IsNullOrWhiteSpace(tableName))
                 {
                     continue;
                 }
 
-                var sql = $"UPDATE \"{tableName}\" SET TenantId = {{0}} WHERE TenantId IS NULL";
+                var schema = entityType.GetSchema();
+                var storeObject = StoreObjectIdentifier.Table(tableName, schema);
+                var columnName = tenantIdProperty.GetColumnName(storeObject);
+                if (string.IsNullOrWhiteSpace(columnName))
+                {
+                    continue;
+                }
+
+                var quotedTable = QuoteIdentifier(tableName, schema);
+                var quotedColumn = QuoteIdentifier(columnName);
+                var sql = $"UPDATE {quotedTable} SET {quotedColumn} = {{0}} WHERE {quotedColumn} IS NULL";
                 await context.Database.ExecuteSqlRawAsync(sql, tenantId);
             }
+        }
+
+        private static string QuoteIdentifier(string identifier)
+        {
+            return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        }
+
+        private static string QuoteIdentifier(string tableName, string? schema)
+        {
+            if (string.IsNullOrWhiteSpace(schema))
+            {
+                return QuoteIdentifier(tableName);
+            }
+
+            return $"{QuoteIdentifier(schema)}.{QuoteIdentifier(tableName)}";
         }
     }
 }
