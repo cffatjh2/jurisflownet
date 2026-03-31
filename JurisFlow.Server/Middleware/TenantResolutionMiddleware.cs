@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Services;
 
@@ -8,12 +9,17 @@ namespace JurisFlow.Server.Middleware
     {
         private readonly RequestDelegate _next;
 
+        // Cache durations
+        private static readonly TimeSpan SlugCacheDuration = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan ActiveCheckCacheDuration = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan NegativeCacheDuration = TimeSpan.FromSeconds(30);
+
         public TenantResolutionMiddleware(RequestDelegate next)
         {
             _next = next;
         }
 
-        public async Task Invoke(HttpContext context, TenantContext tenantContext, JurisFlowDbContext db, ILogger<TenantResolutionMiddleware> logger)
+        public async Task Invoke(HttpContext context, TenantContext tenantContext, JurisFlowDbContext db, IMemoryCache cache, ILogger<TenantResolutionMiddleware> logger)
         {
             if (HttpMethods.IsOptions(context.Request.Method) || IsExemptPath(context.Request.Path))
             {
@@ -46,11 +52,26 @@ namespace JurisFlow.Server.Middleware
                 else if (!string.IsNullOrWhiteSpace(requestedTenantSlug))
                 {
                     var normalizedSlug = NormalizeSlug(requestedTenantSlug);
-                    var tenant = await db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Slug == normalizedSlug);
-                    if (tenant != null)
+                    var cacheKey = $"tenant:slug:{normalizedSlug}";
+
+                    var resolved = await cache.GetOrCreateAsync(cacheKey, async entry =>
                     {
-                        tenantContext.Set(tenant.Id, tenant.Slug);
-                        requestedTenantId = tenant.Id;
+                        var tenant = await db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Slug == normalizedSlug);
+                        if (tenant != null)
+                        {
+                            entry.SlidingExpiration = SlugCacheDuration;
+                            return (Id: tenant.Id, Slug: tenant.Slug, Found: true);
+                        }
+
+                        // Negative cache — prevent DB hammering for non-existent slugs
+                        entry.AbsoluteExpirationRelativeToNow = NegativeCacheDuration;
+                        return (Id: (string?)null, Slug: (string?)null, Found: false);
+                    });
+
+                    if (resolved.Found && !string.IsNullOrWhiteSpace(resolved.Id))
+                    {
+                        tenantContext.Set(resolved.Id, resolved.Slug);
+                        requestedTenantId = resolved.Id;
                     }
                 }
             }
@@ -79,7 +100,15 @@ namespace JurisFlow.Server.Middleware
                 return;
             }
 
-            var tenantActive = await db.Tenants.AsNoTracking().AnyAsync(t => t.Id == tenantContext.TenantId && t.IsActive);
+            // Cache tenant active status check
+            var activeCacheKey = $"tenant:active:{tenantContext.TenantId}";
+            var tenantActive = await cache.GetOrCreateAsync(activeCacheKey, async entry =>
+            {
+                var isActive = await db.Tenants.AsNoTracking().AnyAsync(t => t.Id == tenantContext.TenantId && t.IsActive);
+                entry.AbsoluteExpirationRelativeToNow = isActive ? ActiveCheckCacheDuration : NegativeCacheDuration;
+                return isActive;
+            });
+
             if (!tenantActive)
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;

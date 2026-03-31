@@ -24,6 +24,8 @@ ConfigureRuntimePortBinding(builder);
 
 // Add services to the container.
 
+builder.Services.AddMemoryCache();
+
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {

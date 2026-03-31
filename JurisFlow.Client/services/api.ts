@@ -186,6 +186,8 @@ export const api = {
         const normalized = endpoint.startsWith('/api/') ? endpoint.replace('/api', '') : endpoint;
         return fetchJson(normalized, { method: 'POST', body: JSON.stringify(data) });
     },
+    // Bootstrap — single request for initial data load
+    bootstrap: () => fetchJson('/bootstrap'),
     // Auth
     login: (data: { email: string; password: string }) => fetchJson('/login', { method: 'POST', body: JSON.stringify(data) }),
     mfa: {

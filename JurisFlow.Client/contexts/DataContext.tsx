@@ -249,55 +249,59 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         }
 
         console.log('Fetching data from API...');
-        const [m, t, te, ex, c, l, e, i, n, docs, templates] = await Promise.all([
-          api.getMatters().catch(() => null),
-          api.getTasks().catch(() => null),
-          api.getTimeEntries().catch(() => null),
-          api.getExpenses().catch(() => null),
-          api.getClients().catch(() => null),
-          api.getLeads().catch(() => null),
-          api.getEvents().catch(() => null),
-          api.getInvoices().catch(() => null),
-          api.getNotifications(user?.id).catch(() => []),
-          api.getDocuments().catch(() => []),
-          api.getTaskTemplates().catch(() => [])
-        ]);
 
-        // IMPORTANT: Only update state if API returned valid data (not null)
-        // If API returns null/undefined, keep current data to avoid mixing mock IDs with real records
-        if (Array.isArray(m)) setMatters(m);
-        else console.warn('Matters API returned null, keeping current data');
+        // --- Try consolidated bootstrap endpoint first (1 request instead of 11) ---
+        let bootstrapSucceeded = false;
+        try {
+          const bootstrap = await api.bootstrap();
+          if (bootstrap && typeof bootstrap === 'object') {
+            if (Array.isArray(bootstrap.matters)) setMatters(bootstrap.matters);
+            if (Array.isArray(bootstrap.tasks)) setTasks(bootstrap.tasks);
+            if (Array.isArray(bootstrap.timeEntries)) setTimeEntries(bootstrap.timeEntries);
+            if (Array.isArray(bootstrap.expenses)) setExpenses(bootstrap.expenses);
+            if (Array.isArray(bootstrap.clients)) setClients(bootstrap.clients);
+            if (Array.isArray(bootstrap.leads)) setLeads(bootstrap.leads);
+            if (Array.isArray(bootstrap.events)) setEvents(bootstrap.events);
+            if (Array.isArray(bootstrap.invoices)) setInvoices(bootstrap.invoices);
+            if (Array.isArray(bootstrap.notifications)) setNotifications(bootstrap.notifications);
+            if (Array.isArray(bootstrap.documents)) setDocuments(bootstrap.documents.map(normalizeDocument));
+            if (Array.isArray(bootstrap.taskTemplates)) setTaskTemplates(bootstrap.taskTemplates);
+            bootstrapSucceeded = true;
+            console.log('Data loaded successfully via bootstrap endpoint');
+          }
+        } catch (bootstrapError) {
+          console.warn('Bootstrap endpoint unavailable, falling back to individual calls', bootstrapError);
+        }
 
-        if (Array.isArray(t)) setTasks(t);
-        else console.warn('Tasks API returned null, keeping current data');
+        // --- Fallback: individual parallel calls (backward compat) ---
+        if (!bootstrapSucceeded) {
+          const [m, t, te, ex, c, l, e, i, n, docs, templates] = await Promise.all([
+            api.getMatters().catch(() => null),
+            api.getTasks().catch(() => null),
+            api.getTimeEntries().catch(() => null),
+            api.getExpenses().catch(() => null),
+            api.getClients().catch(() => null),
+            api.getLeads().catch(() => null),
+            api.getEvents().catch(() => null),
+            api.getInvoices().catch(() => null),
+            api.getNotifications(user?.id).catch(() => []),
+            api.getDocuments().catch(() => []),
+            api.getTaskTemplates().catch(() => [])
+          ]);
 
-        if (Array.isArray(te)) setTimeEntries(te);
-        else console.warn('Time entries API returned null, keeping current data');
-
-        if (Array.isArray(ex)) setExpenses(ex);
-        else console.warn('Expenses API returned null, keeping current data');
-
-        if (Array.isArray(c)) setClients(c);
-        else console.warn('Clients API returned null, keeping current data');
-
-        if (Array.isArray(l)) setLeads(l);
-        else console.warn('Leads API returned null, keeping current data');
-
-        if (Array.isArray(e)) setEvents(e);
-        else console.warn('Events API returned null, keeping current data');
-
-        if (Array.isArray(i)) setInvoices(i);
-        else console.warn('Invoices API returned null, keeping current data');
-
-        if (Array.isArray(n)) setNotifications(n);
-        else console.warn('Notifications API returned null, keeping current data');
-
-        if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
-        else console.warn('Documents API returned null, keeping current data');
-
-        if (Array.isArray(templates)) setTaskTemplates(templates);
-        else console.warn('Task templates API returned null, keeping current data');
-        console.log('Data loaded successfully from API');
+          if (Array.isArray(m)) setMatters(m);
+          if (Array.isArray(t)) setTasks(t);
+          if (Array.isArray(te)) setTimeEntries(te);
+          if (Array.isArray(ex)) setExpenses(ex);
+          if (Array.isArray(c)) setClients(c);
+          if (Array.isArray(l)) setLeads(l);
+          if (Array.isArray(e)) setEvents(e);
+          if (Array.isArray(i)) setInvoices(i);
+          if (Array.isArray(n)) setNotifications(n);
+          if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
+          if (Array.isArray(templates)) setTaskTemplates(templates);
+          console.log('Data loaded successfully from individual API calls');
+        }
 
       } catch (error) {
         console.warn('Failed to load data from backend.', error);

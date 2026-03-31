@@ -1,31 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import GoogleAuthCallback from './components/GoogleAuthCallback';
 import MicrosoftAuthCallback from './components/MicrosoftAuthCallback';
 import ZoomAuthCallback from './components/ZoomAuthCallback';
 import IntegrationOAuthCallback from './components/IntegrationOAuthCallback';
 import { LayoutDashboard, Briefcase, Scale, BrainCircuit, Plus, Calendar as CalendarIcon, CreditCard, Bell, Folder, Mail, Users, Settings as SettingsIcon, Search, Timer, CheckSquare, Video, BarChart3, FileText } from './components/Icons';
-import Dashboard from './components/Dashboard';
-import Matters from './components/Matters';
-import AIDrafter from './components/AIDrafter';
-import Billing from './components/Billing';
-import CalendarView from './components/CalendarView';
-import Documents from './components/Documents';
-import Communications from './components/Communications';
-import VideoCall from './components/VideoCall';
-import CRM from './components/CRM';
-import Intake from './components/Intake';
+
+// --- Lazy-loaded page components (code-split into separate chunks) ---
+const Dashboard = React.lazy(() => import('./components/Dashboard'));
+const Matters = React.lazy(() => import('./components/Matters'));
+const AIDrafter = React.lazy(() => import('./components/AIDrafter'));
+const Billing = React.lazy(() => import('./components/Billing'));
+const CalendarView = React.lazy(() => import('./components/CalendarView'));
+const Documents = React.lazy(() => import('./components/Documents'));
+const Communications = React.lazy(() => import('./components/Communications'));
+const VideoCall = React.lazy(() => import('./components/VideoCall'));
+const CRM = React.lazy(() => import('./components/CRM'));
+const Intake = React.lazy(() => import('./components/Intake'));
+const TimeTracker = React.lazy(() => import('./components/TimeTracker'));
+const Tasks = React.lazy(() => import('./components/Tasks'));
+const Settings = React.lazy(() => import('./components/Settings'));
+const Reports = React.lazy(() => import('./components/Reports'));
+const Employees = React.lazy(() => import('./components/Employees'));
+const TrustAccounting = React.lazy(() => import('./components/TrustAccounting'));
+
+// --- Eagerly-loaded (small, auth-critical, or always-visible) ---
 import Login from './components/Login';
 import ForgotPassword from './components/ForgotPassword';
 import ResetPassword from './components/ResetPassword';
-import TimeTracker from './components/TimeTracker';
-import Tasks from './components/Tasks';
 import CommandPalette from './components/CommandPalette';
 import Notifications from './components/Notifications';
-import Settings from './components/Settings';
-import Reports from './components/Reports';
-import Employees from './components/Employees';
 import GlobalTimer from './components/GlobalTimer';
-import TrustAccounting from './components/TrustAccounting';
 import ClientPortal from './components/client/ClientPortal';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -35,6 +39,16 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { DataProvider, useData } from './contexts/DataContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { Language } from './translations';
+
+// Skeleton loader shown while lazy components load
+const LazyLoadFallback = () => (
+  <div className="flex-1 flex items-center justify-center h-full bg-gray-50">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-8 h-8 border-3 border-slate-300 border-t-slate-700 rounded-full animate-spin" />
+      <span className="text-sm text-gray-400 font-medium">Loading…</span>
+    </div>
+  </div>
+);
 
 type ActiveTab = 'dashboard' | 'matters' | 'documents' | 'communications' | 'crm' | 'intake' | 'ai' | 'billing' | 'calendar' | 'time' | 'tasks' | 'settings' | 'videocall' | 'reports' | 'employees' | 'trust';
 
@@ -194,7 +208,9 @@ const MainLayout = () => {
         </header>
 
         <div className="flex-1 overflow-hidden relative">
-          <ComponentSwitcher activeTab={activeTab} />
+          <Suspense fallback={<LazyLoadFallback />}>
+            <ComponentSwitcher activeTab={activeTab} />
+          </Suspense>
         </div>
       </main>
     </div>
