@@ -25,23 +25,6 @@ import { useTranslation } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DataProvider, useData } from '../contexts/DataContext';
 
-const Dashboard = React.lazy(() => import('./Dashboard'));
-const Matters = React.lazy(() => import('./Matters'));
-const AIDrafter = React.lazy(() => import('./AIDrafter'));
-const Billing = React.lazy(() => import('./Billing'));
-const CalendarView = React.lazy(() => import('./CalendarView'));
-const Documents = React.lazy(() => import('./Documents'));
-const Communications = React.lazy(() => import('./Communications'));
-const VideoCall = React.lazy(() => import('./VideoCall'));
-const CRM = React.lazy(() => import('./CRM'));
-const Intake = React.lazy(() => import('./Intake'));
-const TimeTracker = React.lazy(() => import('./TimeTracker'));
-const Tasks = React.lazy(() => import('./Tasks'));
-const Settings = React.lazy(() => import('./Settings'));
-const Reports = React.lazy(() => import('./Reports'));
-const Employees = React.lazy(() => import('./Employees'));
-const TrustAccounting = React.lazy(() => import('./TrustAccounting'));
-
 type ActiveTab =
   | 'dashboard'
   | 'matters'
@@ -59,6 +42,81 @@ type ActiveTab =
   | 'reports'
   | 'employees'
   | 'trust';
+
+const TAB_ORDER: ActiveTab[] = [
+  'dashboard',
+  'matters',
+  'documents',
+  'communications',
+  'crm',
+  'intake',
+  'ai',
+  'billing',
+  'calendar',
+  'time',
+  'tasks',
+  'settings',
+  'videocall',
+  'reports',
+  'employees',
+  'trust'
+];
+
+const isActiveTab = (value: unknown): value is ActiveTab =>
+  typeof value === 'string' && TAB_ORDER.includes(value as ActiveTab);
+
+const loadDashboard = () => import('./Dashboard');
+const loadMatters = () => import('./Matters');
+const loadAIDrafter = () => import('./AIDrafter');
+const loadBilling = () => import('./Billing');
+const loadCalendarView = () => import('./CalendarView');
+const loadDocuments = () => import('./Documents');
+const loadCommunications = () => import('./Communications');
+const loadVideoCall = () => import('./VideoCall');
+const loadCRM = () => import('./CRM');
+const loadIntake = () => import('./Intake');
+const loadTimeTracker = () => import('./TimeTracker');
+const loadTasks = () => import('./Tasks');
+const loadSettings = () => import('./Settings');
+const loadReports = () => import('./Reports');
+const loadEmployees = () => import('./Employees');
+const loadTrustAccounting = () => import('./TrustAccounting');
+
+const Dashboard = React.lazy(loadDashboard);
+const Matters = React.lazy(loadMatters);
+const AIDrafter = React.lazy(loadAIDrafter);
+const Billing = React.lazy(loadBilling);
+const CalendarView = React.lazy(loadCalendarView);
+const Documents = React.lazy(loadDocuments);
+const Communications = React.lazy(loadCommunications);
+const VideoCall = React.lazy(loadVideoCall);
+const CRM = React.lazy(loadCRM);
+const Intake = React.lazy(loadIntake);
+const TimeTracker = React.lazy(loadTimeTracker);
+const Tasks = React.lazy(loadTasks);
+const Settings = React.lazy(loadSettings);
+const Reports = React.lazy(loadReports);
+const Employees = React.lazy(loadEmployees);
+const TrustAccounting = React.lazy(loadTrustAccounting);
+
+const TAB_PRELOADERS: Record<ActiveTab, () => Promise<unknown>> = {
+  dashboard: loadDashboard,
+  matters: loadMatters,
+  documents: loadDocuments,
+  communications: loadCommunications,
+  crm: loadCRM,
+  intake: loadIntake,
+  ai: loadAIDrafter,
+  billing: loadBilling,
+  calendar: loadCalendarView,
+  time: loadTimeTracker,
+  tasks: loadTasks,
+  settings: loadSettings,
+  videocall: loadVideoCall,
+  reports: loadReports,
+  employees: loadEmployees,
+  trust: loadTrustAccounting
+};
 
 const LazyLoadFallback = () => (
   <div className="flex-1 flex items-center justify-center h-full bg-gray-50">
@@ -112,11 +170,17 @@ const ComponentSwitcher = ({ activeTab }: { activeTab: ActiveTab }) => {
 
 const MainLayout = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [mountedTabs, setMountedTabs] = useState<ActiveTab[]>(['dashboard']);
   const { t } = useTranslation();
   const { user, logout } = useAuth();
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
+
+  const activateTab = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    setMountedTabs(prev => (prev.includes(tab) ? prev : [...prev, tab]));
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -132,16 +196,48 @@ const MainLayout = () => {
   useEffect(() => {
     const handler = (e: any) => {
       const tab = e?.detail?.tab;
-      if (!tab) return;
-      setActiveTab(tab as ActiveTab);
+      if (!isActiveTab(tab)) return;
+      activateTab(tab);
     };
     window.addEventListener('jf:navigate', handler as any);
     return () => window.removeEventListener('jf:navigate', handler as any);
   }, []);
 
+  useEffect(() => {
+    const preloadTabs: ActiveTab[] = ['matters', 'tasks', 'documents', 'calendar', 'communications', 'billing', 'crm'];
+    let disposed = false;
+    let timer: number | null = null;
+    let idleId: number | null = null;
+
+    const preloadSequentially = () => {
+      let index = 0;
+      const run = () => {
+        if (disposed || index >= preloadTabs.length) return;
+        const tab = preloadTabs[index++];
+        void TAB_PRELOADERS[tab]();
+        timer = window.setTimeout(run, 120);
+      };
+      run();
+    };
+
+    if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+      idleId = (window as any).requestIdleCallback(() => preloadSequentially(), { timeout: 2000 });
+    } else {
+      timer = window.setTimeout(preloadSequentially, 900);
+    }
+
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      if (idleId !== null && typeof (window as any).cancelIdleCallback === 'function') {
+        (window as any).cancelIdleCallback(idleId);
+      }
+    };
+  }, []);
+
   const NavButton = ({ tab, icon: Icon, label, badge }: any) => (
     <button
-      onClick={() => setActiveTab(tab)}
+      onClick={() => activateTab(tab as ActiveTab)}
       className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 group mb-1 ${
         activeTab === tab
           ? 'bg-slate-700 text-white font-medium shadow-sm'
@@ -156,7 +252,7 @@ const MainLayout = () => {
 
   return (
     <div className="flex h-screen w-full bg-slate-900 font-sans overflow-hidden">
-      <CommandPalette isOpen={isCmdOpen} onClose={() => setIsCmdOpen(false)} onNavigate={tab => setActiveTab(tab as ActiveTab)} />
+      <CommandPalette isOpen={isCmdOpen} onClose={() => setIsCmdOpen(false)} onNavigate={tab => isActiveTab(tab) && activateTab(tab)} />
 
       <aside className="w-64 bg-slate-900 flex flex-col z-20 relative border-r border-slate-700">
         <div className="h-16 flex items-center px-6 mb-2">
@@ -206,7 +302,7 @@ const MainLayout = () => {
               <div className="absolute bottom-full left-0 w-full mb-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50">
                 <button
                   onClick={() => {
-                    setActiveTab('settings');
+                    activateTab('settings');
                     setShowProfileMenu(false);
                   }}
                   className="w-full text-left px-4 py-3 text-sm text-gray-300 hover:bg-slate-700 hover:text-white border-b border-slate-700"
@@ -243,7 +339,7 @@ const MainLayout = () => {
             </div>
             <Notifications />
             <button
-              onClick={() => setActiveTab('matters')}
+              onClick={() => activateTab('matters')}
               className="flex items-center gap-2 bg-slate-800 text-white px-3.5 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-all shadow-sm"
             >
               <Plus className="w-4 h-4" />
@@ -253,9 +349,13 @@ const MainLayout = () => {
         </header>
 
         <div className="flex-1 overflow-hidden relative">
-          <Suspense fallback={<LazyLoadFallback />}>
-            <ComponentSwitcher activeTab={activeTab} />
-          </Suspense>
+          {TAB_ORDER.filter(tab => mountedTabs.includes(tab)).map(tab => (
+            <section key={tab} className={activeTab === tab ? 'h-full' : 'hidden'} aria-hidden={activeTab !== tab}>
+              <Suspense fallback={activeTab === tab ? <LazyLoadFallback /> : null}>
+                <ComponentSwitcher activeTab={tab} />
+              </Suspense>
+            </section>
+          ))}
         </div>
       </main>
     </div>
