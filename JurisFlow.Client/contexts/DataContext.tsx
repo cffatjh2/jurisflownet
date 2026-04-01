@@ -65,6 +65,7 @@ interface DataContextType {
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
+type MatterWithClientId = Matter & { clientId?: string };
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const { isAuthenticated, user } = useAuth();
@@ -224,6 +225,41 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
+  const getMatterClientId = (matter: Partial<MatterWithClientId>): string | undefined => {
+    const fromMatter = typeof matter.clientId === 'string' ? matter.clientId.trim() : '';
+    if (fromMatter) return fromMatter;
+
+    const fromClient = typeof matter.client?.id === 'string' ? matter.client.id.trim() : '';
+    return fromClient || undefined;
+  };
+
+  const hydrateMatterClient = (matter: Matter, clientById: Map<string, Client>): Matter => {
+    const matterWithClientId = matter as MatterWithClientId;
+    const clientId = getMatterClientId(matterWithClientId);
+    if (!clientId) {
+      return matter;
+    }
+
+    const resolvedClient = clientById.get(clientId) || matterWithClientId.client;
+    if (!resolvedClient && matterWithClientId.clientId === clientId) {
+      return matter;
+    }
+
+    return {
+      ...matter,
+      ...(resolvedClient ? { client: resolvedClient } : {}),
+      clientId
+    } as Matter;
+  };
+
+  const hydrateMattersWithClients = (matterItems: Matter[], clientItems: Client[]): Matter[] => {
+    if (!Array.isArray(matterItems) || matterItems.length === 0) return matterItems;
+    if (!Array.isArray(clientItems) || clientItems.length === 0) return matterItems;
+
+    const clientById = new Map(clientItems.map((client) => [client.id, client]));
+    return matterItems.map((matter) => hydrateMatterClient(matter, clientById));
+  };
+
   const clearLoadedData = () => {
     setMatters([]);
     setClients([]);
@@ -240,11 +276,21 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const applyBootstrapPayload = (payload: any) => {
     if (!payload || typeof payload !== 'object') return;
-    if (Array.isArray(payload.matters)) setMatters(payload.matters);
+    const incomingClients = Array.isArray(payload.clients) ? payload.clients as Client[] : null;
+
+    if (Array.isArray(payload.matters)) {
+      const normalizedMatters = incomingClients
+        ? hydrateMattersWithClients(payload.matters, incomingClients)
+        : hydrateMattersWithClients(payload.matters, clients);
+      setMatters(normalizedMatters);
+    }
     if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
     if (Array.isArray(payload.timeEntries)) setTimeEntries(payload.timeEntries);
     if (Array.isArray(payload.expenses)) setExpenses(payload.expenses);
-    if (Array.isArray(payload.clients)) setClients(payload.clients);
+    if (incomingClients) {
+      setClients(incomingClients);
+      setMatters((prev) => hydrateMattersWithClients(prev, incomingClients));
+    }
     if (Array.isArray(payload.leads)) setLeads(payload.leads);
     if (Array.isArray(payload.events)) setEvents(payload.events);
     if (Array.isArray(payload.invoices)) setInvoices(payload.invoices);
@@ -268,7 +314,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
       if (disposed) return;
 
-      if (Array.isArray(m)) setMatters(m);
+      if (Array.isArray(m)) setMatters(hydrateMattersWithClients(m, clients));
       if (Array.isArray(t)) setTasks(t);
       if (Array.isArray(te)) setTimeEntries(te);
       if (Array.isArray(e)) setEvents(e);
@@ -289,7 +335,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       if (disposed) return;
 
       if (Array.isArray(ex)) setExpenses(ex);
-      if (Array.isArray(c)) setClients(c);
+      if (Array.isArray(c)) {
+        setClients(c);
+        setMatters((prev) => hydrateMattersWithClients(prev, c));
+      }
       if (Array.isArray(l)) setLeads(l);
       if (Array.isArray(i)) setInvoices(i);
       if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
@@ -481,12 +530,21 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         throw new Error('Matter could not be created.');
       }
       // Replace temp with real
-      const hydratedMatter = { ...newMatter, client: newMatter.client || optimisticClient };
+      const clientById = new Map(clients.map((client) => [client.id, client]));
+      const hydratedMatter = hydrateMatterClient(
+        {
+          ...newMatter,
+          client: newMatter.client || optimisticClient,
+          clientId: getMatterClientId(newMatter as MatterWithClientId) || payload.clientId
+        } as Matter,
+        clientById
+      );
       setMatters(prev => [hydratedMatter, ...prev.filter(m => m.id !== tempId)]);
       void api.getClients()
         .then((freshClients) => {
           if (Array.isArray(freshClients)) {
             setClients(freshClients);
+            setMatters((prev) => hydrateMattersWithClients(prev, freshClients));
           }
         })
         .catch((refreshError) => {
@@ -502,10 +560,23 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const updateMatter = async (id: string, data: Partial<Matter>) => {
     // Optimistic update
-    setMatters(prev => prev.map(m => m.id === id ? { ...m, ...data, client: data.client || m.client } : m));
+    const clientById = new Map(clients.map((client) => [client.id, client]));
+    setMatters(prev => prev.map(m => {
+      if (m.id !== id) return m;
+      const merged = {
+        ...m,
+        ...data,
+        client: data.client || m.client,
+        clientId: getMatterClientId(data as Partial<MatterWithClientId>) || getMatterClientId(m as MatterWithClientId)
+      } as Matter;
+      return hydrateMatterClient(merged, clientById);
+    }));
     try {
       const updated = await api.updateMatter(id, data);
-      setMatters(prev => prev.map(m => m.id === id ? { ...m, ...updated } : m));
+      setMatters(prev => prev.map(m => {
+        if (m.id !== id) return m;
+        return hydrateMatterClient({ ...m, ...updated } as Matter, clientById);
+      }));
     } catch (e) {
       console.error("API Error (updateMatter)", e);
     }
@@ -672,7 +743,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setClients(prev => [temp, ...prev]);
     try {
       const newClient = await api.createClient(clientData);
-      setClients(prev => [newClient, ...prev.filter(c => c.id !== temp.id)]);
+      setClients(prev => {
+        const next = [newClient, ...prev.filter(c => c.id !== temp.id)];
+        setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
+        return next;
+      });
       return newClient;
     } catch (e) {
       console.error("API Error", e);
@@ -685,11 +760,19 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     const prev = clients;
     const { statusChangeNote, ...clientData } = data;
     // Optimistic update
-    setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...clientData } : c));
+    setClients(prevClients => {
+      const next = prevClients.map(c => c.id === id ? { ...c, ...clientData } : c);
+      setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
+      return next;
+    });
     try {
       const updated = await api.updateClient(id, data);
       if (updated) {
-        setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...updated } : c));
+        setClients(prevClients => {
+          const next = prevClients.map(c => c.id === id ? { ...c, ...updated } : c);
+          setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
+          return next;
+        });
       }
     } catch (e) {
       console.error("API Error (updateClient)", e);

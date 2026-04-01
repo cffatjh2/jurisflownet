@@ -768,24 +768,31 @@ namespace JurisFlow.Server.Data
                 {
                     entry.Property("TenantId").CurrentValue = tenantId;
                 }
-                else if (entry.State == EntityState.Modified)
+                else if (entry.State is EntityState.Modified or EntityState.Deleted)
                 {
-                    var currentValue = entry.Property("TenantId").CurrentValue?.ToString();
-                    if (string.IsNullOrWhiteSpace(currentValue))
+                    var persistedTenantId = entry.Property("TenantId").OriginalValue?.ToString();
+                    if (string.IsNullOrWhiteSpace(persistedTenantId))
                     {
-                        entry.Property("TenantId").CurrentValue = tenantId;
+                        var dbValues = entry.GetDatabaseValues();
+                        persistedTenantId = dbValues?["TenantId"]?.ToString();
                     }
-                    else if (!string.Equals(currentValue, tenantId, StringComparison.Ordinal))
+
+                    if (string.IsNullOrWhiteSpace(persistedTenantId))
                     {
-                        throw new InvalidOperationException("Cross-tenant data modification is not allowed.");
+                        persistedTenantId = entry.Property("TenantId").CurrentValue?.ToString();
                     }
-                }
-                else if (entry.State == EntityState.Deleted)
-                {
-                    var currentValue = entry.Property("TenantId").CurrentValue?.ToString();
-                    if (!string.Equals(currentValue, tenantId, StringComparison.Ordinal))
+
+                    if (!string.Equals(persistedTenantId, tenantId, StringComparison.Ordinal))
                     {
-                        throw new InvalidOperationException("Cross-tenant data deletion is not allowed.");
+                        throw entry.State == EntityState.Modified
+                            ? new InvalidOperationException("Cross-tenant data modification is not allowed.")
+                            : new InvalidOperationException("Cross-tenant data deletion is not allowed.");
+                    }
+
+                    if (entry.State == EntityState.Modified)
+                    {
+                        entry.Property("TenantId").CurrentValue = persistedTenantId;
+                        entry.Property("TenantId").IsModified = false;
                     }
                 }
             }

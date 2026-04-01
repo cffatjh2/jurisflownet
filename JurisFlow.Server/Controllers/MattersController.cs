@@ -96,9 +96,20 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<Matter>> PostMatter(Matter matter)
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (string.IsNullOrWhiteSpace(matter.ClientId))
+            {
+                return BadRequest(new { message = "ClientId is required." });
+            }
+
+            var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+            if (resolvedClientId == null)
+            {
+                return BadRequest(new { message = "Selected client was not found." });
+            }
 
             matter.Id = Guid.NewGuid().ToString();
             matter.OpenDate = DateTime.UtcNow;
+            matter.ClientId = resolvedClientId;
 
             var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
             matter.EntityId = resolved.entityId;
@@ -116,22 +127,50 @@ namespace JurisFlow.Server.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> PutMatter(string id, Matter matter)
         {
-             if (id != matter.Id) return BadRequest();
-
-            _context.Entry(matter).State = EntityState.Modified;
-
-            try
+            if (id != matter.Id) return BadRequest();
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (string.IsNullOrWhiteSpace(matter.ClientId))
             {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!MatterExists(id)) return NotFound();
-                else throw;
+                return BadRequest(new { message = "ClientId is required." });
             }
 
-            await _auditLogger.LogAsync(HttpContext, "matter.update", "Matter", matter.Id, $"Status={matter.Status}");
-            await TryTriggerOutcomeFeePlannerAsync(matter.Id, "matter_update");
+            var existingMatter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
+            if (existingMatter == null)
+            {
+                return NotFound();
+            }
+
+            var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+            if (resolvedClientId == null)
+            {
+                return BadRequest(new { message = "Selected client was not found." });
+            }
+
+            var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+
+            existingMatter.CaseNumber = matter.CaseNumber;
+            existingMatter.Name = matter.Name;
+            existingMatter.PracticeArea = matter.PracticeArea;
+            existingMatter.CourtType = matter.CourtType;
+            existingMatter.Outcome = matter.Outcome;
+            existingMatter.Status = matter.Status;
+            existingMatter.FeeStructure = matter.FeeStructure;
+            existingMatter.OpenDate = matter.OpenDate;
+            existingMatter.ResponsibleAttorney = matter.ResponsibleAttorney;
+            existingMatter.BillableRate = matter.BillableRate;
+            existingMatter.TrustBalance = matter.TrustBalance;
+            existingMatter.CurrentOutcomeFeePlanId = matter.CurrentOutcomeFeePlanId;
+            existingMatter.EntityId = resolved.entityId;
+            existingMatter.OfficeId = resolved.officeId;
+            existingMatter.ClientId = resolvedClientId;
+            existingMatter.ConflictCheckDate = matter.ConflictCheckDate;
+            existingMatter.ConflictCheckCleared = matter.ConflictCheckCleared;
+            existingMatter.ConflictWaiverObtained = matter.ConflictWaiverObtained;
+
+            await _context.SaveChangesAsync();
+
+            await _auditLogger.LogAsync(HttpContext, "matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
+            await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
 
             return NoContent();
         }
@@ -140,7 +179,7 @@ namespace JurisFlow.Server.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteMatter(string id)
         {
-            var matter = await _context.Matters.FindAsync(id);
+            var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
             _context.Matters.Remove(matter);
@@ -155,7 +194,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/archive")]
         public async Task<IActionResult> ArchiveMatter(string id)
         {
-            var matter = await _context.Matters.FindAsync(id);
+            var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
             matter.Status = "Archived";
@@ -171,7 +210,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/restore")]
         public async Task<IActionResult> RestoreMatter(string id)
         {
-            var matter = await _context.Matters.FindAsync(id);
+            var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
             matter.Status = "Open"; // Restore to Open
@@ -183,9 +222,19 @@ namespace JurisFlow.Server.Controllers
             return Ok(matter);
         }
 
-        private bool MatterExists(string id)
+        private async Task<string?> ResolveValidClientIdAsync(string? clientId)
         {
-            return _context.Matters.Any(e => e.Id == id);
+            var normalizedClientId = clientId?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedClientId))
+            {
+                return null;
+            }
+
+            var clientExists = await _context.Clients
+                .AsNoTracking()
+                .AnyAsync(c => c.Id == normalizedClientId);
+
+            return clientExists ? normalizedClientId : null;
         }
 
         private async Task TryTriggerOutcomeFeePlannerAsync(string matterId, string triggerType)

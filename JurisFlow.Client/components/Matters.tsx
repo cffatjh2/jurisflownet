@@ -253,6 +253,16 @@ const Matters: React.FC = () => {
     password: ''
   });
 
+  const clientsById = useMemo(() => {
+    return new Map(clients.map((client) => [client.id, client]));
+  }, [clients]);
+
+  const resolveMatterClient = (matter: Matter): Client | undefined => {
+    const candidateId = matter.clientId || matter.client?.id;
+    if (!candidateId) return matter.client;
+    return clientsById.get(candidateId) || matter.client;
+  };
+
   // Deep-link from Command Palette
   useEffect(() => {
     const targetId = localStorage.getItem('cmd_target_matter');
@@ -1112,7 +1122,8 @@ const Matters: React.FC = () => {
 
   const filteredMatters = matters.filter(m => {
     const q = search.toLowerCase();
-    const matchesQuery = [m.name, m.client?.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));
+    const resolvedClient = resolveMatterClient(m);
+    const matchesQuery = [m.name, resolvedClient?.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));
     const matchesStatus = statusFilter === 'all' ? true : m.status === statusFilter;
     const matchesEntity = !entityFilter || m.entityId === entityFilter;
     const matchesOffice = !officeFilter || m.officeId === officeFilter;
@@ -1246,62 +1257,65 @@ const Matters: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {filteredMatters.map((matter) => (
-                  <tr
-                    key={matter.id}
-                    onClick={() => setSelectedMatter(matter)}
-                    className="hover:bg-gray-50/80 transition-all cursor-pointer group"
-                  >
-                    <td className="pl-6 py-4">
-                      <div className={`w-1.5 h-10 rounded-full ${matter.status === CaseStatus.Open ? 'bg-emerald-500' :
-                        matter.status === CaseStatus.Trial ? 'bg-red-500' :
-                          matter.status === CaseStatus.Pending ? 'bg-amber-400' : 'bg-gray-300'
-                        }`}></div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-800 text-sm">{matter.name}</span>
-                        <span className="text-xs font-medium text-gray-400 mt-0.5">{matter.caseNumber}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center text-xs font-bold uppercase">
-                          {(matter.client?.name || '?').substring(0, 2)}
-                        </div>
+                {filteredMatters.map((matter) => {
+                  const matterClient = resolveMatterClient(matter);
+                  return (
+                    <tr
+                      key={matter.id}
+                      onClick={() => setSelectedMatter(matter)}
+                      className="hover:bg-gray-50/80 transition-all cursor-pointer group"
+                    >
+                      <td className="pl-6 py-4">
+                        <div className={`w-1.5 h-10 rounded-full ${matter.status === CaseStatus.Open ? 'bg-emerald-500' :
+                          matter.status === CaseStatus.Trial ? 'bg-red-500' :
+                            matter.status === CaseStatus.Pending ? 'bg-amber-400' : 'bg-gray-300'
+                          }`}></div>
+                      </td>
+                      <td className="px-4 py-4">
                         <div className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-700">{matter.client?.name || 'Unknown Client'}</span>
-                      {matter.client?.company && <span className="text-xs text-gray-400">{matter.client.company}</span>}
+                          <span className="font-bold text-slate-800 text-sm">{matter.name}</span>
+                          <span className="text-xs font-medium text-gray-400 mt-0.5">{matter.caseNumber}</span>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600 font-medium">
-                      <span className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded text-xs">
-                        {matter.feeStructure || 'Hourly'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap">
-                      <span className={`px-2.5 py-1 inline-flex text-xs leading-none font-bold rounded-md 
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center text-xs font-bold uppercase">
+                            {(matterClient?.name || '?').substring(0, 2)}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold text-slate-700">{matterClient?.name || 'Unknown Client'}</span>
+                            {matterClient?.company && <span className="text-xs text-gray-400">{matterClient.company}</span>}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600 font-medium">
+                        <span className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded text-xs">
+                          {matter.feeStructure || 'Hourly'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <span className={`px-2.5 py-1 inline-flex text-xs leading-none font-bold rounded-md 
                       ${matter.status === CaseStatus.Open ? 'bg-emerald-100 text-emerald-700' :
-                          matter.status === CaseStatus.Trial ? 'bg-red-100 text-red-700' :
-                            matter.status === CaseStatus.Pending ? 'bg-amber-100 text-amber-700' :
-                              'bg-gray-100 text-gray-600'}`}>
-                        {matter.status === CaseStatus.Open ? t('status_open') :
-                          matter.status === CaseStatus.Trial ? t('status_trial') :
-                            matter.status === CaseStatus.Pending ? t('status_pending') : t('status_closed')}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                      {matter.courtType || '-'}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm font-mono font-medium text-gray-600">
-                      {formatCurrency(matter.trustBalance)}
-                    </td>
-                    <td className="pr-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-slate-800 transition-colors" />
-                    </td>
-                  </tr>
-                ))}
+                            matter.status === CaseStatus.Trial ? 'bg-red-100 text-red-700' :
+                              matter.status === CaseStatus.Pending ? 'bg-amber-100 text-amber-700' :
+                                'bg-gray-100 text-gray-600'}`}>
+                          {matter.status === CaseStatus.Open ? t('status_open') :
+                            matter.status === CaseStatus.Trial ? t('status_trial') :
+                              matter.status === CaseStatus.Pending ? t('status_pending') : t('status_closed')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {matter.courtType || '-'}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-mono font-medium text-gray-600">
+                        {formatCurrency(matter.trustBalance)}
+                      </td>
+                      <td className="pr-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-slate-800 transition-colors" />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1321,7 +1335,7 @@ const Matters: React.FC = () => {
                   <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase">{selectedMatter.status}</span>
                 </div>
                 <h2 className="text-xl font-bold text-slate-900">{selectedMatter.name}</h2>
-                <p className="text-sm text-gray-500 mt-0.5">{selectedMatter.client?.name || 'Unknown Client'} - {selectedMatter.practiceArea} {selectedMatter.courtType && `- ${selectedMatter.courtType}`}</p>
+                <p className="text-sm text-gray-500 mt-0.5">{resolveMatterClient(selectedMatter)?.name || 'Unknown Client'} - {selectedMatter.practiceArea} {selectedMatter.courtType && `- ${selectedMatter.courtType}`}</p>
               </div>
               <button onClick={() => setSelectedMatter(null)} className="p-1 hover:bg-gray-200 rounded-full text-gray-400"><X className="w-6 h-6" /></button>
             </div>

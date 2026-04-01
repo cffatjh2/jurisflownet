@@ -468,7 +468,8 @@ export interface Matter {
   id: string;
   caseNumber: string;
   name: string;
-  client: Client;
+  clientId?: string;
+  client?: Client;
   practiceArea: PracticeArea;
   status: CaseStatus;
   feeStructure: FeeStructure; // Added
