@@ -25,7 +25,7 @@ interface DataContextType {
   pauseTimer: () => void;
   resumeTimer: () => void;
 
-  addMatter: (item: any) => Promise<void>;
+  addMatter: (item: any) => Promise<Matter>;
   updateMatter: (id: string, data: Partial<Matter>) => Promise<void>;
   deleteMatter: (id: string) => Promise<void>;
   addTimeEntry: (item: any) => Promise<boolean>;
@@ -456,7 +456,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   // --- ACTIONS (Optimistic Updates) ---
 
-  const addMatter = async (matterData: any) => {
+  const addMatter = async (matterData: any): Promise<Matter> => {
     // Optimistic
     const tempId = `m-temp-${Date.now()}`;
     const optimisticClient = matterData.client || {
@@ -477,11 +477,22 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         throw new Error('Client is required to create a matter.');
       }
       const newMatter = await api.createMatter(payload);
+      if (!newMatter) {
+        throw new Error('Matter could not be created.');
+      }
       // Replace temp with real
       const hydratedMatter = { ...newMatter, client: newMatter.client || optimisticClient };
       setMatters(prev => [hydratedMatter, ...prev.filter(m => m.id !== tempId)]);
-      const freshClients = await api.getClients();
-      setClients(freshClients);
+      void api.getClients()
+        .then((freshClients) => {
+          if (Array.isArray(freshClients)) {
+            setClients(freshClients);
+          }
+        })
+        .catch((refreshError) => {
+          console.warn("Client list refresh after matter create failed", refreshError);
+        });
+      return hydratedMatter;
     } catch (e) {
       console.error("API Error (addMatter) - operating offline", e);
       setMatters(prev => prev.filter(m => m.id !== tempId));

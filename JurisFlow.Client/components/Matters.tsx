@@ -194,8 +194,8 @@ const Matters: React.FC = () => {
   const [selectedPartyName, setSelectedPartyName] = useState('');
   const [entityFilter, setEntityFilter] = useState('');
   const [officeFilter, setOfficeFilter] = useState('');
+  const [matterSubmitting, setMatterSubmitting] = useState(false);
   const [outcomePlannerDraft, setOutcomePlannerDraft] = useState<OutcomePlannerDraft>(defaultOutcomePlannerDraft);
-  const [outcomePlannerSaving, setOutcomePlannerSaving] = useState(false);
   const [selectedMatterPlanner, setSelectedMatterPlanner] = useState<OutcomeFeePlanDetailResult | null>(null);
   const [selectedMatterPlannerCompare, setSelectedMatterPlannerCompare] = useState<OutcomeFeePlanVersionCompareResult | null>(null);
   const [selectedMatterPlannerLoading, setSelectedMatterPlannerLoading] = useState(false);
@@ -477,21 +477,20 @@ const Matters: React.FC = () => {
 
   const resetOutcomePlannerState = () => {
     setOutcomePlannerDraft(defaultOutcomePlannerDraft());
-    setOutcomePlannerSaving(false);
   };
 
-  const persistOutcomePlannerForMatter = async (createdMatter: any) => {
-    const baseRateOverride = parseFloat(outcomePlannerDraft.baseBillableRateOverride);
+  const persistOutcomePlannerForMatter = async (createdMatter: any, plannerDraft: OutcomePlannerDraft = outcomePlannerDraft) => {
+    const baseRateOverride = parseFloat(plannerDraft.baseBillableRateOverride);
     const payload = {
       matterId: createdMatter.id,
       title: `${createdMatter.name} Intake Planner`,
-      complexity: outcomePlannerDraft.complexity,
-      claimSizeBand: outcomePlannerDraft.claimSizeBand,
+      complexity: plannerDraft.complexity,
+      claimSizeBand: plannerDraft.claimSizeBand,
       billingArrangement: mapFeeStructureToPlannerArrangement(createdMatter.feeStructure || formData.feeStructure),
-      primaryPayorProfile: outcomePlannerDraft.primaryPayorProfile,
-      jurisdictionCode: outcomePlannerDraft.jurisdictionCode || undefined,
+      primaryPayorProfile: plannerDraft.primaryPayorProfile,
+      jurisdictionCode: plannerDraft.jurisdictionCode || undefined,
       baseBillableRateOverride: Number.isFinite(baseRateOverride) && baseRateOverride > 0 ? baseRateOverride : undefined,
-      notes: outcomePlannerDraft.notes || undefined
+      notes: plannerDraft.notes || undefined
     };
 
     const result = await api.outcomeFeePlans.generate(payload);
@@ -924,8 +923,11 @@ const Matters: React.FC = () => {
       entityId: formData.entityId || undefined,
       officeId: formData.officeId || undefined
     };
+    const plannerDraftSnapshot: OutcomePlannerDraft = { ...outcomePlannerDraft };
+    const shouldAutoSavePlanner = plannerDraftSnapshot.enabled && plannerDraftSnapshot.autoSave;
+    setMatterSubmitting(true);
     try {
-      await addMatter({
+      const createdMatter = await addMatter({
         ...newMatter,
         clientId: resolvedClient.id,
         clientName: resolvedClient.name,
@@ -935,28 +937,18 @@ const Matters: React.FC = () => {
         officeId: formData.officeId || undefined
       });
 
-      if (outcomePlannerDraft.enabled && outcomePlannerDraft.autoSave) {
-        try {
-          setOutcomePlannerSaving(true);
-          const allMatters = await api.getMatters();
-          const createdMatter = (Array.isArray(allMatters) ? allMatters : [])
-            .filter((m: any) =>
-              m &&
-              m.caseNumber === resolvedCaseNumber &&
-              (m.clientId === resolvedClient?.id || m.client?.id === resolvedClient?.id) &&
-              m.name === formData.name)
-            .sort((a: any, b: any) => new Date(b.openDate || b.createdAt || 0).getTime() - new Date(a.openDate || a.createdAt || 0).getTime())[0];
-
-          if (createdMatter?.id) {
-            await persistOutcomePlannerForMatter(createdMatter);
-          } else {
-            toast.warning('Matter was created, but planner version could not be auto-saved (matter lookup failed).');
-          }
-        } catch (plannerError) {
-          console.error('Outcome-to-Fee planner save failed', plannerError);
-          toast.warning('Matter created, but Outcome-to-Fee Planner could not be saved.');
-        } finally {
-          setOutcomePlannerSaving(false);
+      if (shouldAutoSavePlanner) {
+        if (createdMatter?.id) {
+          void (async () => {
+            try {
+              await persistOutcomePlannerForMatter(createdMatter, plannerDraftSnapshot);
+            } catch (plannerError) {
+              console.error('Outcome-to-Fee planner save failed', plannerError);
+              toast.warning('Matter created, but Outcome-to-Fee Planner could not be saved.');
+            }
+          })();
+        } else {
+          toast.warning('Matter was created, but planner version could not be auto-saved (matter lookup failed).');
         }
       }
 
@@ -986,7 +978,8 @@ const Matters: React.FC = () => {
     } catch (error) {
       console.error('Failed to create matter', error);
       toast.error('Failed to create matter.');
-      setOutcomePlannerSaving(false);
+    } finally {
+      setMatterSubmitting(false);
     }
   };
 
@@ -2634,8 +2627,8 @@ const Matters: React.FC = () => {
 
               <div className="flex justify-end gap-3 mt-6">
                 <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
-                <button type="submit" disabled={outcomePlannerSaving} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
-                  {outcomePlannerSaving ? 'Saving Planner...' : t('save')}
+                <button type="submit" disabled={matterSubmitting} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                  {matterSubmitting ? t('saving') : t('save')}
                 </button>
               </div>
             </form>
