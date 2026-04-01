@@ -14,11 +14,11 @@ const signupPlans = [
     name: 'Starter',
     price: '$39',
     period: '/mo',
-    note: 'Gemini kullanamaz',
+    note: 'Gemini not included',
     features: [
-      'Temel moduller',
-      'Gemini AI yok',
-      'Standart destek'
+      'Core modules',
+      'No Gemini AI access',
+      'Standard support'
     ]
   },
   {
@@ -26,11 +26,11 @@ const signupPlans = [
     name: 'All Inclusive',
     price: '$59',
     period: '/mo',
-    note: 'Her sey dahil',
+    note: 'Everything included',
     features: [
-      'Tum moduller',
-      'Gemini AI dahil',
-      'Oncelikli destek'
+      'All modules',
+      'Gemini AI included',
+      'Priority support'
     ]
   }
 ] as const;
@@ -111,12 +111,12 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(payload?.message || 'Checkout baslatilamadi.');
+        throw new Error(payload?.message || 'Checkout could not be started.');
       }
 
       const checkoutUrl = typeof payload?.checkoutUrl === 'string' ? payload.checkoutUrl : '';
       if (!checkoutUrl) {
-        throw new Error('Checkout URL alinamadi.');
+        throw new Error('Checkout URL was not returned.');
       }
 
       if (typeof window !== 'undefined') {
@@ -126,7 +126,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         window.location.href = checkoutUrl;
       }
     } catch (err) {
-      setSignupError(getErrorMessage(err, 'Plan yonlendirmesi basarisiz oldu.'));
+      setSignupError(getErrorMessage(err, 'Plan redirect failed.'));
     } finally {
       setCheckoutPlanId(null);
     }
@@ -195,7 +195,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         onClick={handleOpenSignup}
         className="absolute top-6 right-6 z-20 px-4 py-2 rounded-xl border border-slate-200 bg-white/95 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition-colors shadow-sm"
       >
-        Kayit Ol
+        Sign Up
       </button>
 
       <div className="w-full max-w-md p-8 z-10">
@@ -381,8 +381,8 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
           <div className="mx-auto w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-100">
             <div className="flex items-start justify-between gap-4 p-6 border-b border-slate-100">
               <div>
-                <h3 className="text-xl font-bold text-slate-900">Plan secimi</h3>
-                <p className="text-sm text-slate-500 mt-1">Kayit oncesi bir plan sec ve odeme ile devam et.</p>
+                <h3 className="text-xl font-bold text-slate-900">Choose a plan</h3>
+                <p className="text-sm text-slate-500 mt-1">Select a plan before sign-up and continue to checkout.</p>
               </div>
               <button
                 type="button"
@@ -441,7 +441,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
                         : 'bg-blue-600 text-white hover:bg-blue-700'
                         } disabled:opacity-70 disabled:cursor-not-allowed`}
                     >
-                      {isLoadingPlan ? 'Yonlendiriliyor...' : 'Bu planla kayit ol'}
+                      {isLoadingPlan ? 'Redirecting...' : 'Sign up with this plan'}
                     </button>
                   </div>
                 );
