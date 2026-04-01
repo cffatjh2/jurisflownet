@@ -75,7 +75,9 @@ namespace JurisFlow.Server.Controllers
                 return TooManyLoginAttempts(throttleStatus);
             }
 
-            var user = await _context.Users.FirstOrDefaultAsync(u =>
+            var user = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u =>
                 EF.Property<string>(u, "TenantId") == tenantId &&
                 u.NormalizedEmail == email);
 

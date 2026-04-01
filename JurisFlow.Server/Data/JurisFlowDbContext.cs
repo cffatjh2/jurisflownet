@@ -160,10 +160,21 @@ namespace JurisFlow.Server.Data
             modelBuilder.Entity<Client>()
                 .HasIndex("TenantId", nameof(Client.NormalizedEmail))
                 .IsUnique();
+            modelBuilder.Entity<Client>()
+                .HasIndex("TenantId", nameof(Client.CreatedAt));
 
             modelBuilder.Entity<Employee>()
                 .HasIndex("TenantId", nameof(Employee.Email))
                 .IsUnique();
+
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.CreatedAt));
+            modelBuilder.Entity<CalendarEvent>()
+                .HasIndex("TenantId", nameof(CalendarEvent.Date));
+            modelBuilder.Entity<Lead>()
+                .HasIndex("TenantId", nameof(Lead.CreatedAt));
+            modelBuilder.Entity<Document>()
+                .HasIndex("TenantId", nameof(Document.CreatedAt));
 
             modelBuilder.Entity<StaffMessage>()
                 .HasIndex(m => new { m.SenderId, m.RecipientId, m.CreatedAt });
@@ -425,15 +436,21 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<Invoice>()
                 .HasIndex(i => i.Number);
+            modelBuilder.Entity<Invoice>()
+                .HasIndex("TenantId", nameof(Invoice.CreatedAt));
 
             modelBuilder.Entity<InvoiceLineItem>()
                 .HasIndex(li => li.InvoiceId);
 
             modelBuilder.Entity<TimeEntry>()
                 .HasIndex(t => new { t.MatterId, t.Date });
+            modelBuilder.Entity<TimeEntry>()
+                .HasIndex("TenantId", nameof(TimeEntry.Date));
 
             modelBuilder.Entity<Expense>()
                 .HasIndex(e => new { e.MatterId, e.Date });
+            modelBuilder.Entity<Expense>()
+                .HasIndex("TenantId", nameof(Expense.Date));
 
             modelBuilder.Entity<Holiday>()
                 .HasIndex(h => new { h.Date, h.Jurisdiction });
@@ -615,6 +632,8 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<Matter>()
                 .HasIndex(m => new { m.EntityId, m.OfficeId });
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.OpenDate));
 
             modelBuilder.Entity<Invoice>()
                 .HasIndex(i => new { i.EntityId, i.OfficeId });

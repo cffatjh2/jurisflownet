@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
@@ -89,6 +89,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const clientsRef = useRef<Client[]>([]);
 
   // Local-only state
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -96,6 +97,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     { id: 'msg1', from: 'Jessica Pearson', subject: 'Managing Partner Meeting', preview: 'We need to discuss the new associates...', date: '09:00 AM', read: false }
   ]);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
+
+  useEffect(() => {
+    clientsRef.current = clients;
+  }, [clients]);
 
   // Timer Persistence
   useEffect(() => {
@@ -281,7 +286,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     if (Array.isArray(payload.matters)) {
       const normalizedMatters = incomingClients
         ? hydrateMattersWithClients(payload.matters, incomingClients)
-        : hydrateMattersWithClients(payload.matters, clients);
+        : hydrateMattersWithClients(payload.matters, clientsRef.current);
       setMatters(normalizedMatters);
     }
     if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
@@ -356,23 +361,23 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
         console.log('Fetching initial data from API...');
 
-        let initialLoaded = false;
-        try {
-          const bootstrap = await api.bootstrap('initial');
-          if (!disposed && bootstrap && typeof bootstrap === 'object') {
-            applyBootstrapPayload(bootstrap);
-            initialLoaded = true;
-            console.log('Initial data loaded via bootstrap endpoint');
+        const loadInitial = async () => {
+          let initialLoaded = false;
+          try {
+            const bootstrap = await api.bootstrap('initial');
+            if (!disposed && bootstrap && typeof bootstrap === 'object') {
+              applyBootstrapPayload(bootstrap);
+              initialLoaded = true;
+              console.log('Initial data loaded via bootstrap endpoint');
+            }
+          } catch (bootstrapError) {
+            console.warn('Initial bootstrap unavailable, falling back to endpoint calls', bootstrapError);
           }
-        } catch (bootstrapError) {
-          console.warn('Initial bootstrap unavailable, falling back to endpoint calls', bootstrapError);
-        }
 
-        if (!initialLoaded) {
-          await loadInitialFallback();
-        }
-
-        if (disposed) return;
+          if (!initialLoaded) {
+            await loadInitialFallback();
+          }
+        };
 
         const loadDeferred = async () => {
           let deferredLoaded = false;
@@ -392,7 +397,13 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           }
         };
 
-        void loadDeferred();
+        const initialPromise = loadInitial();
+        const deferredPromise = loadDeferred();
+
+        await initialPromise;
+        if (disposed) return;
+
+        void deferredPromise;
       } catch (error) {
         console.warn('Failed to load data from backend.', error);
         if ((!isAuthenticated || !token) && !disposed) {

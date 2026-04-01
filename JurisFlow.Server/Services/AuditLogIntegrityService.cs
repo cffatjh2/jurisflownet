@@ -59,6 +59,11 @@ namespace JurisFlow.Server.Services
             var last = await _context.AuditLogs
                 .AsNoTracking()
                 .OrderByDescending(a => a.Sequence)
+                .Select(a => new
+                {
+                    a.Sequence,
+                    a.Hash
+                })
                 .FirstOrDefaultAsync();
 
             audit.Sequence = (last?.Sequence ?? 0) + 1;

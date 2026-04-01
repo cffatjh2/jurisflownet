@@ -43,7 +43,6 @@ namespace JurisFlow.Server.Controllers
         {
             var query = _context.Matters
                 .AsNoTracking()
-                .Include(m => m.Client)
                 .AsQueryable();
 
             if (!string.IsNullOrEmpty(status))
@@ -80,7 +79,6 @@ namespace JurisFlow.Server.Controllers
         {
             var matter = await _context.Matters
                 .AsNoTracking()
-                .Include(m => m.Client)
                 .FirstOrDefaultAsync(m => m.Id == id);
 
             if (matter == null)

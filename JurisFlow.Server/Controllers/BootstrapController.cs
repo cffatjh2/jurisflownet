@@ -58,13 +58,11 @@ namespace JurisFlow.Server.Controllers
                 {
                     response.Matters = await _context.Matters
                         .AsNoTracking()
-                        .Include(m => m.Client)
                         .OrderByDescending(m => m.OpenDate)
                         .ToListAsync();
 
                     response.Tasks = await _context.Tasks
                         .AsNoTracking()
-                        .Include(t => t.AssignedEmployee)
                         .OrderByDescending(t => t.CreatedAt)
                         .Select(t => new
                         {

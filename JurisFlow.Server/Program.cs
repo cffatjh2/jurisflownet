@@ -16,6 +16,8 @@ using Npgsql;
 using System.IO;
 using System.Globalization;
 using System.Threading.RateLimiting;
+using System.IO.Compression;
+using Microsoft.AspNetCore.ResponseCompression;
 
 var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "AppCors";
@@ -35,6 +37,19 @@ builder.Services.AddControllers()
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IAppFileStorage, AppFileStorage>();
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes;
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
 
 var authLoginPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:PermitLimit", 8), 1, 200);
 var authLoginWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AuthLogin:WindowSeconds", 60), 1, 3600);
@@ -386,6 +401,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseResponseCompression();
 
 app.UseSerilogRequestLogging();
 
