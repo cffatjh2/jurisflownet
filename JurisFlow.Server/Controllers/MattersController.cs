@@ -180,12 +180,71 @@ namespace JurisFlow.Server.Controllers
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
-            _context.Matters.Remove(matter);
-            await _context.SaveChangesAsync();
+            await using var tx = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Detach optional FK references that otherwise block hard delete.
+                await _context.Tasks
+                    .Where(t => t.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
 
-            await _auditLogger.LogAsync(HttpContext, "matter.delete", "Matter", id, $"Deleted matter {matter.Name}");
+                await _context.Documents
+                    .Where(d => d.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null));
 
-            return NoContent();
+                await _context.CalendarEvents
+                    .Where(e => e.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null));
+
+                await _context.ClientTrustLedgers
+                    .Where(l => l.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(l => l.MatterId, (string?)null));
+
+                await _context.TrustTransactions
+                    .Where(t => t.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
+
+                await _context.Expenses
+                    .Where(e => e.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null));
+
+                await _context.TimeEntries
+                    .Where(t => t.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
+
+                await _context.CourtDocketEntries
+                    .Where(d => d.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null));
+
+                await _context.EfilingSubmissions
+                    .Where(s => s.MatterId == id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(s => s.MatterId, (string?)null));
+
+                // Required dependents should be removed with the parent.
+                await _context.OpposingParties
+                    .Where(p => p.MatterId == id)
+                    .ExecuteDeleteAsync();
+
+                _context.Matters.Remove(matter);
+                await _context.SaveChangesAsync();
+
+                await _auditLogger.LogAsync(HttpContext, "matter.delete", "Matter", id, $"Deleted matter {matter.Name}");
+                await tx.CommitAsync();
+
+                return NoContent();
+            }
+            catch (DbUpdateException ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogWarning(ex, "Matter delete blocked by related records for matter {MatterId}", id);
+                return Conflict(new { message = "Matter could not be deleted because related records are still linked." });
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex, "Matter delete failed for matter {MatterId}", id);
+                return StatusCode(500, new { message = "Failed to delete matter." });
+            }
         }
         
         // POST: api/Matters/5/archive

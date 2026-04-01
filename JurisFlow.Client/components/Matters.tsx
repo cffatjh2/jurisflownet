@@ -2171,10 +2171,16 @@ const Matters: React.FC = () => {
               <Can perform="matter.delete">
                 <button
                   className="py-2 px-3 bg-white border border-red-200 text-red-600 rounded-lg text-sm font-bold hover:bg-red-50 shadow-sm flex items-center gap-2"
-                  onClick={() => {
+                  onClick={async () => {
                     if (selectedMatter) {
-                      deleteMatter(selectedMatter.id);
-                      setSelectedMatter(null);
+                      try {
+                        await deleteMatter(selectedMatter.id);
+                        toast.success('Matter deleted.');
+                        setSelectedMatter(null);
+                      } catch (error: any) {
+                        const message = error?.message || 'Matter could not be deleted.';
+                        toast.error(message);
+                      }
                     }
                   }}
                 >

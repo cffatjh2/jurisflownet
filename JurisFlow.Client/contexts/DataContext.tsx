@@ -601,6 +601,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     } catch (e) {
       console.error("API Error (deleteMatter)", e);
       setMatters(prev); // revert
+      throw e;
     }
   };
 
