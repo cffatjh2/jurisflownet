@@ -311,6 +311,7 @@ builder.Services.AddScoped<BackupService>();
 builder.Services.AddHostedService<BackupJobHostedService>();
 builder.Services.AddScoped<FirmStructureService>();
 builder.Services.AddSingleton<StripePaymentService>();
+builder.Services.AddSingleton<LemonSqueezyCheckoutService>();
 builder.Services.AddScoped<PaymentPlanService>();
 builder.Services.AddScoped<DocumentIndexService>();
 builder.Services.AddScoped<RetentionService>();

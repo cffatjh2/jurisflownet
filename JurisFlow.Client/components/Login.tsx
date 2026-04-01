@@ -2,11 +2,38 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useClientAuth } from '../contexts/ClientAuthContext';
 import { useTranslation } from '../contexts/LanguageContext';
-import { Scale, Users, CheckSquare, Briefcase } from './Icons';
+import { Scale, Users, CheckSquare, Briefcase, X, Check } from './Icons';
 
 interface LoginProps {
   initialUserType?: 'attorney' | 'client';
 }
+
+const signupPlans = [
+  {
+    id: 'starter-39',
+    name: 'Starter',
+    price: '$39',
+    period: '/mo',
+    note: 'Gemini kullanamaz',
+    features: [
+      'Temel moduller',
+      'Gemini AI yok',
+      'Standart destek'
+    ]
+  },
+  {
+    id: 'all-inclusive-59',
+    name: 'All Inclusive',
+    price: '$59',
+    period: '/mo',
+    note: 'Her sey dahil',
+    features: [
+      'Tum moduller',
+      'Gemini AI dahil',
+      'Oncelikli destek'
+    ]
+  }
+] as const;
 
 const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   const [userType, setUserType] = useState<'attorney' | 'client'>(initialUserType);
@@ -22,6 +49,9 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   const [mfaChallengeId, setMfaChallengeId] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaExpiresAt, setMfaExpiresAt] = useState('');
+  const [showSignupModal, setShowSignupModal] = useState(false);
+  const [signupError, setSignupError] = useState('');
+  const [checkoutPlanId, setCheckoutPlanId] = useState<string | null>(null);
 
   const { login, verifyMfa, isAuthenticated } = useAuth();
   const { login: clientLogin, isAuthenticated: isClientAuthenticated } = useClientAuth();
@@ -44,6 +74,63 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   useEffect(() => {
     setUserType(initialUserType);
   }, [initialUserType]);
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error && err.message) {
+      return err.message;
+    }
+
+    return fallback;
+  };
+
+  const handleOpenSignup = () => {
+    setSignupError('');
+    setShowSignupModal(true);
+  };
+
+  const handleStartSignup = async (planId: string) => {
+    setSignupError('');
+    setCheckoutPlanId(planId);
+
+    try {
+      const trimmedTenant = tenantSlug.trim();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (trimmedTenant) {
+        headers['X-Tenant-Slug'] = trimmedTenant;
+      }
+
+      const response = await fetch('/api/public/subscriptions/checkout', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          planId,
+          email: email.trim() || undefined,
+          firmCode: trimmedTenant || undefined
+        })
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.message || 'Checkout baslatilamadi.');
+      }
+
+      const checkoutUrl = typeof payload?.checkoutUrl === 'string' ? payload.checkoutUrl : '';
+      if (!checkoutUrl) {
+        throw new Error('Checkout URL alinamadi.');
+      }
+
+      if (typeof window !== 'undefined') {
+        if (trimmedTenant) {
+          localStorage.setItem('tenant_slug', trimmedTenant);
+        }
+        window.location.href = checkoutUrl;
+      }
+    } catch (err) {
+      setSignupError(getErrorMessage(err, 'Plan yonlendirmesi basarisiz oldu.'));
+    } finally {
+      setCheckoutPlanId(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,6 +190,13 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
       <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-slate-900"></div>
       <div className="absolute top-[-10%] right-[-5%] w-96 h-96 bg-blue-50 rounded-full blur-3xl opacity-60 pointer-events-none"></div>
       <div className="absolute bottom-[-10%] left-[-5%] w-96 h-96 bg-indigo-50 rounded-full blur-3xl opacity-60 pointer-events-none"></div>
+      <button
+        type="button"
+        onClick={handleOpenSignup}
+        className="absolute top-6 right-6 z-20 px-4 py-2 rounded-xl border border-slate-200 bg-white/95 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition-colors shadow-sm"
+      >
+        Kayit Ol
+      </button>
 
       <div className="w-full max-w-md p-8 z-10">
 
@@ -281,6 +375,89 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
           &copy; 2025 JurisFlow Inc. All rights reserved.
         </p>
       </div>
+
+      {showSignupModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/50 px-4 py-8 overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-100">
+            <div className="flex items-start justify-between gap-4 p-6 border-b border-slate-100">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900">Plan secimi</h3>
+                <p className="text-sm text-slate-500 mt-1">Kayit oncesi bir plan sec ve odeme ile devam et.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!checkoutPlanId) {
+                    setShowSignupModal(false);
+                  }
+                }}
+                className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                disabled={!!checkoutPlanId}
+                aria-label="Close plan modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {signupPlans.map((plan) => {
+                const isLoadingPlan = checkoutPlanId === plan.id;
+                return (
+                  <div
+                    key={plan.id}
+                    className={`rounded-2xl border p-5 transition-all ${plan.id === 'all-inclusive-59'
+                      ? 'border-slate-900 bg-slate-50 shadow-md'
+                      : 'border-slate-200 bg-white'
+                      }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-900">{plan.name}</h4>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mt-1">{plan.note}</p>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-3xl font-extrabold text-slate-900 leading-none">{plan.price}</div>
+                        <div className="text-xs font-semibold text-slate-500">{plan.period}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                      {plan.features.map((feature) => (
+                        <div key={feature} className="flex items-center gap-2 text-sm text-slate-700">
+                          <span className="w-5 h-5 rounded-full bg-emerald-50 text-emerald-600 inline-flex items-center justify-center">
+                            <Check className="w-3 h-3" />
+                          </span>
+                          <span>{feature}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleStartSignup(plan.id)}
+                      disabled={!!checkoutPlanId}
+                      className={`mt-5 w-full py-3 rounded-xl text-sm font-bold transition-colors ${plan.id === 'all-inclusive-59'
+                        ? 'bg-slate-900 text-white hover:bg-slate-800'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                        } disabled:opacity-70 disabled:cursor-not-allowed`}
+                    >
+                      {isLoadingPlan ? 'Yonlendiriliyor...' : 'Bu planla kayit ol'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {signupError && (
+              <div className="px-6 pb-6">
+                <div className="bg-red-50 text-red-700 text-sm p-3 rounded-xl border border-red-100">
+                  {signupError}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

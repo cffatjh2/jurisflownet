@@ -124,6 +124,7 @@ namespace JurisFlow.Server.Middleware
             return path.StartsWithSegments("/health")
                 || path.StartsWithSegments("/swagger")
                 || path.StartsWithSegments("/api/payments/webhook")
+                || path.StartsWithSegments("/api/public/subscriptions")
                 || path.StartsWithSegments("/api/tenants/provision");
         }
 
