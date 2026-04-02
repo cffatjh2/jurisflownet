@@ -1121,6 +1121,7 @@ const Matters: React.FC = () => {
   };
 
   const filteredMatters = matters.filter(m => {
+    if (String(m.status).toLowerCase() === 'deleted') return false;
     const q = search.toLowerCase();
     const resolvedClient = resolveMatterClient(m);
     const matchesQuery = [m.name, resolvedClient?.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));

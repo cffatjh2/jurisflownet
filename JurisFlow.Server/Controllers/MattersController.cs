@@ -18,6 +18,7 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class MattersController : ControllerBase
     {
+        private const string DeletedMatterStatus = "Deleted";
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
@@ -182,8 +183,9 @@ namespace JurisFlow.Server.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteMatter(string id)
         {
-            var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
+            var matter = await _context.Matters.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
+            if (string.Equals(matter.Status, DeletedMatterStatus, StringComparison.OrdinalIgnoreCase)) return NoContent();
 
             var ct = HttpContext.RequestAborted;
             await using var tx = await _context.Database.BeginTransactionAsync(ct);
@@ -302,6 +304,11 @@ namespace JurisFlow.Server.Controllers
             {
                 await tx.RollbackAsync(ct);
                 _logger.LogError(ex, "Matter delete failed for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
+                if (await TrySoftDeleteMatterAsync(id, ct))
+                {
+                    return NoContent();
+                }
+
                 return StatusCode(500, new { message = "Failed to delete matter." });
             }
         }
@@ -512,6 +519,45 @@ namespace JurisFlow.Server.Controllers
                                             sqliteEx.Message.Contains("FOREIGN KEY constraint failed", StringComparison.OrdinalIgnoreCase),
                 _ => false
             };
+        }
+
+        private async Task<bool> TrySoftDeleteMatterAsync(string id, CancellationToken cancellationToken)
+        {
+            try
+            {
+                _context.ChangeTracker.Clear();
+
+                var matter = await _context.Matters
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
+
+                if (matter == null)
+                {
+                    return true;
+                }
+
+                matter.Status = DeletedMatterStatus;
+                matter.CurrentOutcomeFeePlanId = null;
+
+                await _context.SaveChangesAsync(cancellationToken);
+
+                try
+                {
+                    await _auditLogger.LogAsync(HttpContext, "matter.soft_delete", "Matter", id, "Soft-deleted after hard delete failure.");
+                }
+                catch (Exception auditEx)
+                {
+                    _logger.LogWarning(auditEx, "Soft-delete audit logging failed for matter {MatterId}", id);
+                }
+
+                _logger.LogWarning("Matter {MatterId} was soft-deleted after hard delete failure.", id);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Matter soft-delete fallback failed for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
+                return false;
+            }
         }
         
         private async Task<string?> ResolveValidClientIdAsync(string? clientId)

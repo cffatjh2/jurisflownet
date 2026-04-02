@@ -147,6 +147,9 @@ namespace JurisFlow.Server.Data
 
             ApplyEncryption(modelBuilder);
             ApplyTenantFilters(modelBuilder);
+            modelBuilder.Entity<Matter>().HasQueryFilter(m =>
+                (!RequireTenant || EF.Property<string>(m, "TenantId") == TenantId) &&
+                m.Status != "Deleted");
             var defaultFlagIndexFilter = Database.IsNpgsql() ? "\"IsDefault\" = TRUE" : "\"IsDefault\" = 1";
 
             modelBuilder.Entity<Tenant>()

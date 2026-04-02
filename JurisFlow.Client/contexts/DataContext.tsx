@@ -90,6 +90,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const clientsRef = useRef<Client[]>([]);
+  const mattersRef = useRef<Matter[]>([]);
 
   // Local-only state
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -101,6 +102,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     clientsRef.current = clients;
   }, [clients]);
+
+  useEffect(() => {
+    mattersRef.current = matters;
+  }, [matters]);
 
   // Timer Persistence
   useEffect(() => {
@@ -265,6 +270,21 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return matterItems.map((matter) => hydrateMatterClient(matter, clientById));
   };
 
+  const filterVisibleMatters = (matterItems: Matter[]): Matter[] => {
+    if (!Array.isArray(matterItems) || matterItems.length === 0) return [];
+    return matterItems.filter((matter) => String(matter?.status || '').toLowerCase() !== 'deleted');
+  };
+
+  const buildVisibleMatterIdSet = (matterItems: Matter[]) => {
+    return new Set(filterVisibleMatters(matterItems).map((matter) => matter.id));
+  };
+
+  const filterByVisibleMatter = <T extends { matterId?: string | null }>(items: T[], matterItems: Matter[]): T[] => {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    const visibleMatterIds = buildVisibleMatterIdSet(matterItems);
+    return items.filter((item) => !item.matterId || visibleMatterIds.has(item.matterId));
+  };
+
   const clearLoadedData = () => {
     setMatters([]);
     setClients([]);
@@ -282,25 +302,33 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const applyBootstrapPayload = (payload: any) => {
     if (!payload || typeof payload !== 'object') return;
     const incomingClients = Array.isArray(payload.clients) ? payload.clients as Client[] : null;
+    const hasMatterSource = Array.isArray(payload.matters) || mattersRef.current.length > 0;
+    const nextMatters = Array.isArray(payload.matters)
+      ? filterVisibleMatters(
+        incomingClients
+          ? hydrateMattersWithClients(payload.matters, incomingClients)
+          : hydrateMattersWithClients(payload.matters, clientsRef.current)
+      )
+      : mattersRef.current;
 
     if (Array.isArray(payload.matters)) {
-      const normalizedMatters = incomingClients
-        ? hydrateMattersWithClients(payload.matters, incomingClients)
-        : hydrateMattersWithClients(payload.matters, clientsRef.current);
-      setMatters(normalizedMatters);
+      setMatters(nextMatters);
     }
-    if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
-    if (Array.isArray(payload.timeEntries)) setTimeEntries(payload.timeEntries);
-    if (Array.isArray(payload.expenses)) setExpenses(payload.expenses);
+    if (Array.isArray(payload.tasks)) setTasks(hasMatterSource ? filterByVisibleMatter(payload.tasks, nextMatters) : payload.tasks);
+    if (Array.isArray(payload.timeEntries)) setTimeEntries(hasMatterSource ? filterByVisibleMatter(payload.timeEntries, nextMatters) : payload.timeEntries);
+    if (Array.isArray(payload.expenses)) setExpenses(hasMatterSource ? filterByVisibleMatter(payload.expenses, nextMatters) : payload.expenses);
     if (incomingClients) {
       setClients(incomingClients);
-      setMatters((prev) => hydrateMattersWithClients(prev, incomingClients));
+      setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, incomingClients)));
     }
     if (Array.isArray(payload.leads)) setLeads(payload.leads);
-    if (Array.isArray(payload.events)) setEvents(payload.events);
-    if (Array.isArray(payload.invoices)) setInvoices(payload.invoices);
+    if (Array.isArray(payload.events)) setEvents(hasMatterSource ? filterByVisibleMatter(payload.events, nextMatters) : payload.events);
+    if (Array.isArray(payload.invoices)) setInvoices(hasMatterSource ? filterByVisibleMatter(payload.invoices, nextMatters) : payload.invoices);
     if (Array.isArray(payload.notifications)) setNotifications(payload.notifications);
-    if (Array.isArray(payload.documents)) setDocuments(payload.documents.map(normalizeDocument));
+    if (Array.isArray(payload.documents)) {
+      const normalizedDocuments = payload.documents.map(normalizeDocument);
+      setDocuments(hasMatterSource ? filterByVisibleMatter(normalizedDocuments, nextMatters) : normalizedDocuments);
+    }
     if (Array.isArray(payload.taskTemplates)) setTaskTemplates(payload.taskTemplates);
   };
 
@@ -319,10 +347,14 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
       if (disposed) return;
 
-      if (Array.isArray(m)) setMatters(hydrateMattersWithClients(m, clients));
-      if (Array.isArray(t)) setTasks(t);
-      if (Array.isArray(te)) setTimeEntries(te);
-      if (Array.isArray(e)) setEvents(e);
+      const visibleMatters = Array.isArray(m)
+        ? filterVisibleMatters(hydrateMattersWithClients(m, clients))
+        : mattersRef.current;
+
+      if (Array.isArray(m)) setMatters(visibleMatters);
+      if (Array.isArray(t)) setTasks(filterByVisibleMatter(t, visibleMatters));
+      if (Array.isArray(te)) setTimeEntries(filterByVisibleMatter(te, visibleMatters));
+      if (Array.isArray(e)) setEvents(filterByVisibleMatter(e, visibleMatters));
       if (Array.isArray(n)) setNotifications(n);
       console.log('Initial data loaded via endpoint fallback');
     };
@@ -339,14 +371,16 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
       if (disposed) return;
 
-      if (Array.isArray(ex)) setExpenses(ex);
+      const visibleMatters = mattersRef.current;
+
+      if (Array.isArray(ex)) setExpenses(filterByVisibleMatter(ex, visibleMatters));
       if (Array.isArray(c)) {
         setClients(c);
-        setMatters((prev) => hydrateMattersWithClients(prev, c));
+        setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, c)));
       }
       if (Array.isArray(l)) setLeads(l);
-      if (Array.isArray(i)) setInvoices(i);
-      if (Array.isArray(docs)) setDocuments(docs.map(normalizeDocument));
+      if (Array.isArray(i)) setInvoices(filterByVisibleMatter(i, visibleMatters));
+      if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
       console.log('Deferred data loaded via endpoint fallback');
     };
@@ -417,6 +451,15 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       disposed = true;
     };
   }, [isAuthenticated, user?.id]);
+
+  useEffect(() => {
+    setTasks((prev) => filterByVisibleMatter(prev, matters));
+    setTimeEntries((prev) => filterByVisibleMatter(prev, matters));
+    setExpenses((prev) => filterByVisibleMatter(prev, matters));
+    setEvents((prev) => filterByVisibleMatter(prev, matters));
+    setDocuments((prev) => filterByVisibleMatter(prev, matters));
+    setInvoices((prev) => filterByVisibleMatter(prev, matters));
+  }, [matters]);
 
   // --- NOTIFICATION POLLING ---
   useEffect(() => {
@@ -595,12 +638,30 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const deleteMatter = async (id: string) => {
     const prev = matters;
+    const prevTasks = tasks;
+    const prevTimeEntries = timeEntries;
+    const prevExpenses = expenses;
+    const prevEvents = events;
+    const prevDocuments = documents;
+    const prevInvoices = invoices;
     setMatters(prev => prev.filter(m => m.id !== id));
+    setTasks(prev => prev.filter(task => task.matterId !== id));
+    setTimeEntries(prev => prev.filter(entry => entry.matterId !== id));
+    setExpenses(prev => prev.filter(expense => expense.matterId !== id));
+    setEvents(prev => prev.filter(event => event.matterId !== id));
+    setDocuments(prev => prev.filter(document => document.matterId !== id));
+    setInvoices(prev => prev.filter(invoice => invoice.matterId !== id));
     try {
       await api.deleteMatter(id);
     } catch (e) {
       console.error("API Error (deleteMatter)", e);
       setMatters(prev); // revert
+      setTasks(prevTasks);
+      setTimeEntries(prevTimeEntries);
+      setExpenses(prevExpenses);
+      setEvents(prevEvents);
+      setDocuments(prevDocuments);
+      setInvoices(prevInvoices);
       throw e;
     }
   };

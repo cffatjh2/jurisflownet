@@ -63,6 +63,7 @@ namespace JurisFlow.Server.Controllers
 
                     response.Tasks = await _context.Tasks
                         .AsNoTracking()
+                        .Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId))
                         .OrderByDescending(t => t.CreatedAt)
                         .Select(t => new
                         {
@@ -84,11 +85,13 @@ namespace JurisFlow.Server.Controllers
 
                     response.TimeEntries = await _context.TimeEntries
                         .AsNoTracking()
+                        .Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId))
                         .OrderByDescending(t => t.Date)
                         .ToListAsync();
 
                     response.Events = await _context.CalendarEvents
                         .AsNoTracking()
+                        .Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId))
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
@@ -104,6 +107,7 @@ namespace JurisFlow.Server.Controllers
                 {
                     response.Expenses = await _context.Expenses
                         .AsNoTracking()
+                        .Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId))
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
@@ -114,12 +118,14 @@ namespace JurisFlow.Server.Controllers
 
                     response.Invoices = await _context.Invoices
                         .AsNoTracking()
+                        .Where(i => i.MatterId == null || i.MatterId == "" || _context.Matters.Any(m => m.Id == i.MatterId))
                         .Include(i => i.LineItems)
                         .OrderByDescending(i => i.CreatedAt)
                         .ToListAsync();
 
                     response.Documents = await _context.Documents
                         .AsNoTracking()
+                        .Where(d => d.MatterId == null || d.MatterId == "" || _context.Matters.Any(m => m.Id == d.MatterId))
                         .OrderByDescending(d => d.CreatedAt)
                         .Take(200)
                         .Select(d => new
