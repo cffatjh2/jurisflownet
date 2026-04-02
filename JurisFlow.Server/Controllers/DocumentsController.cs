@@ -44,6 +44,7 @@ namespace JurisFlow.Server.Controllers
         private readonly DocumentEncryptionService _documentEncryptionService;
         private readonly DocumentTextExtractor _textExtractor;
         private readonly TenantContext _tenantContext;
+        private readonly MatterAccessService _matterAccess;
         private readonly ILogger<DocumentsController> _logger;
 
         public DocumentsController(
@@ -54,6 +55,7 @@ namespace JurisFlow.Server.Controllers
             DocumentEncryptionService documentEncryptionService,
             DocumentTextExtractor textExtractor,
             TenantContext tenantContext,
+            MatterAccessService matterAccess,
             ILogger<DocumentsController> logger)
         {
             _context = context;
@@ -63,6 +65,7 @@ namespace JurisFlow.Server.Controllers
             _documentEncryptionService = documentEncryptionService;
             _textExtractor = textExtractor;
             _tenantContext = tenantContext;
+            _matterAccess = matterAccess;
             _logger = logger;
         }
 
@@ -149,13 +152,28 @@ namespace JurisFlow.Server.Controllers
 
         private async Task<Document?> FindDocumentAsync(string id, bool asNoTracking = false)
         {
-            var query = TenantScope(_context.Documents);
+            IQueryable<Document> query = TenantScope(_context.Documents);
             if (asNoTracking)
             {
                 query = query.AsNoTracking();
             }
 
-            return await query.FirstOrDefaultAsync(d => d.Id == id);
+            if (_matterAccess.IsPrivileged(User))
+            {
+                return await query.FirstOrDefaultAsync(d => d.Id == id);
+            }
+
+            var currentUserId = _matterAccess.GetCurrentUserId(User);
+            if (string.IsNullOrWhiteSpace(currentUserId))
+            {
+                return null;
+            }
+
+            var readableMatterIds = _matterAccess.BuildReadableMatterIdsQuery(User);
+            return await query.FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                ((!string.IsNullOrWhiteSpace(d.MatterId) && readableMatterIds.Contains(d.MatterId!)) ||
+                 ((d.MatterId == null || d.MatterId == "") && d.UploadedBy == currentUserId)));
         }
 
         private async Task<DocumentVersionLookup?> FindDocumentVersionAsync(string versionId)
@@ -183,11 +201,7 @@ namespace JurisFlow.Server.Controllers
                 return;
             }
 
-            var exists = await TenantScope(_context.Matters)
-                .AsNoTracking()
-                .AnyAsync(m => m.Id == normalizedMatterId);
-
-            if (!exists)
+            if (!await _matterAccess.CanReadMatterAsync(normalizedMatterId, User, HttpContext.RequestAborted))
             {
                 throw new InvalidOperationException("Matter not found.");
             }
@@ -499,12 +513,21 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 var normalizedMatterId = NormalizeOptionalText(matterId, 100);
+                var isPrivileged = _matterAccess.IsPrivileged(User);
+                var currentUserId = _matterAccess.GetCurrentUserId(User);
                 if (!string.IsNullOrWhiteSpace(normalizedMatterId))
                 {
                     await EnsureMatterExistsAsync(normalizedMatterId);
                 }
 
                 var query = TenantScope(_context.Documents).AsNoTracking().AsQueryable();
+                if (!isPrivileged)
+                {
+                    var readableMatterIds = _matterAccess.BuildReadableMatterIdsQuery(User);
+                    query = query.Where(d =>
+                        (!string.IsNullOrWhiteSpace(d.MatterId) && readableMatterIds.Contains(d.MatterId!)) ||
+                        ((d.MatterId == null || d.MatterId == "") && d.UploadedBy == currentUserId));
+                }
 
                 if (!string.IsNullOrEmpty(normalizedMatterId))
                 {

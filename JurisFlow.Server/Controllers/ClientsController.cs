@@ -12,7 +12,7 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Admin,Partner,Associate,Employee")]
+    [Authorize(Policy = "StaffOnly")]
     public class ClientsController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
@@ -83,7 +83,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         // POST: api/Clients
-        [Authorize(Roles = "Admin,Partner")]
+        [Authorize(Policy = "StaffOnly")]
         [HttpPost]
         public async Task<IActionResult> PostClient([FromBody] ClientCreateDto dto)
         {
@@ -176,7 +176,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         // PUT: api/Clients/5
-        [Authorize(Roles = "Admin,Partner")]
+        [Authorize(Policy = "StaffOnly")]
         [HttpPut("{id}")]
         public async Task<IActionResult> PutClient(string id, [FromBody] ClientCreateDto dto)
         {
@@ -271,7 +271,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         // PATCH: api/Clients/5
-        [Authorize(Roles = "Admin,Partner")]
+        [Authorize(Policy = "StaffOnly")]
         [HttpPatch("{id}")]
         public async Task<IActionResult> PatchClient(string id, [FromBody] ClientUpdateDto dto)
         {
@@ -407,7 +407,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         // DELETE: api/Clients/5
-        [Authorize(Roles = "Admin,Partner")]
+        [Authorize(Roles = "Admin,Partner,Manager")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteClient(string id)
         {
@@ -461,7 +461,7 @@ namespace JurisFlow.Server.Controllers
             public string Password { get; set; } = string.Empty;
         }
 
-        [Authorize(Roles = "Admin,Partner")]
+        [Authorize(Roles = "Admin,Partner,Manager")]
         [HttpPost("{id}/set-password")]
         public async Task<IActionResult> SetClientPassword(string id, [FromBody] SetPasswordDto dto)
         {

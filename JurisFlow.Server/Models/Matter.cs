@@ -21,6 +21,11 @@ namespace JurisFlow.Server.Models
         public string? CourtType { get; set; }
 
         public string? Outcome { get; set; }
+
+        public string? CreatedByUserId { get; set; }
+        public bool ShareWithFirm { get; set; } = false;
+        public bool ShareBillingWithFirm { get; set; } = false;
+        public bool ShareNotesWithFirm { get; set; } = false;
         
         [Required]
         public string Status { get; set; } // Open | Closed

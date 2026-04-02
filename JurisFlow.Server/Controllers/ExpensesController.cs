@@ -19,23 +19,39 @@ namespace JurisFlow.Server.Controllers
         private readonly AuditLogger _auditLogger;
         private readonly ILogger<ExpensesController> _logger;
         private readonly OutcomeFeePlannerService _outcomeFeePlanner;
+        private readonly MatterAccessService _matterAccess;
 
-        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<ExpensesController> logger, OutcomeFeePlannerService outcomeFeePlanner)
+        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<ExpensesController> logger, OutcomeFeePlannerService outcomeFeePlanner, MatterAccessService matterAccess)
         {
             _context = context;
             _auditLogger = auditLogger;
             _logger = logger;
             _outcomeFeePlanner = outcomeFeePlanner;
+            _matterAccess = matterAccess;
         }
 
         [HttpGet]
         public async Task<IActionResult> GetExpenses([FromQuery] string? matterId = null, [FromQuery] string? approvalStatus = null)
         {
             var query = _context.Expenses.AsNoTracking().AsQueryable();
+            var currentUserId = _matterAccess.GetCurrentUserId(User);
+            var isPrivileged = _matterAccess.IsPrivileged(User);
+            var readableMatterIds = _matterAccess.BuildReadableMatterIdsQuery(User);
 
             if (!string.IsNullOrWhiteSpace(matterId))
             {
+                if (!await _matterAccess.CanReadMatterAsync(matterId, User, HttpContext.RequestAborted))
+                {
+                    return Ok(Array.Empty<Expense>());
+                }
+
                 query = query.Where(e => e.MatterId == matterId);
+            }
+            else if (!isPrivileged)
+            {
+                query = query.Where(e =>
+                    (!string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIds.Contains(e.MatterId!)) ||
+                    ((e.MatterId == null || e.MatterId == "") && e.SubmittedBy == currentUserId));
             }
 
             if (!string.IsNullOrWhiteSpace(approvalStatus))
@@ -57,10 +73,9 @@ namespace JurisFlow.Server.Controllers
 
             if (!string.IsNullOrWhiteSpace(dto.MatterId))
             {
-                var exists = await _context.Matters.AnyAsync(m => m.Id == dto.MatterId);
-                if (!exists)
+                if (!await _matterAccess.CanReadMatterAsync(dto.MatterId, User, HttpContext.RequestAborted))
                 {
-                    return BadRequest(new { message = "Selected matter was not found." });
+                    return Forbid();
                 }
             }
 
@@ -105,6 +120,10 @@ namespace JurisFlow.Server.Controllers
         {
             var expense = await _context.Expenses.FindAsync(id);
             if (expense == null) return NotFound();
+            if (!await CanAccessExpenseAsync(expense))
+            {
+                return Forbid();
+            }
 
             if (expense.ApprovalStatus == "Approved")
             {
@@ -132,6 +151,10 @@ namespace JurisFlow.Server.Controllers
 
             var expense = await _context.Expenses.FindAsync(id);
             if (expense == null) return NotFound();
+            if (!await CanAccessExpenseAsync(expense))
+            {
+                return Forbid();
+            }
 
             expense.ApprovalStatus = "Approved";
             expense.ApprovedBy = GetUserId();
@@ -155,6 +178,10 @@ namespace JurisFlow.Server.Controllers
 
             var expense = await _context.Expenses.FindAsync(id);
             if (expense == null) return NotFound();
+            if (!await CanAccessExpenseAsync(expense))
+            {
+                return Forbid();
+            }
 
             expense.ApprovalStatus = "Rejected";
             expense.RejectedBy = GetUserId();
@@ -208,6 +235,23 @@ namespace JurisFlow.Server.Controllers
             {
                 _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for expense {ExpenseId}", entityId);
             }
+        }
+
+        private async Task<bool> CanAccessExpenseAsync(Expense expense)
+        {
+            if (_matterAccess.IsPrivileged(User))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expense.MatterId))
+            {
+                return await _matterAccess.CanReadMatterAsync(expense.MatterId, User, HttpContext.RequestAborted);
+            }
+
+            var currentUserId = _matterAccess.GetCurrentUserId(User);
+            return !string.IsNullOrWhiteSpace(currentUserId) &&
+                string.Equals(expense.SubmittedBy, currentUserId, StringComparison.Ordinal);
         }
     }
 

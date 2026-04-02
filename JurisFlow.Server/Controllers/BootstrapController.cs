@@ -16,21 +16,24 @@ namespace JurisFlow.Server.Controllers
     {
         private static readonly HashSet<string> ClientReaderRoles = new(StringComparer.Ordinal)
         {
-            "Admin", "Partner", "Associate", "Employee"
+            "Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager"
         };
 
         private readonly JurisFlowDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly ILogger<BootstrapController> _logger;
+        private readonly MatterAccessService _matterAccess;
 
         public BootstrapController(
             JurisFlowDbContext context,
             IConfiguration configuration,
-            ILogger<BootstrapController> logger)
+            ILogger<BootstrapController> logger,
+            MatterAccessService matterAccess)
         {
             _context = context;
             _configuration = configuration;
             _logger = logger;
+            _matterAccess = matterAccess;
         }
 
         [HttpGet]
@@ -53,17 +56,37 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 var response = new BootstrapResponse();
+                var isPrivileged = _matterAccess.IsPrivileged(User);
+                var readableMatters = await _matterAccess
+                    .ApplyReadableScope(_context.Matters.AsNoTracking(), User)
+                    .OrderByDescending(m => m.OpenDate)
+                    .ToListAsync();
+                var readableMatterIds = readableMatters
+                    .Select(m => m.Id)
+                    .ToList();
+                var readableMatterMap = readableMatters.ToDictionary(m => m.Id, StringComparer.Ordinal);
+                var billingReadableMatterIds = isPrivileged
+                    ? readableMatterIds
+                    : await _matterAccess
+                        .ApplyBillingReadableScope(_context.Matters.AsNoTracking(), User)
+                        .Select(m => m.Id)
+                        .ToListAsync();
 
                 if (includeInitial)
                 {
-                    response.Matters = await _context.Matters
-                        .AsNoTracking()
-                        .OrderByDescending(m => m.OpenDate)
-                        .ToListAsync();
+                    response.Matters = readableMatters;
 
-                    response.Tasks = await _context.Tasks
-                        .AsNoTracking()
-                        .Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId))
+                    var tasksQuery = _context.Tasks.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        tasksQuery = tasksQuery.Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId));
+                    }
+                    else
+                    {
+                        tasksQuery = tasksQuery.Where(t => !string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIds.Contains(t.MatterId));
+                    }
+
+                    response.Tasks = await tasksQuery
                         .OrderByDescending(t => t.CreatedAt)
                         .Select(t => new
                         {
@@ -83,15 +106,33 @@ namespace JurisFlow.Server.Controllers
                         })
                         .ToListAsync();
 
-                    response.TimeEntries = await _context.TimeEntries
-                        .AsNoTracking()
-                        .Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId))
+                    var timeEntriesQuery = _context.TimeEntries.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        timeEntriesQuery = timeEntriesQuery.Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId));
+                    }
+                    else
+                    {
+                        timeEntriesQuery = timeEntriesQuery.Where(t =>
+                            (!string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIds.Contains(t.MatterId)) ||
+                            ((t.MatterId == null || t.MatterId == "") && t.SubmittedBy == userId));
+                    }
+
+                    response.TimeEntries = await timeEntriesQuery
                         .OrderByDescending(t => t.Date)
                         .ToListAsync();
 
-                    response.Events = await _context.CalendarEvents
-                        .AsNoTracking()
-                        .Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId))
+                    var eventsQuery = _context.CalendarEvents.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        eventsQuery = eventsQuery.Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId));
+                    }
+                    else
+                    {
+                        eventsQuery = eventsQuery.Where(e => !string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIds.Contains(e.MatterId));
+                    }
+
+                    response.Events = await eventsQuery
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
@@ -105,9 +146,19 @@ namespace JurisFlow.Server.Controllers
 
                 if (includeDeferred)
                 {
-                    response.Expenses = await _context.Expenses
-                        .AsNoTracking()
-                        .Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId))
+                    var expensesQuery = _context.Expenses.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        expensesQuery = expensesQuery.Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId));
+                    }
+                    else
+                    {
+                        expensesQuery = expensesQuery.Where(e =>
+                            (!string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIds.Contains(e.MatterId)) ||
+                            ((e.MatterId == null || e.MatterId == "") && e.SubmittedBy == userId));
+                    }
+
+                    response.Expenses = await expensesQuery
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
@@ -116,16 +167,47 @@ namespace JurisFlow.Server.Controllers
                         .OrderByDescending(l => l.CreatedAt)
                         .ToListAsync();
 
-                    response.Invoices = await _context.Invoices
-                        .AsNoTracking()
-                        .Where(i => i.MatterId == null || i.MatterId == "" || _context.Matters.Any(m => m.Id == i.MatterId))
+                    var invoicesQuery = _context.Invoices.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        invoicesQuery = invoicesQuery.Where(i => i.MatterId == null || i.MatterId == "" || _context.Matters.Any(m => m.Id == i.MatterId));
+                    }
+                    else
+                    {
+                        invoicesQuery = invoicesQuery.Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && billingReadableMatterIds.Contains(i.MatterId));
+                    }
+
+                    var invoices = await invoicesQuery
                         .Include(i => i.LineItems)
                         .OrderByDescending(i => i.CreatedAt)
                         .ToListAsync();
+                    if (!isPrivileged)
+                    {
+                        foreach (var invoice in invoices)
+                        {
+                            if (string.IsNullOrWhiteSpace(invoice.MatterId)) continue;
+                            if (readableMatterMap.TryGetValue(invoice.MatterId, out var matter) && !_matterAccess.CanSeeMatterNotes(matter, User))
+                            {
+                                invoice.Notes = null;
+                                invoice.Terms = null;
+                            }
+                        }
+                    }
+                    response.Invoices = invoices;
 
-                    response.Documents = await _context.Documents
-                        .AsNoTracking()
-                        .Where(d => d.MatterId == null || d.MatterId == "" || _context.Matters.Any(m => m.Id == d.MatterId))
+                    var documentsQuery = _context.Documents.AsNoTracking().AsQueryable();
+                    if (isPrivileged)
+                    {
+                        documentsQuery = documentsQuery.Where(d => d.MatterId == null || d.MatterId == "" || _context.Matters.Any(m => m.Id == d.MatterId));
+                    }
+                    else
+                    {
+                        documentsQuery = documentsQuery.Where(d =>
+                            (!string.IsNullOrWhiteSpace(d.MatterId) && readableMatterIds.Contains(d.MatterId)) ||
+                            ((d.MatterId == null || d.MatterId == "") && d.UploadedBy == userId));
+                    }
+
+                    response.Documents = await documentsQuery
                         .OrderByDescending(d => d.CreatedAt)
                         .Take(200)
                         .Select(d => new

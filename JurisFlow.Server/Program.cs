@@ -321,6 +321,7 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
+builder.Services.AddScoped<MatterAccessService>();
 builder.Services.AddSingleton<BackupJobQueue>();
 builder.Services.AddScoped<BackupService>();
 builder.Services.AddHostedService<BackupJobHostedService>();

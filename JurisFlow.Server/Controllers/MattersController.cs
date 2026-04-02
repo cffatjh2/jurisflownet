@@ -24,6 +24,7 @@ namespace JurisFlow.Server.Controllers
         private readonly FirmStructureService _firmStructure;
         private readonly OutcomeFeePlannerService _outcomeFeePlanner;
         private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterAccessService _matterAccess;
         private readonly ILogger<MattersController> _logger;
         private readonly Dictionary<string, bool> _schemaPresenceCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -33,6 +34,7 @@ namespace JurisFlow.Server.Controllers
             FirmStructureService firmStructure,
             OutcomeFeePlannerService outcomeFeePlanner,
             ClientTransparencyService clientTransparencyService,
+            MatterAccessService matterAccess,
             ILogger<MattersController> logger)
         {
             _context = context;
@@ -40,6 +42,7 @@ namespace JurisFlow.Server.Controllers
             _firmStructure = firmStructure;
             _outcomeFeePlanner = outcomeFeePlanner;
             _clientTransparencyService = clientTransparencyService;
+            _matterAccess = matterAccess;
             _logger = logger;
         }
 
@@ -47,9 +50,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Matter>>> GetMatters([FromQuery] string? status, [FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            var query = _context.Matters
-                .AsNoTracking()
-                .AsQueryable();
+            var query = _matterAccess.ApplyReadableScope(_context.Matters.AsNoTracking(), User);
 
             if (!string.IsNullOrEmpty(status))
             {
@@ -83,8 +84,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("{id}")]
         public async Task<ActionResult<Matter>> GetMatter(string id)
         {
-            var matter = await _context.Matters
-                .AsNoTracking()
+            var matter = await _matterAccess.ApplyReadableScope(_context.Matters.AsNoTracking(), User)
                 .FirstOrDefaultAsync(m => m.Id == id);
 
             if (matter == null)
@@ -100,6 +100,11 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<Matter>> PostMatter(Matter matter)
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
+            var currentUserId = GetUserId();
+            if (string.IsNullOrWhiteSpace(currentUserId))
+            {
+                return Unauthorized();
+            }
             if (string.IsNullOrWhiteSpace(matter.ClientId))
             {
                 return BadRequest(new { message = "ClientId is required." });
@@ -114,6 +119,8 @@ namespace JurisFlow.Server.Controllers
             matter.Id = Guid.NewGuid().ToString();
             matter.OpenDate = DateTime.UtcNow;
             matter.ClientId = resolvedClientId;
+            matter.CreatedByUserId = currentUserId;
+            NormalizeSharingSettings(matter);
 
             var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
             matter.EntityId = resolved.entityId;
@@ -133,6 +140,10 @@ namespace JurisFlow.Server.Controllers
         {
             if (id != matter.Id) return BadRequest();
             if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
             if (string.IsNullOrWhiteSpace(matter.ClientId))
             {
                 return BadRequest(new { message = "ClientId is required." });
@@ -170,6 +181,10 @@ namespace JurisFlow.Server.Controllers
             existingMatter.ConflictCheckDate = matter.ConflictCheckDate;
             existingMatter.ConflictCheckCleared = matter.ConflictCheckCleared;
             existingMatter.ConflictWaiverObtained = matter.ConflictWaiverObtained;
+            existingMatter.ShareWithFirm = matter.ShareWithFirm;
+            existingMatter.ShareBillingWithFirm = matter.ShareBillingWithFirm;
+            existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
+            NormalizeSharingSettings(existingMatter);
 
             await _context.SaveChangesAsync();
 
@@ -183,6 +198,11 @@ namespace JurisFlow.Server.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteMatter(string id)
         {
+            if (!await _matterAccess.CanManageMatterAsync(id, User, ignoreQueryFilters: true, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var matter = await _context.Matters.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
             if (string.Equals(matter.Status, DeletedMatterStatus, StringComparison.OrdinalIgnoreCase)) return NoContent();
@@ -317,6 +337,11 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/archive")]
         public async Task<IActionResult> ArchiveMatter(string id)
         {
+            if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
@@ -333,6 +358,11 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/restore")]
         public async Task<IActionResult> RestoreMatter(string id)
         {
+            if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
@@ -612,6 +642,21 @@ namespace JurisFlow.Server.Controllers
         private string? GetUserId()
         {
             return User.FindFirst("sub")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        }
+
+        private static void NormalizeSharingSettings(Matter matter)
+        {
+            if (!matter.ShareWithFirm)
+            {
+                matter.ShareBillingWithFirm = false;
+                matter.ShareNotesWithFirm = false;
+                return;
+            }
+
+            if (!matter.ShareBillingWithFirm)
+            {
+                matter.ShareNotesWithFirm = false;
+            }
         }
     }
 }

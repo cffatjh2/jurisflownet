@@ -470,6 +470,10 @@ export interface Matter {
   name: string;
   clientId?: string;
   client?: Client;
+  createdByUserId?: string;
+  shareWithFirm?: boolean;
+  shareBillingWithFirm?: boolean;
+  shareNotesWithFirm?: boolean;
   practiceArea: PracticeArea;
   status: CaseStatus;
   feeStructure: FeeStructure; // Added

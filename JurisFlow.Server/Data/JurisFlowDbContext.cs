@@ -178,6 +178,8 @@ namespace JurisFlow.Server.Data
                 .HasIndex("TenantId", nameof(Lead.CreatedAt));
             modelBuilder.Entity<Document>()
                 .HasIndex("TenantId", nameof(Document.CreatedAt));
+            modelBuilder.Entity<Document>()
+                .HasIndex("TenantId", nameof(Document.MatterId), nameof(Document.CreatedAt));
 
             modelBuilder.Entity<StaffMessage>()
                 .HasIndex(m => new { m.SenderId, m.RecipientId, m.CreatedAt });
@@ -449,11 +451,15 @@ namespace JurisFlow.Server.Data
                 .HasIndex(t => new { t.MatterId, t.Date });
             modelBuilder.Entity<TimeEntry>()
                 .HasIndex("TenantId", nameof(TimeEntry.Date));
+            modelBuilder.Entity<TimeEntry>()
+                .HasIndex("TenantId", nameof(TimeEntry.MatterId), nameof(TimeEntry.Date));
 
             modelBuilder.Entity<Expense>()
                 .HasIndex(e => new { e.MatterId, e.Date });
             modelBuilder.Entity<Expense>()
                 .HasIndex("TenantId", nameof(Expense.Date));
+            modelBuilder.Entity<Expense>()
+                .HasIndex("TenantId", nameof(Expense.MatterId), nameof(Expense.Date));
 
             modelBuilder.Entity<Holiday>()
                 .HasIndex(h => new { h.Date, h.Jurisdiction });
@@ -637,9 +643,15 @@ namespace JurisFlow.Server.Data
                 .HasIndex(m => new { m.EntityId, m.OfficeId });
             modelBuilder.Entity<Matter>()
                 .HasIndex("TenantId", nameof(Matter.OpenDate));
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.CreatedByUserId));
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.ShareWithFirm));
 
             modelBuilder.Entity<Invoice>()
                 .HasIndex(i => new { i.EntityId, i.OfficeId });
+            modelBuilder.Entity<Invoice>()
+                .HasIndex("TenantId", nameof(Invoice.MatterId), nameof(Invoice.IssueDate));
 
             modelBuilder.Entity<Employee>()
                 .HasIndex(e => new { e.EntityId, e.OfficeId });

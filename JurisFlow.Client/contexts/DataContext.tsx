@@ -615,6 +615,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const updateMatter = async (id: string, data: Partial<Matter>) => {
     // Optimistic update
     const clientById = new Map(clients.map((client) => [client.id, client]));
+    const existingMatter = matters.find((matter) => matter.id === id);
     setMatters(prev => prev.map(m => {
       if (m.id !== id) return m;
       const merged = {
@@ -626,7 +627,23 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       return hydrateMatterClient(merged, clientById);
     }));
     try {
-      const updated = await api.updateMatter(id, data);
+      const mergedPayload = hydrateMatterClient(
+        {
+          ...(existingMatter || { id }),
+          ...data,
+          client: data.client || existingMatter?.client,
+          clientId: getMatterClientId(data as Partial<MatterWithClientId>)
+            || (existingMatter ? getMatterClientId(existingMatter as MatterWithClientId) : undefined)
+        } as Matter,
+        clientById
+      );
+      const payload = {
+        ...mergedPayload,
+        clientId: getMatterClientId(mergedPayload as MatterWithClientId)
+      } as Partial<Matter>;
+      delete (payload as any).client;
+
+      const updated = await api.updateMatter(id, payload);
       setMatters(prev => prev.map(m => {
         if (m.id !== id) return m;
         return hydrateMatterClient({ ...m, ...updated } as Matter, clientById);

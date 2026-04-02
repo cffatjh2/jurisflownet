@@ -21,6 +21,7 @@ namespace JurisFlow.Server.Controllers
         private readonly FirmStructureService _firmStructure;
         private readonly OutcomeFeePlannerService _outcomeFeePlanner;
         private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterAccessService _matterAccess;
         private readonly ILogger<InvoicesController> _logger;
 
         public InvoicesController(
@@ -29,6 +30,7 @@ namespace JurisFlow.Server.Controllers
             FirmStructureService firmStructure,
             OutcomeFeePlannerService outcomeFeePlanner,
             ClientTransparencyService clientTransparencyService,
+            MatterAccessService matterAccess,
             ILogger<InvoicesController> logger)
         {
             _context = context;
@@ -36,6 +38,7 @@ namespace JurisFlow.Server.Controllers
             _firmStructure = firmStructure;
             _outcomeFeePlanner = outcomeFeePlanner;
             _clientTransparencyService = clientTransparencyService;
+            _matterAccess = matterAccess;
             _logger = logger;
         }
 
@@ -59,6 +62,7 @@ namespace JurisFlow.Server.Controllers
         public async Task<IActionResult> GetInvoices([FromQuery] string? entityId, [FromQuery] string? officeId)
         {
             var query = _context.Invoices.AsNoTracking().AsQueryable();
+            var isPrivileged = _matterAccess.IsPrivileged(User);
 
             if (!string.IsNullOrWhiteSpace(entityId))
             {
@@ -70,10 +74,17 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(i => i.OfficeId == officeId);
             }
 
+            if (!isPrivileged)
+            {
+                var readableBillingMatterIds = _matterAccess.BuildBillingReadableMatterIdsQuery(User);
+                query = query.Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && readableBillingMatterIds.Contains(i.MatterId!));
+            }
+
             var invoices = await query
                 .Include(i => i.LineItems)
                 .OrderByDescending(i => i.IssueDate)
                 .ToListAsync();
+            await RedactSharedInvoiceNotesAsync(invoices);
             return Ok(invoices);
         }
 
@@ -81,11 +92,20 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetInvoice(string id)
         {
-            var invoice = await _context.Invoices
+            var query = _context.Invoices
                 .AsNoTracking()
                 .Include(i => i.LineItems)
-                .FirstOrDefaultAsync(i => i.Id == id);
+                .AsQueryable();
+
+            if (!_matterAccess.IsPrivileged(User))
+            {
+                var readableBillingMatterIds = _matterAccess.BuildBillingReadableMatterIdsQuery(User);
+                query = query.Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && readableBillingMatterIds.Contains(i.MatterId!));
+            }
+
+            var invoice = await query.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            await RedactSharedInvoiceNotesAsync(new List<Invoice> { invoice });
             return Ok(invoice);
         }
 
@@ -93,6 +113,18 @@ namespace JurisFlow.Server.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateInvoice([FromBody] InvoiceCreateDto dto)
         {
+            if (string.IsNullOrWhiteSpace(dto.MatterId))
+            {
+                if (!_matterAccess.IsPrivileged(User))
+                {
+                    return Forbid();
+                }
+            }
+            else if (!await _matterAccess.CanManageMatterAsync(dto.MatterId, User, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             if (await IsPeriodLocked(dto.IssueDate ?? DateTime.UtcNow))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot create invoice." });
@@ -169,10 +201,20 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             if (await IsPeriodLocked(DateTime.UtcNow))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot update invoice." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.MatterId) &&
+                !await _matterAccess.CanManageMatterAsync(dto.MatterId, User, cancellationToken: HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             if (!string.IsNullOrWhiteSpace(dto.Number)) invoice.Number = dto.Number;
@@ -239,6 +281,10 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             if (await IsPeriodLocked(DateTime.UtcNow))
             {
@@ -275,6 +321,10 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            if (!await CanReadInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             var billingSettings = await GetBillingSettingsAsync();
             if (!billingSettings.LedesEnabled)
@@ -330,6 +380,10 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             if (await IsPeriodLocked(DateTime.UtcNow))
             {
@@ -352,6 +406,10 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             if (await IsPeriodLocked(DateTime.UtcNow))
             {
@@ -374,6 +432,10 @@ namespace JurisFlow.Server.Controllers
         {
             var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NoContent();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
 
             if (await IsPeriodLocked(DateTime.UtcNow))
             {
@@ -410,6 +472,70 @@ namespace JurisFlow.Server.Controllers
                 await _context.SaveChangesAsync();
             }
             return settings;
+        }
+
+        private async Task<bool> CanReadInvoiceAsync(Invoice invoice)
+        {
+            if (_matterAccess.IsPrivileged(User))
+            {
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(invoice.MatterId))
+            {
+                return false;
+            }
+
+            var readableBillingMatterIds = _matterAccess.BuildBillingReadableMatterIdsQuery(User);
+            return await readableBillingMatterIds.AnyAsync(id => id == invoice.MatterId, HttpContext.RequestAborted);
+        }
+
+        private async Task<bool> CanManageInvoiceAsync(Invoice invoice)
+        {
+            if (string.IsNullOrWhiteSpace(invoice.MatterId))
+            {
+                return _matterAccess.IsPrivileged(User);
+            }
+
+            return await _matterAccess.CanManageMatterAsync(invoice.MatterId, User, cancellationToken: HttpContext.RequestAborted);
+        }
+
+        private async Task RedactSharedInvoiceNotesAsync(List<Invoice> invoices)
+        {
+            if (_matterAccess.IsPrivileged(User) || invoices.Count == 0)
+            {
+                return;
+            }
+
+            var matterIds = invoices
+                .Where(i => !string.IsNullOrWhiteSpace(i.MatterId))
+                .Select(i => i.MatterId!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (matterIds.Count == 0)
+            {
+                return;
+            }
+
+            var matterMap = await _context.Matters
+                .AsNoTracking()
+                .Where(m => matterIds.Contains(m.Id))
+                .ToDictionaryAsync(m => m.Id, StringComparer.Ordinal);
+
+            foreach (var invoice in invoices)
+            {
+                if (string.IsNullOrWhiteSpace(invoice.MatterId))
+                {
+                    continue;
+                }
+
+                if (matterMap.TryGetValue(invoice.MatterId, out var matter) && !_matterAccess.CanSeeMatterNotes(matter, User))
+                {
+                    invoice.Notes = null;
+                    invoice.Terms = null;
+                }
+            }
         }
 
         private async Task<string> GenerateInvoiceNumberAsync(string prefix)

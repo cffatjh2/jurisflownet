@@ -451,6 +451,9 @@ const Matters: React.FC = () => {
     bailStatus: 'None',
     bailAmount: '' as string | number,
     outcome: '',
+    shareWithFirm: false,
+    shareBillingWithFirm: false,
+    shareNotesWithFirm: false,
     entityId: '',
     officeId: '',
     // Opposing Party
@@ -930,6 +933,9 @@ const Matters: React.FC = () => {
       bailStatus: formData.bailStatus as any,
       bailAmount: formData.bailAmount ? parseFloat(String(formData.bailAmount)) : 0,
       outcome: formData.outcome,
+      shareWithFirm: formData.shareWithFirm,
+      shareBillingWithFirm: formData.shareWithFirm && formData.shareBillingWithFirm,
+      shareNotesWithFirm: formData.shareWithFirm && formData.shareBillingWithFirm && formData.shareNotesWithFirm,
       entityId: formData.entityId || undefined,
       officeId: formData.officeId || undefined
     };
@@ -975,6 +981,9 @@ const Matters: React.FC = () => {
         bailStatus: 'None',
         bailAmount: '',
         outcome: '',
+        shareWithFirm: false,
+        shareBillingWithFirm: false,
+        shareNotesWithFirm: false,
         entityId: '',
         officeId: '',
         opposingPartyName: '',
@@ -2234,6 +2243,9 @@ const Matters: React.FC = () => {
                   bailStatus: editData.bailStatus,
                   bailAmount: editData.bailAmount,
                   outcome: editData.outcome,
+                  shareWithFirm: !!editData.shareWithFirm,
+                  shareBillingWithFirm: !!editData.shareWithFirm && !!editData.shareBillingWithFirm,
+                  shareNotesWithFirm: !!editData.shareWithFirm && !!editData.shareBillingWithFirm && !!editData.shareNotesWithFirm,
                   entityId: editData.entityId,
                   officeId: editData.officeId
                 });
@@ -2571,6 +2583,93 @@ const Matters: React.FC = () => {
                     onChange={e => editData ? setEditData({ ...editData, outcome: e.target.value }) : setFormData({ ...formData, outcome: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">Firm Sharing</h4>
+                  <p className="text-xs text-slate-500 mt-1">Choose what other users in this firm can see for this matter.</p>
+                </div>
+
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    checked={editData ? !!editData.shareWithFirm : formData.shareWithFirm}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      if (editData) {
+                        setEditData({
+                          ...editData,
+                          shareWithFirm: checked,
+                          shareBillingWithFirm: checked ? !!editData.shareBillingWithFirm : false,
+                          shareNotesWithFirm: checked ? !!editData.shareNotesWithFirm && !!editData.shareBillingWithFirm : false
+                        });
+                      } else {
+                        setFormData({
+                          ...formData,
+                          shareWithFirm: checked,
+                          shareBillingWithFirm: checked ? formData.shareBillingWithFirm : false,
+                          shareNotesWithFirm: checked ? formData.shareNotesWithFirm && formData.shareBillingWithFirm : false
+                        });
+                      }
+                    }}
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">Share matter with firm</p>
+                    <p className="text-xs text-slate-500">Other users in this tenant can view the matter and linked work items.</p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+                    disabled={editData ? !editData.shareWithFirm : !formData.shareWithFirm}
+                    checked={editData ? !!editData.shareBillingWithFirm : formData.shareBillingWithFirm}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      if (editData) {
+                        setEditData({
+                          ...editData,
+                          shareBillingWithFirm: checked,
+                          shareNotesWithFirm: checked ? !!editData.shareNotesWithFirm : false
+                        });
+                      } else {
+                        setFormData({
+                          ...formData,
+                          shareBillingWithFirm: checked,
+                          shareNotesWithFirm: checked ? formData.shareNotesWithFirm : false
+                        });
+                      }
+                    }}
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">Share invoices and billing</p>
+                    <p className="text-xs text-slate-500">Use this only when the team needs access to billing totals and invoice records.</p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+                    disabled={editData ? (!editData.shareWithFirm || !editData.shareBillingWithFirm) : (!formData.shareWithFirm || !formData.shareBillingWithFirm)}
+                    checked={editData ? !!editData.shareNotesWithFirm : formData.shareNotesWithFirm}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      if (editData) {
+                        setEditData({ ...editData, shareNotesWithFirm: checked });
+                      } else {
+                        setFormData({ ...formData, shareNotesWithFirm: checked });
+                      }
+                    }}
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">Share free-text notes</p>
+                    <p className="text-xs text-slate-500">Default stays off. Free-text billing notes can contain strategy or sensitive commentary.</p>
+                  </div>
+                </label>
               </div>
 
               {/* Opposing Party Section */}
