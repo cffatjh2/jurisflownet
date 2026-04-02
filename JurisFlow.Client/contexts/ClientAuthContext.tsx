@@ -11,10 +11,15 @@ export interface Client {
   status: 'Active' | 'Inactive';
 }
 
+interface ClientLoginResult {
+  success: boolean;
+  error?: string;
+}
+
 interface ClientAuthContextType {
   client: Client | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string, tenantSlug?: string) => Promise<boolean>;
+  login: (email: string, password: string, tenantSlug?: string) => Promise<ClientLoginResult>;
   logout: () => void;
   loading: boolean;
 }
@@ -26,7 +31,7 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
-  const login = async (email: string, password: string, tenantSlug?: string): Promise<boolean> => {
+  const login = async (email: string, password: string, tenantSlug?: string): Promise<ClientLoginResult> => {
     try {
       const normalizedTenant = tenantSlug?.trim().toLowerCase();
       if (typeof window !== 'undefined' && normalizedTenant) {
@@ -41,7 +46,25 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
         },
         body: JSON.stringify({ email, password })
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        let message = 'Client login failed';
+        try {
+          const payload = await res.json();
+          if (typeof payload?.message === 'string' && payload.message.trim()) {
+            message = payload.message.trim();
+          }
+        } catch {
+          if (res.status === 401) {
+            message = 'Invalid email or password';
+          }
+        }
+
+        return {
+          success: false,
+          error: message
+        };
+      }
+
       const data = await res.json();
       setClient(data.client);
       if (typeof window !== 'undefined') {
@@ -59,10 +82,13 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
           setSessionExpiresAt(data.session.expiresAt);
         }
       }
-      return true;
+      return { success: true };
     } catch (e) {
       console.error('Client login failed', e);
-      return false;
+      return {
+        success: false,
+        error: e instanceof Error && e.message ? e.message : 'Client login failed'
+      };
     }
   };
 

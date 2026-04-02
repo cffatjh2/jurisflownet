@@ -168,9 +168,9 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
           }
         }
       } else {
-        const success = await clientLogin(email, password, tenantSlug.trim());
-        if (!success) {
-          setError('Invalid email or password');
+        const result = await clientLogin(email, password, tenantSlug.trim());
+        if (!result.success) {
+          setError(result.error || 'Invalid email or password');
         } else {
           // Redirect to client portal
           window.location.href = '/client';

@@ -93,6 +93,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var client = await TenantScope(_context.Clients)
+                .AsNoTracking()
                 .FirstOrDefaultAsync(c => c.NormalizedEmail == email);
 
             if (client == null)
@@ -120,12 +121,10 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 var now = DateTime.UtcNow;
-                await using var transaction = await _context.Database.BeginTransactionAsync();
-                client.LastLogin = now;
                 (session, refreshToken) = BuildSession(client.Id, "Client", now);
                 _context.AuthSessions.Add(session);
                 await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
+                await TryUpdateLastLoginAsync(client.Id, now);
 
                 var accessTokenExpiresAt = GetAccessTokenExpiry();
                 token = GenerateClientJwtToken(client, session.Id, accessTokenExpiresAt);
@@ -138,7 +137,10 @@ namespace JurisFlow.Server.Controllers
                     tenantId,
                     client.Id,
                     email);
-                throw;
+                return StatusCode(StatusCodes.Status500InternalServerError, new
+                {
+                    message = "Client login failed."
+                });
             }
 
             var response = new
@@ -191,6 +193,24 @@ namespace JurisFlow.Server.Controllers
             };
 
             return (session, refreshToken);
+        }
+
+        private async System.Threading.Tasks.Task TryUpdateLastLoginAsync(string clientId, DateTime now)
+        {
+            try
+            {
+                await TenantScope(_context.Clients)
+                    .Where(c => c.Id == clientId)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(c => c.LastLogin, now));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Client login succeeded but failed to update LastLogin. TenantId={TenantId} ClientId={ClientId}",
+                    _tenantContext.TenantId,
+                    clientId);
+            }
         }
 
         private string GenerateClientJwtToken(Client client, string sessionId, DateTime expiresAt)

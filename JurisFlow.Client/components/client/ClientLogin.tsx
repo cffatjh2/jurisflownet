@@ -27,9 +27,9 @@ const ClientLogin: React.FC = () => {
       if (!email || !password) {
         throw new Error();
       }
-      const success = await login(email, password, tenantSlug.trim());
-      if (!success) {
-        setError('Invalid email or password');
+      const result = await login(email, password, tenantSlug.trim());
+      if (!result.success) {
+        setError(result.error || 'Invalid email or password');
       }
     } catch (err) {
       setError('Invalid email or password');
