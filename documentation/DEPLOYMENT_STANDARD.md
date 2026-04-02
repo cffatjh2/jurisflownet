@@ -38,6 +38,7 @@ Operations:
 ## Environment Variables (Client)
 - `VITE_STRIPE_PUBLISHABLE_KEY`
 - `VITE_API_BASE_URL` (if not using proxy)
+- `VITE_FORCE_CROSS_ORIGIN_API_BASE=true` only when the frontend must call a different origin directly in production
 
 ## Secrets Management
 Use a secret manager (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, Vault).
