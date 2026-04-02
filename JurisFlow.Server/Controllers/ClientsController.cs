@@ -466,7 +466,7 @@ namespace JurisFlow.Server.Controllers
             public string Password { get; set; } = string.Empty;
         }
 
-        [Authorize(Roles = "Admin,Partner,Manager")]
+        [Authorize(Policy = "StaffOnly")]
         [HttpPost("{id}/set-password")]
         public async Task<IActionResult> SetClientPassword(string id, [FromBody] SetPasswordDto dto)
         {

@@ -262,22 +262,23 @@ const CRM: React.FC = () => {
       if (!editingClient) return;
       const portalEnabled = !!clientForm.portalEnabled;
       const requiresPortalPassword = portalEnabled && !editingClient.portalEnabled;
+      const normalizedPortalPassword = portalPassword.trim();
       const nextStatus = clientForm.status || editingClient.status;
       const statusChanged = nextStatus !== editingClient.status;
-      if (requiresPortalPassword && !portalPassword.trim()) {
+      if (requiresPortalPassword && !normalizedPortalPassword) {
          toast.error('Set a password to enable portal access.');
          return;
       }
       setIsSavingClient(true);
       try {
          const payload: any = { ...clientForm };
+         if (portalEnabled && normalizedPortalPassword) {
+            payload.password = normalizedPortalPassword;
+         }
          if (statusChanged && statusChangeNote.trim()) {
             payload.statusChangeNote = statusChangeNote.trim();
          }
          await updateClient(editingClient.id, payload);
-         if (portalEnabled && portalPassword.trim()) {
-            await api.setClientPassword(editingClient.id, portalPassword.trim());
-         }
          await loadStatusHistory(editingClient.id);
          toast.success('Client updated successfully.');
          setEditingClient(null);
