@@ -108,13 +108,15 @@ const CRM: React.FC = () => {
    };
 
    const [isSearching, setIsSearching] = useState(false);
+   const safeClients = useMemo(() => clients.filter((client): client is Client => !!client && typeof client.id === 'string'), [clients]);
+   const safeLeads = useMemo(() => leads.filter((lead): lead is Lead => !!lead && typeof lead.id === 'string'), [leads]);
 
    // Derived client stats
-   const activeCount = useMemo(() => clients.filter(c => (c.status || 'Active') === 'Active').length, [clients]);
-   const inactiveCount = useMemo(() => clients.filter(c => (c.status || 'Active') === 'Inactive').length, [clients]);
+   const activeCount = useMemo(() => safeClients.filter(c => (c.status || 'Active') === 'Active').length, [safeClients]);
+   const inactiveCount = useMemo(() => safeClients.filter(c => (c.status || 'Active') === 'Inactive').length, [safeClients]);
    const filteredClients = useMemo(() => {
       const query = clientSearch.trim().toLowerCase();
-      return clients.filter(c => {
+      return safeClients.filter(c => {
          const normalizedStatus = c.status || 'Active';
          if (statusFilter === 'active' && normalizedStatus !== 'Active') return false;
          if (statusFilter === 'inactive' && normalizedStatus !== 'Inactive') return false;
@@ -131,7 +133,7 @@ const CRM: React.FC = () => {
             .toLowerCase();
          return haystack.includes(query);
       });
-   }, [clients, statusFilter, clientSearch]);
+   }, [safeClients, statusFilter, clientSearch]);
 
    const performConflictCheck = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -328,7 +330,7 @@ const CRM: React.FC = () => {
             <div className="flex-1 overflow-x-auto p-6">
                <div className="flex gap-4 min-w-[1000px] h-full">
                   {pipelineStages.map(stage => {
-                     const stageLeads = leads.filter(l => l.status === stage.key);
+                     const stageLeads = safeLeads.filter(l => l.status === stage.key);
                      return (
                         <div key={stage.key} className="flex-1 flex flex-col min-w-[140px]">
                            <div className="flex justify-between items-center mb-3 px-2">

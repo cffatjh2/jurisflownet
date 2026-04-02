@@ -254,10 +254,12 @@ const Matters: React.FC = () => {
   });
 
   const clientsById = useMemo(() => {
-    return new Map(clients.map((client) => [client.id, client]));
+    const safeClients = clients.filter((client): client is Client => !!client && typeof client.id === 'string');
+    return new Map(safeClients.map((client) => [client.id, client]));
   }, [clients]);
 
   const resolveMatterClient = (matter: Matter): Client | undefined => {
+    if (!matter) return undefined;
     const candidateId = matter.clientId || matter.client?.id;
     if (!candidateId) return matter.client;
     return clientsById.get(candidateId) || matter.client;
@@ -1129,7 +1131,7 @@ const Matters: React.FC = () => {
     }
   };
 
-  const filteredMatters = matters.filter(m => {
+  const filteredMatters = matters.filter((m): m is Matter => !!m && typeof m.id === 'string').filter(m => {
     if (String(m.status).toLowerCase() === 'deleted') return false;
     const q = search.toLowerCase();
     const resolvedClient = resolveMatterClient(m);

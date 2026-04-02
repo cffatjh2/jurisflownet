@@ -30,9 +30,10 @@ const EntityOfficeFilter: React.FC<EntityOfficeFilterProps> = ({
         const loadEntities = async () => {
             try {
                 const data = await api.entities.list();
-                setEntities(Array.isArray(data) ? data : []);
+                setEntities(Array.isArray(data) ? data.filter((entity): entity is FirmEntity => !!entity && typeof entity.id === 'string') : []);
             } catch (error) {
                 console.error('Failed to load entities', error);
+                setEntities([]);
             }
         };
         loadEntities();
@@ -46,9 +47,10 @@ const EntityOfficeFilter: React.FC<EntityOfficeFilterProps> = ({
         const loadOffices = async () => {
             try {
                 const data = await api.entities.offices.list(entityId);
-                setOffices(Array.isArray(data) ? data : []);
+                setOffices(Array.isArray(data) ? data.filter((office): office is Office => !!office && typeof office.id === 'string') : []);
             } catch (error) {
                 console.error('Failed to load offices', error);
+                setOffices([]);
             }
         };
         loadOffices();

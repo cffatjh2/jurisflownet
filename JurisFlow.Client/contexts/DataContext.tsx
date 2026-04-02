@@ -100,11 +100,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
 
   useEffect(() => {
-    clientsRef.current = clients;
+    clientsRef.current = clients.filter((client): client is Client => !!client && typeof client.id === 'string');
   }, [clients]);
 
   useEffect(() => {
-    mattersRef.current = matters;
+    mattersRef.current = matters.filter((matter): matter is Matter => !!matter && typeof matter.id === 'string');
   }, [matters]);
 
   // Timer Persistence
@@ -202,6 +202,26 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return undefined;
   };
 
+  const hasStringId = <T extends { id?: unknown }>(item: T | null | undefined): item is T & { id: string } =>
+    !!item && typeof item === 'object' && typeof item.id === 'string' && item.id.trim().length > 0;
+
+  const sanitizeIdentifiableItems = <T extends { id?: unknown }>(items: T[] | null | undefined): T[] => {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    return items.filter(hasStringId);
+  };
+
+  const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
+    sanitizeIdentifiableItems<Client>(items);
+
+  const sanitizeMatters = (items: Matter[] | null | undefined): Matter[] =>
+    sanitizeIdentifiableItems<Matter>(items);
+
+  const sanitizeLeads = (items: Lead[] | null | undefined): Lead[] =>
+    sanitizeIdentifiableItems<Lead>(items);
+
+  const sanitizeMatterLinkedItems = <T extends { id?: unknown; matterId?: string | null }>(items: T[] | null | undefined): T[] =>
+    sanitizeIdentifiableItems<T>(items);
+
   const normalizeDocument = (d: any): DocumentFile => {
     const mime = (d.mimeType || '').toLowerCase();
     const type: DocumentFile['type'] =
@@ -263,16 +283,18 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const hydrateMattersWithClients = (matterItems: Matter[], clientItems: Client[]): Matter[] => {
-    if (!Array.isArray(matterItems) || matterItems.length === 0) return matterItems;
-    if (!Array.isArray(clientItems) || clientItems.length === 0) return matterItems;
+    const safeMatterItems = sanitizeMatters(matterItems);
+    if (safeMatterItems.length === 0) return [];
 
-    const clientById = new Map(clientItems.map((client) => [client.id, client]));
-    return matterItems.map((matter) => hydrateMatterClient(matter, clientById));
+    const safeClientItems = sanitizeClients(clientItems);
+    if (safeClientItems.length === 0) return safeMatterItems;
+
+    const clientById = new Map(safeClientItems.map((client) => [client.id, client]));
+    return safeMatterItems.map((matter) => hydrateMatterClient(matter, clientById));
   };
 
   const filterVisibleMatters = (matterItems: Matter[]): Matter[] => {
-    if (!Array.isArray(matterItems) || matterItems.length === 0) return [];
-    return matterItems.filter((matter) => String(matter?.status || '').toLowerCase() !== 'deleted');
+    return sanitizeMatters(matterItems).filter((matter) => String(matter.status || '').toLowerCase() !== 'deleted');
   };
 
   const buildVisibleMatterIdSet = (matterItems: Matter[]) => {
@@ -280,9 +302,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const filterByVisibleMatter = <T extends { matterId?: string | null }>(items: T[], matterItems: Matter[]): T[] => {
-    if (!Array.isArray(items) || items.length === 0) return [];
+    const safeItems = sanitizeMatterLinkedItems(items);
+    if (safeItems.length === 0) return [];
     const visibleMatterIds = buildVisibleMatterIdSet(matterItems);
-    return items.filter((item) => !item.matterId || visibleMatterIds.has(item.matterId));
+    return safeItems.filter((item) => !item.matterId || visibleMatterIds.has(item.matterId));
   };
 
   const clearLoadedData = () => {
@@ -301,13 +324,13 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const applyBootstrapPayload = (payload: any) => {
     if (!payload || typeof payload !== 'object') return;
-    const incomingClients = Array.isArray(payload.clients) ? payload.clients as Client[] : null;
+    const incomingClients = Array.isArray(payload.clients) ? sanitizeClients(payload.clients as Client[]) : null;
     const hasMatterSource = Array.isArray(payload.matters) || mattersRef.current.length > 0;
     const nextMatters = Array.isArray(payload.matters)
       ? filterVisibleMatters(
         incomingClients
-          ? hydrateMattersWithClients(payload.matters, incomingClients)
-          : hydrateMattersWithClients(payload.matters, clientsRef.current)
+          ? hydrateMattersWithClients(sanitizeMatters(payload.matters), incomingClients)
+          : hydrateMattersWithClients(sanitizeMatters(payload.matters), clientsRef.current)
       )
       : mattersRef.current;
 
@@ -321,7 +344,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       setClients(incomingClients);
       setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, incomingClients)));
     }
-    if (Array.isArray(payload.leads)) setLeads(payload.leads);
+    if (Array.isArray(payload.leads)) setLeads(sanitizeLeads(payload.leads));
     if (Array.isArray(payload.events)) setEvents(hasMatterSource ? filterByVisibleMatter(payload.events, nextMatters) : payload.events);
     if (Array.isArray(payload.invoices)) setInvoices(hasMatterSource ? filterByVisibleMatter(payload.invoices, nextMatters) : payload.invoices);
     if (Array.isArray(payload.notifications)) setNotifications(payload.notifications);
@@ -375,10 +398,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
       if (Array.isArray(ex)) setExpenses(filterByVisibleMatter(ex, visibleMatters));
       if (Array.isArray(c)) {
-        setClients(c);
-        setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, c)));
+        const safeClients = sanitizeClients(c);
+        setClients(safeClients);
+        setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
       }
-      if (Array.isArray(l)) setLeads(l);
+      if (Array.isArray(l)) setLeads(sanitizeLeads(l));
       if (Array.isArray(i)) setInvoices(filterByVisibleMatter(i, visibleMatters));
       if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
@@ -597,8 +621,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       void api.getClients()
         .then((freshClients) => {
           if (Array.isArray(freshClients)) {
-            setClients(freshClients);
-            setMatters((prev) => hydrateMattersWithClients(prev, freshClients));
+            const safeClients = sanitizeClients(freshClients);
+            setClients(safeClients);
+            setMatters((prev) => hydrateMattersWithClients(prev, safeClients));
           }
         })
         .catch((refreshError) => {
@@ -830,11 +855,14 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const addClient = async (clientData: any): Promise<Client> => {
     const temp = { ...clientData, id: `c-${Date.now()}` };
-    setClients(prev => [temp, ...prev]);
+    setClients(prev => [temp, ...sanitizeClients(prev)]);
     try {
       const newClient = await api.createClient(clientData);
+      if (!hasStringId(newClient)) {
+        throw new Error('Client API returned an empty response.');
+      }
       setClients(prev => {
-        const next = [newClient, ...prev.filter(c => c.id !== temp.id)];
+        const next = [newClient, ...sanitizeClients(prev).filter(c => c.id !== temp.id)];
         setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
         return next;
       });
@@ -847,19 +875,19 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateClient = async (id: string, data: Partial<Client> & { statusChangeNote?: string }) => {
-    const prev = clients;
+    const prev = sanitizeClients(clients);
     const { statusChangeNote, ...clientData } = data;
     // Optimistic update
     setClients(prevClients => {
-      const next = prevClients.map(c => c.id === id ? { ...c, ...clientData } : c);
+      const next = sanitizeClients(prevClients).map(c => c.id === id ? { ...c, ...clientData } : c);
       setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
       return next;
     });
     try {
       const updated = await api.updateClient(id, data);
-      if (updated) {
+      if (hasStringId(updated)) {
         setClients(prevClients => {
-          const next = prevClients.map(c => c.id === id ? { ...c, ...updated } : c);
+          const next = sanitizeClients(prevClients).map(c => c.id === id ? { ...c, ...updated } : c);
           setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
           return next;
         });
@@ -873,24 +901,32 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const addLead = async (leadData: any) => {
     const temp = { ...leadData, id: `l-${Date.now()}` };
-    setLeads(prev => [temp, ...prev]);
+    setLeads(prev => [temp, ...sanitizeLeads(prev)]);
     try {
       const newLead = await api.createLead(leadData);
-      setLeads(prev => [newLead, ...prev.filter(l => l.id !== temp.id)]);
-    } catch (e) { console.error("API Error", e); }
+      if (!hasStringId(newLead)) {
+        throw new Error('Lead API returned an empty response.');
+      }
+      setLeads(prev => [newLead, ...sanitizeLeads(prev).filter(l => l.id !== temp.id)]);
+    } catch (e) {
+      console.error("API Error", e);
+      setLeads(prev => sanitizeLeads(prev).filter(l => l.id !== temp.id));
+    }
   };
 
   const updateLead = async (id: string, data: Partial<Lead>) => {
-    setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
+    setLeads(prev => sanitizeLeads(prev).map(l => l.id === id ? { ...l, ...data } : l));
     try {
       const updated = await api.updateLead(id, data);
-      setLeads(prev => prev.map(l => l.id === id ? updated : l));
+      if (hasStringId(updated)) {
+        setLeads(prev => sanitizeLeads(prev).map(l => l.id === id ? updated : l));
+      }
     } catch (e) { console.error("API Error (updateLead)", e); }
   };
 
   const deleteLead = async (id: string) => {
-    const prev = leads;
-    setLeads(prev => prev.filter(l => l.id !== id));
+    const prev = sanitizeLeads(leads);
+    setLeads(prev => sanitizeLeads(prev).filter(l => l.id !== id));
     try {
       await api.deleteLead(id);
     } catch (e) {

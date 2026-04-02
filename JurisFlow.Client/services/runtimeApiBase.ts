@@ -1,7 +1,5 @@
 const rawConfiguredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() || '';
 const configuredApiBaseUrl = rawConfiguredApiBaseUrl.replace(/\/+$/, '');
-const forceCrossOriginApiBase = import.meta.env.VITE_FORCE_CROSS_ORIGIN_API_BASE === 'true';
-const renderHostSuffix = '.onrender.com';
 
 const shouldRewritePath = (pathname: string) =>
   pathname.startsWith('/api') || pathname.startsWith('/uploads');
@@ -14,50 +12,19 @@ const normalizeOrigin = (value: string) => {
   }
 };
 
-const getRenderServiceBaseName = (origin: string) => {
-  try {
-    const { hostname } = new URL(origin);
-    if (!hostname.endsWith(renderHostSuffix)) {
-      return '';
-    }
-
-    const serviceName = hostname.slice(0, -renderHostSuffix.length).toLowerCase();
-    return serviceName.replace(/-\d+$/, '');
-  } catch {
-    return '';
-  }
-};
-
 const shouldUseConfiguredApiBase = () => {
   if (!configuredApiBaseUrl || typeof window === 'undefined') {
     return false;
   }
 
-  if (forceCrossOriginApiBase) {
-    return true;
+  const targetOrigin = normalizeOrigin(configuredApiBaseUrl);
+  if (!targetOrigin) {
+    return false;
   }
 
   const currentOrigin = normalizeOrigin(window.location.origin);
-  const targetOrigin = normalizeOrigin(configuredApiBaseUrl);
-  if (!currentOrigin || !targetOrigin) {
-    return false;
-  }
-
-  if (currentOrigin === targetOrigin) {
-    return true;
-  }
-
-  const currentRenderBaseName = getRenderServiceBaseName(currentOrigin);
-  const targetRenderBaseName = getRenderServiceBaseName(targetOrigin);
-  if (
-    currentRenderBaseName &&
-    targetRenderBaseName &&
-    currentRenderBaseName === targetRenderBaseName
-  ) {
-    console.warn(
-      `Ignoring cross-origin VITE_API_BASE_URL (${targetOrigin}) for sibling Render deployment; using same-origin API requests from ${currentOrigin}.`
-    );
-    return false;
+  if (currentOrigin && currentOrigin !== targetOrigin) {
+    console.info(`Using configured API base ${targetOrigin} from ${currentOrigin}.`);
   }
 
   return true;

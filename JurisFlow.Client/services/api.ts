@@ -60,6 +60,31 @@ const getTenantSlug = () => {
     return localStorage.getItem(TENANT_STORAGE_KEY);
 };
 
+const parseResponseBody = async (res: Response) => {
+    const contentType = res.headers.get('content-type') || '';
+    const text = await res.text();
+    const looksJson = contentType.includes('application/json') || contentType.includes('+json');
+    const looksHtml = /^\s*</.test(text);
+
+    if (!text.trim()) {
+        return { contentType, text, data: null as any, looksJson, looksHtml };
+    }
+
+    if (looksJson) {
+        try {
+            return { contentType, text, data: JSON.parse(text), looksJson, looksHtml };
+        } catch {
+            throw new Error('Invalid JSON response body.');
+        }
+    }
+
+    try {
+        return { contentType, text, data: JSON.parse(text), looksJson: true, looksHtml };
+    } catch {
+        return { contentType, text, data: null as any, looksJson, looksHtml };
+    }
+};
+
 const refreshAuthToken = async () => {
     if (typeof window === 'undefined') return false;
     const refreshToken = localStorage.getItem('auth_refresh_token');
@@ -125,18 +150,16 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}, allowRefre
     if (!res.ok) {
         let errorDetail = '';
         try {
-            const errorBody = await res.json();
-            if (errorBody?.message) {
-                errorDetail = errorBody.message;
+            const parsed = await parseResponseBody(res);
+            if (parsed.data?.message) {
+                errorDetail = parsed.data.message;
+            } else if (parsed.looksHtml) {
+                errorDetail = `Expected JSON from ${endpoint} but received HTML. Check API base URL / deployment routing.`;
             } else {
-                errorDetail = JSON.stringify(errorBody);
+                errorDetail = parsed.text || JSON.stringify(parsed.data);
             }
-        } catch {
-            try {
-                errorDetail = await res.text();
-            } catch {
-                errorDetail = '';
-            }
+        } catch (parseError: any) {
+            errorDetail = parseError?.message || '';
         }
         const suffix = errorDetail ? ` (${errorDetail})` : '';
         throw new Error(`API Error: ${res.statusText}${suffix}`);
@@ -145,7 +168,17 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}, allowRefre
     if (res.status === 204 || res.headers.get('content-length') === '0') {
         return null;
     }
-    return res.json();
+    const parsed = await parseResponseBody(res);
+    if (parsed.data !== null) {
+        return parsed.data;
+    }
+    if (parsed.looksHtml) {
+        throw new Error(`API Error: Expected JSON from ${endpoint} but received HTML. Check API base URL / deployment routing.`);
+    }
+    if (!parsed.text.trim()) {
+        return null;
+    }
+    throw new Error(`API Error: Unexpected non-JSON response from ${endpoint}.`);
 };
 
 const fetchFile = async (endpoint: string) => {
