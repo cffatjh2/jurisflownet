@@ -223,6 +223,8 @@ if (invalidCorsOrigins.Count > 0)
     throw new InvalidOperationException(
         $"Invalid CORS origins in configuration: {string.Join(", ", invalidCorsOrigins)}");
 }
+var allowedCorsOriginSet = new HashSet<string>(allowedCorsOrigins, StringComparer.OrdinalIgnoreCase);
+var renderSiblingCorsRule = ResolveRenderSiblingCorsRule(builder.Configuration, allowedCorsOriginSet);
 
 if (builder.Environment.IsProduction())
 {
@@ -258,7 +260,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsPolicyName, policy =>
     {
-        policy.WithOrigins(allowedCorsOrigins.ToArray())
+        policy.SetIsOriginAllowed(origin => IsCorsOriginAllowed(origin, allowedCorsOriginSet, renderSiblingCorsRule))
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
@@ -651,6 +653,133 @@ static (List<string> validOrigins, List<string> invalidOrigins) ResolveCorsOrigi
     }
 
     return (validOrigins.OrderBy(o => o, StringComparer.OrdinalIgnoreCase).ToList(), invalidOrigins);
+}
+
+static (string scheme, string baseServiceName)? ResolveRenderSiblingCorsRule(
+    IConfiguration configuration,
+    IEnumerable<string> allowedCorsOrigins)
+{
+    var allowRenderSiblingOrigins = configuration.GetValue("Cors:AllowRenderSiblingOrigins", true);
+    if (!allowRenderSiblingOrigins)
+    {
+        return null;
+    }
+
+    static bool TryBuildRuleFromOrigin(string origin, out (string scheme, string baseServiceName) rule)
+    {
+        rule = default;
+
+        if (!TryNormalizeOrigin(origin, out var normalizedOrigin) ||
+            !Uri.TryCreate(normalizedOrigin, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        const string OnRenderSuffix = ".onrender.com";
+        if (!uri.Host.EndsWith(OnRenderSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var serviceName = uri.Host[..^OnRenderSuffix.Length].Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            return false;
+        }
+
+        var lastDashIndex = serviceName.LastIndexOf('-');
+        if (lastDashIndex > 0 && lastDashIndex < serviceName.Length - 1)
+        {
+            var possibleNumericSuffix = serviceName[(lastDashIndex + 1)..];
+            if (possibleNumericSuffix.All(char.IsDigit))
+            {
+                serviceName = serviceName[..lastDashIndex];
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            return false;
+        }
+
+        rule = (uri.Scheme.ToLowerInvariant(), serviceName);
+        return true;
+    }
+
+    var configuredRenderBaseUrl = configuration["Cors:RenderSiblingBaseUrl"];
+    if (!string.IsNullOrWhiteSpace(configuredRenderBaseUrl) &&
+        TryBuildRuleFromOrigin(configuredRenderBaseUrl, out var configuredRule))
+    {
+        return configuredRule;
+    }
+
+    var renderExternalUrl = configuration["RENDER_EXTERNAL_URL"]
+        ?? Environment.GetEnvironmentVariable("RENDER_EXTERNAL_URL");
+
+    if (!string.IsNullOrWhiteSpace(renderExternalUrl) &&
+        TryBuildRuleFromOrigin(renderExternalUrl, out var renderRule))
+    {
+        return renderRule;
+    }
+
+    foreach (var origin in allowedCorsOrigins)
+    {
+        if (TryBuildRuleFromOrigin(origin, out var fallbackRule))
+        {
+            return fallbackRule;
+        }
+    }
+
+    return null;
+}
+
+static bool IsCorsOriginAllowed(
+    string origin,
+    ISet<string> allowedCorsOrigins,
+    (string scheme, string baseServiceName)? renderSiblingCorsRule)
+{
+    if (!TryNormalizeOrigin(origin, out var normalizedOrigin))
+    {
+        return false;
+    }
+
+    if (allowedCorsOrigins.Contains(normalizedOrigin))
+    {
+        return true;
+    }
+
+    if (!renderSiblingCorsRule.HasValue ||
+        !Uri.TryCreate(normalizedOrigin, UriKind.Absolute, out var uri))
+    {
+        return false;
+    }
+
+    var rule = renderSiblingCorsRule.Value;
+    if (!string.Equals(uri.Scheme, rule.scheme, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    const string OnRenderSuffix = ".onrender.com";
+    if (!uri.Host.EndsWith(OnRenderSuffix, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    var serviceName = uri.Host[..^OnRenderSuffix.Length].Trim().ToLowerInvariant();
+    if (string.Equals(serviceName, rule.baseServiceName, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    var expectedPrefix = $"{rule.baseServiceName}-";
+    if (!serviceName.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    var numericSuffix = serviceName[expectedPrefix.Length..];
+    return numericSuffix.Length > 0 && numericSuffix.All(char.IsDigit);
 }
 
 static bool TryNormalizeOrigin(string rawOrigin, out string normalizedOrigin)
