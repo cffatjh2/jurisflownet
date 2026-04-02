@@ -1,10 +1,14 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
+using System.Data;
+using System.Data.Common;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Npgsql;
 using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
@@ -20,6 +24,7 @@ namespace JurisFlow.Server.Controllers
         private readonly OutcomeFeePlannerService _outcomeFeePlanner;
         private readonly ClientTransparencyService _clientTransparencyService;
         private readonly ILogger<MattersController> _logger;
+        private readonly Dictionary<string, bool> _schemaPresenceCache = new(StringComparer.OrdinalIgnoreCase);
 
         public MattersController(
             JurisFlowDbContext context,
@@ -180,69 +185,119 @@ namespace JurisFlow.Server.Controllers
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
             if (matter == null) return NotFound();
 
-            await using var tx = await _context.Database.BeginTransactionAsync();
+            var ct = HttpContext.RequestAborted;
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
             try
             {
-                // Detach optional FK references that otherwise block hard delete.
-                await _context.Tasks
-                    .Where(t => t.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
+                matter.CurrentOutcomeFeePlanId = null;
 
-                await _context.Documents
-                    .Where(d => d.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null));
+                // Optional direct references.
+                await SafeClearMatterReferenceAsync("Tasks", token => _context.Tasks.Where(t => t.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("Documents", token => _context.Documents.Where(d => d.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("CalendarEvents", token => _context.CalendarEvents.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("ClientTrustLedgers", token => _context.ClientTrustLedgers.Where(l => l.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(l => l.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("TrustTransactions", token => _context.TrustTransactions.Where(t => t.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("Expenses", token => _context.Expenses.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("TimeEntries", token => _context.TimeEntries.Where(t => t.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("CourtDocketEntries", token => _context.CourtDocketEntries.Where(d => d.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("EfilingSubmissions", token => _context.EfilingSubmissions.Where(s => s.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(s => s.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("AppointmentRequests", token => _context.AppointmentRequests.Where(a => a.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(a => a.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("ClientMessages", token => _context.ClientMessages.Where(m => m.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(m => m.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("EmailMessages", token => _context.EmailMessages.Where(m => m.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(m => m.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("PaymentTransactions", token => _context.PaymentTransactions.Where(t => t.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("SignatureRequests", token => _context.SignatureRequests.Where(r => r.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(r => r.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("SmsMessages", token => _context.SmsMessages.Where(m => m.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(m => m.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("ResearchSessions", token => _context.ResearchSessions.Where(s => s.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(s => s.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("ContractAnalyses", token => _context.ContractAnalyses.Where(a => a.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(a => a.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("AiDraftSessions", token => _context.AiDraftSessions.Where(s => s.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(s => s.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("Invoices", token => _context.Invoices.Where(i => i.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(i => i.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingRateCards", token => _context.BillingRateCards.Where(c => c.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(c => c.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingRateCardEntries", token => _context.BillingRateCardEntries.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingLedgerEntries", token => _context.BillingLedgerEntries.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingPaymentAllocations", token => _context.BillingPaymentAllocations.Where(a => a.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(a => a.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingEbillingTransmissions", token => _context.BillingEbillingTransmissions.Where(t => t.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("BillingEbillingResultEvents", token => _context.BillingEbillingResultEvents.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
+                await SafeClearMatterReferenceAsync("TrustRiskEvents", token => _context.TrustRiskEvents.Where(e => e.MatterId == id).ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null), token), ct);
 
-                await _context.CalendarEvents
-                    .Where(e => e.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null));
+                // Required direct dependents.
+                await SafeDeleteByMatterAsync("OpposingParties", _context.OpposingParties.Where(p => p.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("Deadlines", _context.Deadlines.Where(d => d.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("CasePredictions", _context.CasePredictions.Where(p => p.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("MatterBillingPolicies", _context.MatterBillingPolicies.Where(p => p.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("BillingPrebillLines", _context.BillingPrebillLines.Where(l => l.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("BillingPrebillBatches", _context.BillingPrebillBatches.Where(b => b.MatterId == id), ct);
 
-                await _context.ClientTrustLedgers
-                    .Where(l => l.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(l => l.MatterId, (string?)null));
-
-                await _context.TrustTransactions
-                    .Where(t => t.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
-
-                await _context.Expenses
-                    .Where(e => e.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(e => e.MatterId, (string?)null));
-
-                await _context.TimeEntries
-                    .Where(t => t.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.MatterId, (string?)null));
-
-                await _context.CourtDocketEntries
-                    .Where(d => d.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(d => d.MatterId, (string?)null));
-
-                await _context.EfilingSubmissions
-                    .Where(s => s.MatterId == id)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(s => s.MatterId, (string?)null));
-
-                // Required dependents should be removed with the parent.
-                await _context.OpposingParties
+                // Planner hierarchy.
+                var outcomePlanIds = await SafeCollectIdsAsync("OutcomeFeePlans", "MatterId", _context.OutcomeFeePlans
                     .Where(p => p.MatterId == id)
-                    .ExecuteDeleteAsync();
+                    .Select(p => p.Id), ct);
+                var planVersionIds = outcomePlanIds.Count == 0
+                    ? new List<string>()
+                    : await SafeCollectIdsAsync("OutcomeFeePlanVersions", "PlanId", _context.OutcomeFeePlanVersions
+                        .Where(v => outcomePlanIds.Contains(v.PlanId))
+                        .Select(v => v.Id), ct);
+                var scenarioIds = planVersionIds.Count == 0
+                    ? new List<string>()
+                    : await SafeCollectIdsAsync("OutcomeFeeScenarios", "PlanVersionId", _context.OutcomeFeeScenarios
+                        .Where(s => planVersionIds.Contains(s.PlanVersionId))
+                        .Select(s => s.Id), ct);
+
+                if (scenarioIds.Count > 0)
+                {
+                    await SafeDeleteAsync("OutcomeFeeCollectionsForecasts", "ScenarioId", _context.OutcomeFeeCollectionsForecasts.Where(f => scenarioIds.Contains(f.ScenarioId)), ct);
+                    await SafeDeleteAsync("OutcomeFeePhaseForecasts", "ScenarioId", _context.OutcomeFeePhaseForecasts.Where(f => scenarioIds.Contains(f.ScenarioId)), ct);
+                    await SafeDeleteAsync("OutcomeFeeStaffingLines", "ScenarioId", _context.OutcomeFeeStaffingLines.Where(l => scenarioIds.Contains(l.ScenarioId)), ct);
+                    await SafeDeleteAsync("OutcomeFeeScenarios", "PlanVersionId", _context.OutcomeFeeScenarios.Where(s => planVersionIds.Contains(s.PlanVersionId)), ct);
+                }
+
+                if (planVersionIds.Count > 0)
+                {
+                    await SafeDeleteAsync("OutcomeFeeAssumptions", "PlanVersionId", _context.OutcomeFeeAssumptions.Where(a => planVersionIds.Contains(a.PlanVersionId)), ct);
+                    await SafeDeleteAsync("OutcomeFeePlanVersions", "PlanId", _context.OutcomeFeePlanVersions.Where(v => outcomePlanIds.Contains(v.PlanId)), ct);
+                }
+
+                if (outcomePlanIds.Count > 0)
+                {
+                    await SafeDeleteAsync("OutcomeFeeUpdateEvents", "PlanId", _context.OutcomeFeeUpdateEvents.Where(e => outcomePlanIds.Contains(e.PlanId)), ct);
+                    await SafeDeleteByMatterAsync("OutcomeFeePlans", _context.OutcomeFeePlans.Where(p => p.MatterId == id), ct);
+                }
+
+                // Client transparency hierarchy.
+                var transparencySnapshotIds = await SafeCollectIdsAsync("ClientTransparencySnapshots", "MatterId", _context.ClientTransparencySnapshots
+                    .Where(s => s.MatterId == id)
+                    .Select(s => s.Id), ct);
+
+                if (transparencySnapshotIds.Count > 0)
+                {
+                    await SafeDeleteAsync("ClientTransparencyTimelineItems", "SnapshotId", _context.ClientTransparencyTimelineItems.Where(i => transparencySnapshotIds.Contains(i.SnapshotId)), ct);
+                    await SafeDeleteAsync("ClientTransparencyDelayReasons", "SnapshotId", _context.ClientTransparencyDelayReasons.Where(r => transparencySnapshotIds.Contains(r.SnapshotId)), ct);
+                    await SafeDeleteAsync("ClientTransparencyNextSteps", "SnapshotId", _context.ClientTransparencyNextSteps.Where(s => transparencySnapshotIds.Contains(s.SnapshotId)), ct);
+                    await SafeDeleteAsync("ClientTransparencyCostImpacts", "SnapshotId", _context.ClientTransparencyCostImpacts.Where(c => transparencySnapshotIds.Contains(c.SnapshotId)), ct);
+                    await SafeDeleteAsync("ClientTransparencyReviewActions", "SnapshotId", _context.ClientTransparencyReviewActions.Where(a => transparencySnapshotIds.Contains(a.SnapshotId)), ct);
+                    await SafeDeleteByMatterAsync("ClientTransparencySnapshots", _context.ClientTransparencySnapshots.Where(s => s.MatterId == id), ct);
+                }
+
+                await SafeDeleteByMatterAsync("ClientTransparencyUpdateEvents", _context.ClientTransparencyUpdateEvents.Where(e => e.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("ClientTransparencyProfiles", _context.ClientTransparencyProfiles.Where(p => p.MatterId == id), ct);
 
                 _context.Matters.Remove(matter);
-                await _context.SaveChangesAsync();
+                await _context.SaveChangesAsync(ct);
 
                 await _auditLogger.LogAsync(HttpContext, "matter.delete", "Matter", id, $"Deleted matter {matter.Name}");
-                await tx.CommitAsync();
+                await tx.CommitAsync(ct);
 
                 return NoContent();
             }
             catch (DbUpdateException ex)
             {
-                await tx.RollbackAsync();
-                _logger.LogWarning(ex, "Matter delete blocked by related records for matter {MatterId}", id);
+                await tx.RollbackAsync(ct);
+                _logger.LogWarning(ex, "Matter delete blocked by related records for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
                 return Conflict(new { message = "Matter could not be deleted because related records are still linked." });
             }
             catch (Exception ex)
             {
-                await tx.RollbackAsync();
-                _logger.LogError(ex, "Matter delete failed for matter {MatterId}", id);
+                await tx.RollbackAsync(ct);
+                _logger.LogError(ex, "Matter delete failed for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
                 return StatusCode(500, new { message = "Failed to delete matter." });
             }
         }
@@ -279,6 +334,170 @@ namespace JurisFlow.Server.Controllers
             return Ok(matter);
         }
 
+        private async Task SafeClearMatterReferenceAsync(
+            string tableName,
+            Func<CancellationToken, Task> operation,
+            CancellationToken cancellationToken)
+        {
+            if (!await TableHasColumnAsync(tableName, "MatterId", cancellationToken))
+            {
+                return;
+            }
+
+            try
+            {
+                await operation(cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                _logger.LogWarning(ex, "Skipping matter cleanup for missing schema on table {TableName}.", tableName);
+            }
+        }
+
+        private Task SafeDeleteByMatterAsync<TEntity>(string tableName, IQueryable<TEntity> query, CancellationToken cancellationToken)
+            where TEntity : class
+            => SafeDeleteAsync(tableName, "MatterId", query, cancellationToken);
+
+        private async Task SafeDeleteAsync<TEntity>(
+            string tableName,
+            string columnName,
+            IQueryable<TEntity> query,
+            CancellationToken cancellationToken)
+            where TEntity : class
+        {
+            if (!await TableHasColumnAsync(tableName, columnName, cancellationToken))
+            {
+                return;
+            }
+
+            try
+            {
+                await query.ExecuteDeleteAsync(cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                _logger.LogWarning(ex, "Skipping delete cleanup for missing schema on table {TableName}.", tableName);
+            }
+        }
+
+        private async Task<List<string>> SafeCollectIdsAsync(
+            string tableName,
+            string columnName,
+            IQueryable<string> query,
+            CancellationToken cancellationToken)
+        {
+            if (!await TableHasColumnAsync(tableName, columnName, cancellationToken))
+            {
+                return new List<string>();
+            }
+
+            try
+            {
+                return await query.ToListAsync(cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                _logger.LogWarning(ex, "Skipping id collection for missing schema on table {TableName}.", tableName);
+                return new List<string>();
+            }
+        }
+
+        private async Task<bool> TableHasColumnAsync(string tableName, string columnName, CancellationToken cancellationToken)
+        {
+            var cacheKey = $"{tableName}.{columnName}";
+            if (_schemaPresenceCache.TryGetValue(cacheKey, out var cached))
+            {
+                return cached;
+            }
+
+            var connection = _context.Database.GetDbConnection();
+            var shouldClose = connection.State != ConnectionState.Open;
+            if (shouldClose)
+            {
+                await connection.OpenAsync(cancellationToken);
+            }
+
+            try
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = BuildColumnExistsSql(tableName);
+
+                AddParameter(command, "@tableName", tableName);
+                AddParameter(command, "@columnName", columnName);
+
+                var scalar = await command.ExecuteScalarAsync(cancellationToken);
+                var exists = scalar switch
+                {
+                    bool booleanValue => booleanValue,
+                    long longValue => longValue > 0,
+                    int intValue => intValue > 0,
+                    decimal decimalValue => decimalValue > 0,
+                    _ => false
+                };
+
+                _schemaPresenceCache[cacheKey] = exists;
+                return exists;
+            }
+            finally
+            {
+                if (shouldClose)
+                {
+                    await connection.CloseAsync();
+                }
+            }
+        }
+
+        private string BuildColumnExistsSql(string tableName)
+        {
+            if (_context.Database.IsNpgsql())
+            {
+                return """
+                    select exists (
+                        select 1
+                        from information_schema.columns
+                        where table_schema = current_schema()
+                          and table_name = @tableName
+                          and column_name = @columnName
+                    );
+                    """;
+            }
+
+            if (_context.Database.IsSqlite())
+            {
+                return $"select count(1) from pragma_table_info('{EscapeSqlLiteral(tableName)}') where name = @columnName;";
+            }
+
+            return """
+                select count(1)
+                from information_schema.columns
+                where table_name = @tableName
+                  and column_name = @columnName;
+                """;
+        }
+
+        private static void AddParameter(DbCommand command, string name, object value)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
+
+        private static string EscapeSqlLiteral(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+
+        private static bool IsMissingSchemaException(Exception ex)
+        {
+            var root = ex.GetBaseException();
+            return root switch
+            {
+                PostgresException postgresEx => postgresEx.SqlState is PostgresErrorCodes.UndefinedTable or PostgresErrorCodes.UndefinedColumn,
+                SqliteException sqliteEx => sqliteEx.SqliteErrorCode == 1 &&
+                                            (sqliteEx.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase) ||
+                                             sqliteEx.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)),
+                _ => false
+            };
+        }
+        
         private async Task<string?> ResolveValidClientIdAsync(string? clientId)
         {
             var normalizedClientId = clientId?.Trim();
