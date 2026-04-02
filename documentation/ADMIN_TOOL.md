@@ -42,8 +42,12 @@ Notes:
 If you want to provision directly from Supabase SQL Editor (without the CLI tool), use:
 
 - `documentation/SUPABASE_MANUAL_LAWYER_TEMPLATE.sql`
+- `documentation/SUPABASE_MANUAL_CLIENT_PORTAL_TEMPLATE.sql`
 
-It upserts both tenant and user in one run (idempotent).
+These scripts are idempotent.
+
+- Lawyer template: tenant + staff user provisioning
+- Client template: tenant-resolved portal client provisioning (`Status=Active`, `PortalEnabled=true`, password hash set)
 
 For the common production bootstrap path, use the wrapper script:
 

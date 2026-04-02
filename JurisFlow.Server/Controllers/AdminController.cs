@@ -364,6 +364,8 @@ namespace JurisFlow.Server.Controllers
                 client.PasswordHash = PasswordHashingHelper.HashPassword(dto.Password, _configuration);
             }
 
+            client.Company = await ResolveTenantCompanyNameAsync(client.Company);
+
             client.UpdatedAt = DateTime.UtcNow;
 
             if (!string.Equals(previousStatus, client.Status, StringComparison.OrdinalIgnoreCase))
@@ -711,6 +713,25 @@ namespace JurisFlow.Server.Controllers
             }
 
             return _tenantContext.TenantId;
+        }
+
+        private async Task<string?> ResolveTenantCompanyNameAsync(string? fallbackCompany)
+        {
+            var tenantId = RequireTenantId();
+            var tenantName = await _context.Tenants
+                .AsNoTracking()
+                .Where(t => t.Id == tenantId)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync();
+
+            if (!string.IsNullOrWhiteSpace(tenantName))
+            {
+                return tenantName.Trim();
+            }
+
+            return string.IsNullOrWhiteSpace(fallbackCompany)
+                ? null
+                : fallbackCompany.Trim();
         }
 
         private static string NormalizeEmail(string? email)

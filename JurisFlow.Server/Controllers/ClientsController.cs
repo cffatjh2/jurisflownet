@@ -112,6 +112,8 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Email already exists." });
             }
 
+            var synchronizedCompany = await ResolveTenantCompanyNameAsync(dto.Company);
+
             var client = new Client
             {
                 Id = Guid.NewGuid().ToString(),
@@ -121,7 +123,7 @@ namespace JurisFlow.Server.Controllers
                 NormalizedEmail = normalizedEmail,
                 Phone = dto.Phone,
                 Mobile = dto.Mobile,
-                Company = dto.Company,
+                Company = synchronizedCompany,
                 Type = normalizedType!,
                 Status = normalizedStatus!,
                 Address = dto.Address,
@@ -209,6 +211,8 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Email already exists." });
             }
 
+            var synchronizedCompany = await ResolveTenantCompanyNameAsync(dto.Company);
+
             var previousStatus = existing.Status;
 
             existing.ClientNumber = dto.ClientNumber;
@@ -217,7 +221,7 @@ namespace JurisFlow.Server.Controllers
             existing.NormalizedEmail = normalizedEmail;
             existing.Phone = dto.Phone;
             existing.Mobile = dto.Mobile;
-            existing.Company = dto.Company;
+            existing.Company = synchronizedCompany;
             existing.Type = normalizedType!;
             existing.Status = normalizedStatus!;
             existing.Address = dto.Address;
@@ -305,7 +309,6 @@ namespace JurisFlow.Server.Controllers
             }
             if (dto.Phone != null) client.Phone = dto.Phone;
             if (dto.Mobile != null) client.Mobile = dto.Mobile;
-            if (dto.Company != null) client.Company = dto.Company;
             if (!string.IsNullOrWhiteSpace(dto.Type))
             {
                 if (!TryNormalizeClientType(dto.Type, out var normalizedType, out var typeError))
@@ -350,6 +353,8 @@ namespace JurisFlow.Server.Controllers
                 }
                 client.PortalEnabled = dto.PortalEnabled.Value;
             }
+
+            client.Company = await ResolveTenantCompanyNameAsync(client.Company);
 
             client.UpdatedAt = DateTime.UtcNow;
 
@@ -520,6 +525,25 @@ namespace JurisFlow.Server.Controllers
         private static string NormalizeEmail(string? email)
         {
             return EmailAddressNormalizer.Normalize(email);
+        }
+
+        private async Task<string?> ResolveTenantCompanyNameAsync(string? fallbackCompany)
+        {
+            var tenantId = RequireTenantId();
+            var tenantName = await _context.Tenants
+                .AsNoTracking()
+                .Where(t => t.Id == tenantId)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync();
+
+            if (!string.IsNullOrWhiteSpace(tenantName))
+            {
+                return tenantName.Trim();
+            }
+
+            return string.IsNullOrWhiteSpace(fallbackCompany)
+                ? null
+                : fallbackCompany.Trim();
         }
 
         private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
