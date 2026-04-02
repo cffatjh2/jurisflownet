@@ -104,6 +104,29 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task AttorneyCanApproveTimeEntry()
+    {
+        var entryId = Guid.NewGuid().ToString();
+        await SeedAsync(async db =>
+        {
+            db.TimeEntries.Add(new TimeEntry
+            {
+                Id = entryId,
+                Description = "Review record",
+                Duration = 20,
+                Rate = 180,
+                ApprovalStatus = "Pending"
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var request = CreateRequest(HttpMethod.Post, $"/api/time-entries/{entryId}/approve", "attorney-1", "Attorney");
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ApprovedExpenseCannotBeEdited()
     {
         var expenseId = Guid.NewGuid().ToString();
@@ -146,6 +169,28 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
         var response = await _client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AttorneyCanApproveExpense()
+    {
+        var expenseId = Guid.NewGuid().ToString();
+        await SeedAsync(async db =>
+        {
+            db.Expenses.Add(new Expense
+            {
+                Id = expenseId,
+                Description = "Service fee",
+                Amount = 125,
+                ApprovalStatus = "Pending"
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var request = CreateRequest(HttpMethod.Post, $"/api/expenses/{expenseId}/approve", "attorney-2", "Attorney");
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

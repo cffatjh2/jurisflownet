@@ -159,31 +159,40 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const stopTimer = async (): Promise<boolean> => {
     if (!activeTimer) return false;
 
+    const timerSnapshot = activeTimer;
+
     // Calculate total duration
-    let totalDurationMs = activeTimer.elapsed;
-    if (activeTimer.isRunning) {
-      totalDurationMs += (Date.now() - activeTimer.startTime);
+    let totalDurationMs = timerSnapshot.elapsed;
+    if (timerSnapshot.isRunning) {
+      totalDurationMs += (Date.now() - timerSnapshot.startTime);
     }
 
-    // Convert to minutes (minimum 1 minute?)
-    const minutes = Math.ceil(totalDurationMs / 1000 / 60);
+    const minutes = Math.max(1, Math.ceil(totalDurationMs / 1000 / 60));
 
-    // Create Time Entry
+    // Stop the timer immediately in the UI. If persistence fails, restore a paused snapshot.
+    setActiveTimer(null);
+
     const saved = await addTimeEntry({
-      matterId: activeTimer.matterId,
-      description: activeTimer.description,
+      matterId: timerSnapshot.matterId,
+      description: timerSnapshot.description,
       duration: minutes,
       date: new Date().toISOString(),
-      rate: activeTimer.rate || 0, // Use stored rate or default to 0
+      rate: timerSnapshot.rate || 0,
       billed: false,
       type: 'time',
-      activityCode: activeTimer.activityCode,
-      isBillable: activeTimer.isBillable ?? true
+      activityCode: timerSnapshot.activityCode,
+      isBillable: timerSnapshot.isBillable ?? true
     });
 
-    if (saved) {
-      setActiveTimer(null);
+    if (!saved) {
+      setActiveTimer({
+        ...timerSnapshot,
+        isRunning: false,
+        elapsed: totalDurationMs,
+        startTime: Date.now()
+      });
     }
+
     return saved;
   };
 

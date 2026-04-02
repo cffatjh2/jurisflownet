@@ -18,15 +18,15 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly ILogger<ExpensesController> _logger;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
+        private readonly OutcomeFeePlannerTriggerQueue _plannerTriggerQueue;
         private readonly MatterAccessService _matterAccess;
 
-        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<ExpensesController> logger, OutcomeFeePlannerService outcomeFeePlanner, MatterAccessService matterAccess)
+        public ExpensesController(JurisFlowDbContext context, AuditLogger auditLogger, ILogger<ExpensesController> logger, OutcomeFeePlannerTriggerQueue plannerTriggerQueue, MatterAccessService matterAccess)
         {
             _context = context;
             _auditLogger = auditLogger;
             _logger = logger;
-            _outcomeFeePlanner = outcomeFeePlanner;
+            _plannerTriggerQueue = plannerTriggerQueue;
             _matterAccess = matterAccess;
         }
 
@@ -147,7 +147,10 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/approve")]
         public async Task<IActionResult> ApproveExpense(string id)
         {
-            if (!IsApprover()) return Forbid();
+            if (!IsApprover())
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Only billing approvers can approve expenses." });
+            }
 
             var expense = await _context.Expenses.FindAsync(id);
             if (expense == null) return NotFound();
@@ -174,7 +177,10 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/reject")]
         public async Task<IActionResult> RejectExpense(string id, [FromBody] ApprovalRejectDto dto)
         {
-            if (!IsApprover()) return Forbid();
+            if (!IsApprover())
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = "Only billing approvers can reject expenses." });
+            }
 
             var expense = await _context.Expenses.FindAsync(id);
             if (expense == null) return NotFound();
@@ -202,11 +208,16 @@ namespace JurisFlow.Server.Controllers
 
         private bool IsApprover()
         {
-            var role = User.FindFirst(ClaimTypes.Role)?.Value ?? User.FindFirst("role")?.Value ?? string.Empty;
-            return role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Partner", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Associate", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Accountant", StringComparison.OrdinalIgnoreCase);
+            return HasAnyRole("Admin", "Partner", "Associate", "Attorney", "Accountant");
+        }
+
+        private bool HasAnyRole(params string[] roles)
+        {
+            return roles.Any(role =>
+                User.IsInRole(role) ||
+                User.Claims.Any(claim =>
+                    (claim.Type == ClaimTypes.Role || claim.Type == "role") &&
+                    string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
         }
 
         private string? NormalizeUtbmsCode(string? code)
@@ -223,19 +234,42 @@ namespace JurisFlow.Server.Controllers
 
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
+                var enqueued = _plannerTriggerQueue.Enqueue(new OutcomeFeePlannerTriggerJob(
+                    GetTenantId(),
+                    GetTenantSlug(),
+                    GetUserId() ?? "system",
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = matterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(Expense),
+                        TriggerEntityId = entityId,
+                        QueueReviewOnDrift = true,
+                        QueueNotificationOnDrift = true
+                    }));
+
+                if (!enqueued)
                 {
-                    MatterId = matterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(Expense),
-                    TriggerEntityId = entityId
-                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+                    _logger.LogWarning(
+                        "Outcome-to-Fee planner trigger queue rejected expense trigger. MatterId={MatterId} TriggerType={TriggerType} EntityId={EntityId}",
+                        matterId,
+                        triggerType,
+                        entityId);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for expense {ExpenseId}", entityId);
             }
         }
+
+        private string GetTenantId() =>
+            User.FindFirst("tenantId")?.Value ?? string.Empty;
+
+        private string GetTenantSlug() =>
+            User.FindFirst("tenantSlug")?.Value
+            ?? HttpContext.Request.Headers["X-Tenant-Slug"].FirstOrDefault()
+            ?? string.Empty;
 
         private async Task<bool> CanAccessExpenseAsync(Expense expense)
         {

@@ -181,14 +181,15 @@ const TimeTracker = () => {
             toast.warning('Selected matter was not found. Time entry will be logged as unassigned.');
         }
 
+        toast.info('Saving time entry...', 2500);
+        setTimerDisplay(0);
         const saved = await stopTimer();
         if (!saved) {
-            toast.error('Failed to save time entry. Please try again.');
+            toast.error('Failed to save time entry. Timer was restored.');
             return;
         }
 
         toast.success('Time Entry Saved');
-        setTimerDisplay(0);
         setDescription('');
     };
 
