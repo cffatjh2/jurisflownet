@@ -28,6 +28,23 @@ Notes:
 - `user delete` is a hard delete; if the user is referenced by other records, the database may reject the delete.
 - Prefer `--password-env SOME_ENV_VAR` in production so secrets do not end up in shell history.
 
+## Tenant vs user (important)
+
+- `Tenancy__DefaultTenantSlug` is only a startup default/fallback tenant bootstrap value.
+- You should not change Render env vars for every new user.
+- Permanent model:
+  - Create one tenant per firm (firm code = tenant slug)
+  - Create many users under that tenant
+  - Users log in with that firm code + their own email/password
+
+## Manual Supabase SQL template
+
+If you want to provision directly from Supabase SQL Editor (without the CLI tool), use:
+
+- `documentation/SUPABASE_MANUAL_LAWYER_TEMPLATE.sql`
+
+It upserts both tenant and user in one run (idempotent).
+
 For the common production bootstrap path, use the wrapper script:
 
 ```powershell
