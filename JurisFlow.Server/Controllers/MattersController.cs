@@ -144,15 +144,12 @@ namespace JurisFlow.Server.Controllers
             matter.EntityId = resolved.entityId;
             matter.OfficeId = resolved.officeId;
 
-            await using var tx = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
             _context.Matters.Add(matter);
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
             if (relatedClientResolution.ClientIds.Count > 0)
             {
                 await TrySyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
             }
-            await _context.SaveChangesAsync(HttpContext.RequestAborted);
-            await tx.CommitAsync(HttpContext.RequestAborted);
 
             await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
 
@@ -226,7 +223,6 @@ namespace JurisFlow.Server.Controllers
             existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
             NormalizeSharingSettings(existingMatter);
 
-            await using var tx = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
             if (relatedClientResolution != null)
             {
@@ -236,9 +232,6 @@ namespace JurisFlow.Server.Controllers
             {
                 await TryRemovePrimaryClientDuplicatesAsync(existingMatter.Id, resolvedClientId, HttpContext.RequestAborted);
             }
-
-            await _context.SaveChangesAsync(HttpContext.RequestAborted);
-            await tx.CommitAsync(HttpContext.RequestAborted);
 
             await TryAuditAsync("matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
             await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
@@ -669,10 +662,19 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 await _matterClientLinks.SyncRelatedClientsAsync(matterId, relatedClientIds, cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken);
             }
-            catch (Exception ex) when (IsMissingSchemaException(ex))
+            catch (Exception ex)
             {
-                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while syncing related clients for matter {MatterId}. Proceeding without secondary client links.", matterId);
+                ResetFailedMatterClientLinkEntries(matterId);
+
+                if (IsMissingSchemaException(ex))
+                {
+                    _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while syncing related clients for matter {MatterId}. Proceeding without secondary client links.", matterId);
+                    return;
+                }
+
+                _logger.LogError(ex, "Secondary client link persistence failed for matter {MatterId}. Matter was saved, but related client links were skipped.", matterId);
             }
         }
 
@@ -681,10 +683,19 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 await _matterClientLinks.RemovePrimaryClientDuplicatesAsync(matterId, primaryClientId, cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken);
             }
-            catch (Exception ex) when (IsMissingSchemaException(ex))
+            catch (Exception ex)
             {
-                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while removing duplicate primary links for matter {MatterId}.", matterId);
+                ResetFailedMatterClientLinkEntries(matterId);
+
+                if (IsMissingSchemaException(ex))
+                {
+                    _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while removing duplicate primary links for matter {MatterId}.", matterId);
+                    return;
+                }
+
+                _logger.LogError(ex, "Failed to normalize secondary client links for matter {MatterId} after update. Matter changes were kept.", matterId);
             }
         }
 
@@ -720,6 +731,16 @@ namespace JurisFlow.Server.Controllers
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Audit logging failed during matter workflow. Action={Action} EntityId={EntityId}", action, entityId);
+            }
+        }
+
+        private void ResetFailedMatterClientLinkEntries(string matterId)
+        {
+            foreach (var entry in _context.ChangeTracker.Entries<MatterClientLink>()
+                         .Where(entry => string.Equals(entry.Entity.MatterId, matterId, StringComparison.Ordinal))
+                         .ToList())
+            {
+                entry.State = EntityState.Detached;
             }
         }
 

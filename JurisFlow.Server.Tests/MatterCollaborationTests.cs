@@ -175,6 +175,99 @@ public class MatterCollaborationTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task AttorneyCanCreateMatterEvenWhenLegacyMatterClientLinksSchemaCannotPersistSecondaryClients()
+    {
+        var primaryClientId = Guid.NewGuid().ToString();
+        var secondaryClientId = Guid.NewGuid().ToString();
+
+        try
+        {
+            await SeedAsync(async db =>
+            {
+                db.Clients.AddRange(
+                    new Client
+                    {
+                        Id = primaryClientId,
+                        Name = "Primary Client",
+                        Email = $"primary-create-{Guid.NewGuid():N}@example.com",
+                        NormalizedEmail = $"primary-create-{Guid.NewGuid():N}@example.com",
+                        Type = "Individual",
+                        Status = "Active"
+                    },
+                    new Client
+                    {
+                        Id = secondaryClientId,
+                        Name = "Secondary Client",
+                        Email = $"secondary-create-{Guid.NewGuid():N}@example.com",
+                        NormalizedEmail = $"secondary-create-{Guid.NewGuid():N}@example.com",
+                        Type = "Individual",
+                        Status = "Active"
+                    });
+
+                await db.SaveChangesAsync();
+
+                await db.Database.ExecuteSqlRawAsync("""DROP TABLE IF EXISTS "MatterClientLinks";""");
+                await db.Database.ExecuteSqlRawAsync(
+                    """
+                    CREATE TABLE "MatterClientLinks" (
+                        "Id" TEXT PRIMARY KEY,
+                        "MatterId" TEXT NOT NULL,
+                        "ClientId" TEXT NOT NULL,
+                        "CreatedAt" TEXT NOT NULL,
+                        "UpdatedAt" TEXT NOT NULL
+                    );
+                    """);
+            });
+
+            var payload = JsonContent.Create(new
+            {
+                caseNumber = "CASE-NEW-2002",
+                name = "Legacy Schema Matter",
+                practiceArea = "Civil Litigation",
+                status = "Open",
+                feeStructure = "Hourly",
+                responsibleAttorney = "Fatih Alpaslan",
+                clientId = primaryClientId,
+                billableRate = 400,
+                relatedClientIds = new[] { secondaryClientId }
+            });
+
+            var request = CreateRequest(HttpMethod.Post, "/api/matters", "attorney-create-legacy-1", "Attorney", payload);
+            var response = await _client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+            var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+            tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+            var matter = await db.Matters.AsNoTracking().FirstOrDefaultAsync(m => m.CaseNumber == "CASE-NEW-2002");
+            Assert.NotNull(matter);
+            Assert.Equal(primaryClientId, matter!.ClientId);
+        }
+        finally
+        {
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+            await db.Database.ExecuteSqlRawAsync("""DROP TABLE IF EXISTS "MatterClientLinks";""");
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE "MatterClientLinks" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_MatterClientLinks" PRIMARY KEY,
+                    "MatterId" TEXT NOT NULL,
+                    "ClientId" TEXT NOT NULL,
+                    "TenantId" TEXT NULL,
+                    "CreatedAt" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """);
+            await db.Database.ExecuteSqlRawAsync("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_MatterClientLinks_TenantId_MatterId_ClientId" ON "MatterClientLinks" ("TenantId", "MatterId", "ClientId");""");
+            await db.Database.ExecuteSqlRawAsync("""CREATE INDEX IF NOT EXISTS "IX_MatterClientLinks_TenantId_ClientId_CreatedAt" ON "MatterClientLinks" ("TenantId", "ClientId", "CreatedAt");""");
+        }
+    }
+
+    [Fact]
     public async Task SecondaryLinkedClientCanCreateAppointmentForSharedMatter()
     {
         var primaryClientId = Guid.NewGuid().ToString();
