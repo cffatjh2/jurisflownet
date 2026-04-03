@@ -342,7 +342,7 @@ export const ROLE_PERMISSIONS: Record<EmployeeRole, Permission[]> = {
   ],
   [EmployeeRole.OFFICE_MANAGER]: [
     'user.manage', 'matter.view', 'matter.create', 'matter.edit', 'document.view',
-    'billing.view', 'billing.manage',
+    'billing.view', 'billing.manage', 'billing.approve',
     'calendar.manage', 'task.manage', 'client.manage',
     'trust.view', 'trust.deposit', 'trust.withdraw'
   ],

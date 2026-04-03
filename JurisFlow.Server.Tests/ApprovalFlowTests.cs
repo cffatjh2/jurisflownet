@@ -5,6 +5,7 @@ using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace JurisFlow.Server.Tests;
@@ -66,6 +67,38 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task AttorneyCreatedTimeEntryStartsAsPending()
+    {
+        var payload = JsonContent.Create(new
+        {
+            description = "Draft complaint",
+            duration = 30,
+            rate = 225,
+            billed = false,
+            isBillable = true
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/time-entries", "attorney-creator", "Attorney", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var entry = await db.TimeEntries
+            .OrderByDescending(x => x.SubmittedAt)
+            .FirstOrDefaultAsync(x => x.SubmittedBy == "attorney-creator");
+
+        Assert.NotNull(entry);
+        Assert.Equal("Pending", entry!.ApprovalStatus);
+        Assert.Null(entry.ApprovedBy);
+        Assert.Null(entry.ApprovedAt);
+    }
+
+    [Fact]
     public async Task ApprovingRejectedTimeEntryClearsRejection()
     {
         var entryId = Guid.NewGuid().ToString();
@@ -104,7 +137,7 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
-    public async Task AttorneyCanApproveTimeEntry()
+    public async Task AttorneyCanApproveOwnPendingTimeEntry()
     {
         var entryId = Guid.NewGuid().ToString();
         await SeedAsync(async db =>
@@ -115,7 +148,8 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
                 Description = "Review record",
                 Duration = 20,
                 Rate = 180,
-                ApprovalStatus = "Pending"
+                ApprovalStatus = "Pending",
+                SubmittedBy = "attorney-1"
             });
             await db.SaveChangesAsync();
         });
@@ -172,7 +206,39 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
-    public async Task AttorneyCanApproveExpense()
+    public async Task AttorneyCreatedExpenseStartsAsPending()
+    {
+        var payload = JsonContent.Create(new
+        {
+            description = "Court runner",
+            amount = 45,
+            billed = false,
+            category = "Other",
+            expenseCode = "E118"
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/expenses", "attorney-expense", "Attorney", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var expense = await db.Expenses
+            .OrderByDescending(x => x.SubmittedAt)
+            .FirstOrDefaultAsync(x => x.SubmittedBy == "attorney-expense");
+
+        Assert.NotNull(expense);
+        Assert.Equal("Pending", expense!.ApprovalStatus);
+        Assert.Null(expense.ApprovedBy);
+        Assert.Null(expense.ApprovedAt);
+    }
+
+    [Fact]
+    public async Task AttorneyCanApproveOwnPendingExpense()
     {
         var expenseId = Guid.NewGuid().ToString();
         await SeedAsync(async db =>
@@ -182,7 +248,8 @@ public class ApprovalFlowTests : IClassFixture<TestApplicationFactory>
                 Id = expenseId,
                 Description = "Service fee",
                 Amount = 125,
-                ApprovalStatus = "Pending"
+                ApprovalStatus = "Pending",
+                SubmittedBy = "attorney-2"
             });
             await db.SaveChangesAsync();
         });

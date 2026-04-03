@@ -80,7 +80,6 @@ namespace JurisFlow.Server.Controllers
             }
 
             var userId = GetUserId();
-            var isApprover = IsApprover();
 
             var entry = new TimeEntry
             {
@@ -94,11 +93,11 @@ namespace JurisFlow.Server.Controllers
                 Type = "time",
                 ActivityCode = NormalizeUtbmsCode(dto.ActivityCode),
                 TaskCode = NormalizeUtbmsCode(dto.TaskCode),
-                ApprovalStatus = isApprover ? "Approved" : "Pending",
+                ApprovalStatus = "Pending",
                 SubmittedBy = userId,
                 SubmittedAt = DateTime.UtcNow,
-                ApprovedBy = isApprover ? userId : null,
-                ApprovedAt = isApprover ? DateTime.UtcNow : null,
+                ApprovedBy = null,
+                ApprovedAt = null,
                 UpdatedAt = DateTime.UtcNow
             };
 
@@ -212,7 +211,7 @@ namespace JurisFlow.Server.Controllers
 
         private bool IsApprover()
         {
-            return HasAnyRole("Admin", "Partner", "Associate", "Attorney", "Accountant");
+            return HasAnyRole("Admin", "Partner", "Manager", "Associate", "Attorney", "Accountant");
         }
 
         private bool HasAnyRole(params string[] roles)
