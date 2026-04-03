@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.DTOs;
+using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 
 namespace JurisFlow.Server.Controllers
@@ -62,25 +63,22 @@ namespace JurisFlow.Server.Controllers
                 var totalStopwatch = Stopwatch.StartNew();
                 var response = new BootstrapResponse();
                 var isPrivileged = _matterAccess.IsPrivileged(User);
-                var readableMatters = await _matterAccess
-                    .ApplyReadableScope(_context.Matters.AsNoTracking(), User)
-                    .OrderByDescending(m => m.OpenDate)
-                    .ToListAsync();
-                await _matterClientLinks.PopulateRelatedClientsAsync(readableMatters, HttpContext.RequestAborted);
-                var readableMatterIds = readableMatters
-                    .Select(m => m.Id)
-                    .ToList();
-                var readableMatterMap = readableMatters.ToDictionary(m => m.Id, StringComparer.Ordinal);
-                var billingReadableMatterIds = isPrivileged
-                    ? readableMatterIds
-                    : await _matterAccess
-                        .ApplyBillingReadableScope(_context.Matters.AsNoTracking(), User)
-                        .Select(m => m.Id)
-                        .ToListAsync();
+                List<Matter> readableMatters = new();
+                List<string> readableMatterIds = new();
+                Dictionary<string, Matter> readableMatterMap = new(StringComparer.Ordinal);
 
                 if (includeInitial)
                 {
                     var initialStopwatch = Stopwatch.StartNew();
+                    readableMatters = await _matterAccess
+                        .ApplyReadableScope(_context.Matters.AsNoTracking(), User)
+                        .OrderByDescending(m => m.OpenDate)
+                        .ToListAsync();
+                    await _matterClientLinks.PopulateRelatedClientsAsync(readableMatters, HttpContext.RequestAborted);
+                    readableMatterIds = readableMatters
+                        .Select(m => m.Id)
+                        .ToList();
+                    readableMatterMap = readableMatters.ToDictionary(m => m.Id, StringComparer.Ordinal);
                     response.Matters = readableMatters;
 
                     var tasksQuery = _context.Tasks.AsNoTracking().AsQueryable();
@@ -155,6 +153,32 @@ namespace JurisFlow.Server.Controllers
                 if (includeDeferred)
                 {
                     var deferredStopwatch = Stopwatch.StartNew();
+                    if (!includeInitial)
+                    {
+                        var readableMatterAccessRows = await _matterAccess
+                            .ApplyReadableScope(_context.Matters.AsNoTracking(), User)
+                            .Select(m => new Matter
+                            {
+                                Id = m.Id,
+                                CreatedByUserId = m.CreatedByUserId,
+                                ShareWithFirm = m.ShareWithFirm,
+                                ShareNotesWithFirm = m.ShareNotesWithFirm
+                            })
+                            .ToListAsync();
+
+                        readableMatterIds = readableMatterAccessRows
+                            .Select(m => m.Id)
+                            .ToList();
+                        readableMatterMap = readableMatterAccessRows.ToDictionary(m => m.Id, StringComparer.Ordinal);
+                    }
+
+                    var billingReadableMatterIds = isPrivileged
+                        ? readableMatterIds
+                        : await _matterAccess
+                            .ApplyBillingReadableScope(_context.Matters.AsNoTracking(), User)
+                            .Select(m => m.Id)
+                            .ToListAsync();
+
                     var expensesQuery = _context.Expenses.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {

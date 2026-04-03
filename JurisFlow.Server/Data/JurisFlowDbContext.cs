@@ -167,6 +167,12 @@ namespace JurisFlow.Server.Data
                 .IsUnique();
             modelBuilder.Entity<Client>()
                 .HasIndex("TenantId", nameof(Client.CreatedAt));
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.OpenDate));
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.CreatedByUserId), nameof(Matter.OpenDate));
+            modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.ShareWithFirm), nameof(Matter.OpenDate));
             modelBuilder.Entity<MatterClientLink>()
                 .HasIndex("TenantId", nameof(MatterClientLink.MatterId), nameof(MatterClientLink.ClientId))
                 .IsUnique();
@@ -183,20 +189,30 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<JurisFlow.Server.Models.Task>()
                 .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.CreatedAt));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.MatterId), nameof(JurisFlow.Server.Models.Task.CreatedAt));
             modelBuilder.Entity<CalendarEvent>()
                 .HasIndex("TenantId", nameof(CalendarEvent.Date));
+            modelBuilder.Entity<CalendarEvent>()
+                .HasIndex("TenantId", nameof(CalendarEvent.MatterId), nameof(CalendarEvent.Date));
             modelBuilder.Entity<Lead>()
                 .HasIndex("TenantId", nameof(Lead.CreatedAt));
             modelBuilder.Entity<Document>()
                 .HasIndex("TenantId", nameof(Document.CreatedAt));
             modelBuilder.Entity<Document>()
                 .HasIndex("TenantId", nameof(Document.MatterId), nameof(Document.CreatedAt));
+            modelBuilder.Entity<Document>()
+                .HasIndex("TenantId", nameof(Document.UploadedBy), nameof(Document.CreatedAt));
 
             modelBuilder.Entity<StaffMessage>()
                 .HasIndex(m => new { m.SenderId, m.RecipientId, m.CreatedAt });
 
             modelBuilder.Entity<Notification>()
                 .HasIndex(n => new { n.UserId, n.ClientId, n.CreatedAt });
+            modelBuilder.Entity<Notification>()
+                .HasIndex("TenantId", nameof(Notification.UserId), nameof(Notification.CreatedAt));
+            modelBuilder.Entity<Notification>()
+                .HasIndex("TenantId", nameof(Notification.ClientId), nameof(Notification.CreatedAt));
 
             modelBuilder.Entity<ClientMessage>()
                 .HasIndex(m => new { m.ClientId, m.CreatedAt });
@@ -454,6 +470,8 @@ namespace JurisFlow.Server.Data
                 .HasIndex(i => i.Number);
             modelBuilder.Entity<Invoice>()
                 .HasIndex("TenantId", nameof(Invoice.CreatedAt));
+            modelBuilder.Entity<Invoice>()
+                .HasIndex("TenantId", nameof(Invoice.MatterId), nameof(Invoice.CreatedAt));
 
             modelBuilder.Entity<InvoiceLineItem>()
                 .HasIndex(li => li.InvoiceId);
@@ -464,6 +482,8 @@ namespace JurisFlow.Server.Data
                 .HasIndex("TenantId", nameof(TimeEntry.Date));
             modelBuilder.Entity<TimeEntry>()
                 .HasIndex("TenantId", nameof(TimeEntry.MatterId), nameof(TimeEntry.Date));
+            modelBuilder.Entity<TimeEntry>()
+                .HasIndex("TenantId", nameof(TimeEntry.SubmittedBy), nameof(TimeEntry.Date));
 
             modelBuilder.Entity<Expense>()
                 .HasIndex(e => new { e.MatterId, e.Date });
@@ -471,6 +491,8 @@ namespace JurisFlow.Server.Data
                 .HasIndex("TenantId", nameof(Expense.Date));
             modelBuilder.Entity<Expense>()
                 .HasIndex("TenantId", nameof(Expense.MatterId), nameof(Expense.Date));
+            modelBuilder.Entity<Expense>()
+                .HasIndex("TenantId", nameof(Expense.SubmittedBy), nameof(Expense.Date));
 
             modelBuilder.Entity<Holiday>()
                 .HasIndex(h => new { h.Date, h.Jurisdiction });
