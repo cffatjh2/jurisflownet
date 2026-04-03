@@ -579,21 +579,6 @@ using (var scope = app.Services.CreateScope())
             context.SaveChanges();
         }
 
-        if (!context.BillingSettings.Any())
-        {
-            context.BillingSettings.Add(new BillingSettings());
-        }
-
-        if (!context.FirmSettings.Any())
-        {
-            context.FirmSettings.Add(new FirmSettings
-            {
-                FirmName = "JurisFlow Legal"
-            });
-        }
-
-        context.SaveChanges();
-
         if (!context.RetentionPolicies.Any())
         {
             context.RetentionPolicies.AddRange(new[]

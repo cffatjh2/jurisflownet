@@ -13,6 +13,7 @@ const ZoomAuthCallback = React.lazy(() => import('./components/ZoomAuthCallback'
 const IntegrationOAuthCallback = React.lazy(() => import('./components/IntegrationOAuthCallback'));
 const ForgotPassword = React.lazy(() => import('./components/ForgotPassword'));
 const ResetPassword = React.lazy(() => import('./components/ResetPassword'));
+const AttorneyRegister = React.lazy(() => import('./components/AttorneyRegister'));
 const ClientPortal = React.lazy(() => import('./components/client/ClientPortal'));
 const AuthenticatedShell = React.lazy(() => import('./components/AuthenticatedShell'));
 
@@ -78,6 +79,10 @@ const AppContent = () => {
 
   if (window.location.pathname === '/forgot-password') {
     return renderLazy(ForgotPassword);
+  }
+
+  if (window.location.pathname === '/register') {
+    return renderLazy(AttorneyRegister);
   }
 
   if (window.location.pathname === '/reset-password') {

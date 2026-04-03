@@ -46,14 +46,14 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("billing")]
         public async Task<IActionResult> GetBillingSettings()
         {
-            var settings = await GetOrCreateBillingSettingsAsync();
+            var settings = await GetBillingSettingsForReadAsync();
             return Ok(settings);
         }
 
         [HttpPut("billing")]
         public async Task<IActionResult> UpdateBillingSettings([FromBody] BillingSettings dto)
         {
-            var settings = await GetOrCreateBillingSettingsAsync();
+            var settings = await GetBillingSettingsForWriteAsync();
 
             settings.DefaultHourlyRate = dto.DefaultHourlyRate;
             settings.PartnerRate = dto.PartnerRate;
@@ -80,14 +80,14 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("firm")]
         public async Task<IActionResult> GetFirmSettings()
         {
-            var settings = await GetOrCreateFirmSettingsAsync();
+            var settings = await GetFirmSettingsForReadAsync();
             return Ok(settings);
         }
 
         [HttpPut("firm")]
         public async Task<IActionResult> UpdateFirmSettings([FromBody] FirmSettings dto)
         {
-            var settings = await GetOrCreateFirmSettingsAsync();
+            var settings = await GetFirmSettingsForWriteAsync();
 
             settings.FirmName = dto.FirmName;
             settings.TaxId = dto.TaxId;
@@ -109,7 +109,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("integrations")]
         public async Task<IActionResult> GetIntegrations()
         {
-            var settings = await GetOrCreateFirmSettingsAsync();
+            var settings = await GetFirmSettingsForWriteAsync();
             await MigrateLegacyIntegrationsIfNeededAsync(settings);
             var items = await GetIntegrationsFromStoreAsync();
             return Ok(items);
@@ -141,7 +141,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPut("integrations")]
         public async Task<IActionResult> UpdateIntegrations([FromBody] IntegrationsUpdateDto dto)
         {
-            var settings = await GetOrCreateFirmSettingsAsync();
+            var settings = await GetFirmSettingsForWriteAsync();
             await MigrateLegacyIntegrationsIfNeededAsync(settings);
 
             var items = dto?.Items ?? new List<IntegrationItemDto>();
@@ -230,7 +230,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Unsupported integration provider." });
             }
 
-            var settings = await GetOrCreateFirmSettingsAsync();
+            var settings = await GetFirmSettingsForWriteAsync();
             await MigrateLegacyIntegrationsIfNeededAsync(settings);
 
             var normalizedProviderKey = provider.ProviderKey;
@@ -441,24 +441,40 @@ namespace JurisFlow.Server.Controllers
             return NoContent();
         }
 
-        private async Task<BillingSettings> GetOrCreateBillingSettingsAsync()
+        private async Task<BillingSettings> GetBillingSettingsForReadAsync()
+        {
+            return await _context.BillingSettings.FirstOrDefaultAsync() ?? new BillingSettings();
+        }
+
+        private async Task<BillingSettings> GetBillingSettingsForWriteAsync()
         {
             var settings = await _context.BillingSettings.FirstOrDefaultAsync();
             if (settings == null)
             {
-                settings = new BillingSettings();
+                settings = new BillingSettings
+                {
+                    Id = Guid.NewGuid().ToString()
+                };
                 _context.BillingSettings.Add(settings);
                 await _context.SaveChangesAsync();
             }
             return settings;
         }
 
-        private async Task<FirmSettings> GetOrCreateFirmSettingsAsync()
+        private async Task<FirmSettings> GetFirmSettingsForReadAsync()
+        {
+            return await _context.FirmSettings.FirstOrDefaultAsync() ?? new FirmSettings();
+        }
+
+        private async Task<FirmSettings> GetFirmSettingsForWriteAsync()
         {
             var settings = await _context.FirmSettings.FirstOrDefaultAsync();
             if (settings == null)
             {
-                settings = new FirmSettings();
+                settings = new FirmSettings
+                {
+                    Id = Guid.NewGuid().ToString()
+                };
                 _context.FirmSettings.Add(settings);
                 await _context.SaveChangesAsync();
             }

@@ -199,6 +199,84 @@ public class InvoiceWorkflowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task CreateInvoiceSucceedsWhenLegacyTenantlessSettingsRowsExist()
+    {
+        var clientId = Guid.NewGuid().ToString();
+        var matterId = Guid.NewGuid().ToString();
+        var email = $"invoice-legacy-settings-{Guid.NewGuid():N}@example.com";
+
+        await SeedAsync(async db =>
+        {
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Legacy Settings Client",
+                Email = email,
+                NormalizedEmail = EmailAddressNormalizer.Normalize(email),
+                Type = "Individual",
+                Status = "Active"
+            });
+
+            db.Matters.Add(new Matter
+            {
+                Id = matterId,
+                CaseNumber = "INV-LEGACY-1",
+                Name = "Legacy Invoice Matter",
+                PracticeArea = "CivilLitigation",
+                Status = "Open",
+                FeeStructure = "Hourly",
+                ResponsibleAttorney = "Admin User",
+                ClientId = clientId
+            });
+
+            await db.SaveChangesAsync();
+
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO "BillingSettings" ("Id", "TenantId", "DefaultHourlyRate", "PartnerRate", "AssociateRate", "ParalegalRate", "BillingIncrement", "MinimumTimeEntry", "RoundingRule", "DefaultPaymentTerms", "InvoicePrefix", "DefaultTaxRate", "LedesEnabled", "UtbmsCodesRequired", "EvergreenRetainerMinimum", "TrustBalanceAlerts", "UpdatedAt")
+                VALUES ('default', NULL, 350, 500, 300, 150, 6, 6, 'up', 30, 'INV-', 0, 0, 0, 5000, 1, CURRENT_TIMESTAMP);
+                """);
+
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO "FirmSettings" ("Id", "TenantId", "FirmName", "UpdatedAt")
+                VALUES ('default', NULL, 'Legacy Firm Settings', CURRENT_TIMESTAMP);
+                """);
+        });
+
+        var payload = JsonContent.Create(new
+        {
+            clientId,
+            matterId,
+            status = "Draft",
+            dueDate = DateTime.UtcNow.AddDays(14),
+            lineItems = new[]
+            {
+                new
+                {
+                    type = "time",
+                    description = "Prepare correspondence",
+                    quantity = 1m,
+                    rate = 250m,
+                    activityCode = "A101"
+                }
+            }
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/invoices", "admin-1", "Admin", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var invoice = await db.Invoices.FirstOrDefaultAsync(i => i.MatterId == matterId);
+        Assert.NotNull(invoice);
+        Assert.Equal(clientId, invoice!.ClientId);
+    }
+
+    [Fact]
     public async Task SendInvoiceMarksInvoiceSentAndQueuesClientNotification()
     {
         var clientId = Guid.NewGuid().ToString();

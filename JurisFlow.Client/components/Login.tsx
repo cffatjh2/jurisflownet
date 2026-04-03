@@ -14,6 +14,7 @@ const signupPlans = [
     name: 'Starter',
     price: '$39',
     period: '/mo',
+    checkoutUrl: 'https://jurisflow.lemonsqueezy.com/checkout/buy/9e1bb316-525c-499c-84f6-a57a40c3a552',
     note: 'Gemini not included',
     features: [
       'Core modules',
@@ -26,6 +27,7 @@ const signupPlans = [
     name: 'All Inclusive',
     price: '$59',
     period: '/mo',
+    checkoutUrl: 'https://jurisflow.lemonsqueezy.com/checkout/buy/f4300f95-fa9a-4f81-82bc-f722552bb5c5',
     note: 'Everything included',
     features: [
       'All modules',
@@ -93,37 +95,24 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
     setCheckoutPlanId(planId);
 
     try {
+      const selectedPlan = signupPlans.find((plan) => plan.id === planId);
+      if (!selectedPlan) {
+        throw new Error('Plan could not be found.');
+      }
+
       const trimmedTenant = tenantSlug.trim();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (trimmedTenant) {
-        headers['X-Tenant-Slug'] = trimmedTenant;
-      }
-
-      const response = await fetch('/api/public/subscriptions/checkout', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          planId,
-          email: email.trim() || undefined,
-          firmCode: trimmedTenant || undefined
-        })
-      });
-
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(payload?.message || 'Checkout could not be started.');
-      }
-
-      const checkoutUrl = typeof payload?.checkoutUrl === 'string' ? payload.checkoutUrl : '';
-      if (!checkoutUrl) {
-        throw new Error('Checkout URL was not returned.');
-      }
-
       if (typeof window !== 'undefined') {
+        localStorage.setItem('pending_signup_plan', planId);
+        localStorage.setItem('pending_signup_email', email.trim());
+        localStorage.setItem('pending_signup_tenant', trimmedTenant);
+        localStorage.setItem('pending_signup_name', '');
+        localStorage.setItem('pending_signup_firm_name', '');
         if (trimmedTenant) {
           localStorage.setItem('tenant_slug', trimmedTenant);
         }
-        window.location.href = checkoutUrl;
+
+        const checkoutUrl = new URL(selectedPlan.checkoutUrl);
+        window.location.href = checkoutUrl.toString();
       }
     } catch (err) {
       setSignupError(getErrorMessage(err, 'Plan redirect failed.'));

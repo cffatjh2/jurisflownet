@@ -6,7 +6,7 @@ namespace JurisFlow.Server.Models
     public class FirmSettings
     {
         [Key]
-        public string Id { get; set; } = "default";
+        public string Id { get; set; } = Guid.NewGuid().ToString();
 
         public string FirmName { get; set; } = "Your Law Firm";
         public string? TaxId { get; set; }

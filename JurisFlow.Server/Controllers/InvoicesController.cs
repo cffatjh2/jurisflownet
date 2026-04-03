@@ -215,16 +215,11 @@ namespace JurisFlow.Server.Controllers
                 RecalculateTotals(invoice);
 
                 _context.Invoices.Add(invoice);
-                try
+                if (!await TryPersistInvoiceAsync(invoice, requestedMatterId, resolvedClientId))
                 {
-                    await _context.SaveChangesAsync();
-                }
-                catch (DbUpdateException ex)
-                {
-                    _logger.LogError(ex, "Invoice create failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
                     return BadRequest(new
                     {
-                        message = "Invoice could not be created with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
+                        message = "Invoice could not be created because this tenant still has legacy billing bindings. The system retried without entity and office bindings, but the save still failed."
                     });
                 }
                 await TryAuditAsync("invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
@@ -668,19 +663,43 @@ namespace JurisFlow.Server.Controllers
             }
         }
 
+        private async Task<bool> TryPersistInvoiceAsync(Invoice invoice, string? requestedMatterId, string resolvedClientId)
+        {
+            try
+            {
+                await _context.SaveChangesAsync();
+                return true;
+            }
+            catch (DbUpdateException ex) when (!string.IsNullOrWhiteSpace(invoice.EntityId) || !string.IsNullOrWhiteSpace(invoice.OfficeId))
+            {
+                _logger.LogWarning(ex, "Invoice create failed with entity/office binding for matter {MatterId} client {ClientId}. Retrying without entity/office.", requestedMatterId, resolvedClientId);
+                invoice.EntityId = null;
+                invoice.OfficeId = null;
+
+                try
+                {
+                    await _context.SaveChangesAsync();
+                    return true;
+                }
+                catch (DbUpdateException retryEx)
+                {
+                    _logger.LogError(retryEx, "Invoice create retry failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
+                    return false;
+                }
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Invoice create failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
+                return false;
+            }
+        }
+
         private async Task<BillingSettings> GetBillingSettingsAsync()
         {
             try
             {
                 var settings = await _context.BillingSettings.FirstOrDefaultAsync();
-                if (settings == null)
-                {
-                    settings = new BillingSettings();
-                    _context.BillingSettings.Add(settings);
-                    await _context.SaveChangesAsync();
-                }
-
-                return settings;
+                return settings ?? new BillingSettings();
             }
             catch (Exception ex)
             {
@@ -694,14 +713,7 @@ namespace JurisFlow.Server.Controllers
             try
             {
                 var settings = await _context.FirmSettings.FirstOrDefaultAsync();
-                if (settings == null)
-                {
-                    settings = new FirmSettings();
-                    _context.FirmSettings.Add(settings);
-                    await _context.SaveChangesAsync();
-                }
-
-                return settings;
+                return settings ?? new FirmSettings();
             }
             catch (Exception ex)
             {

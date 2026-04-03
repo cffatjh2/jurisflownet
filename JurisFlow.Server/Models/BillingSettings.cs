@@ -6,7 +6,7 @@ namespace JurisFlow.Server.Models
     public class BillingSettings
     {
         [Key]
-        public string Id { get; set; } = "default";
+        public string Id { get; set; } = Guid.NewGuid().ToString();
 
         public double DefaultHourlyRate { get; set; } = 350;
         public double PartnerRate { get; set; } = 500;
