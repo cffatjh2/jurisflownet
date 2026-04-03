@@ -204,7 +204,16 @@ const MainLayout = () => {
   }, []);
 
   useEffect(() => {
-    const preloadTabs: ActiveTab[] = ['matters', 'tasks', 'documents', 'calendar', 'communications', 'billing', 'crm'];
+    const connection = (navigator as any)?.connection;
+    const effectiveType = String(connection?.effectiveType || '').toLowerCase();
+    const saveData = Boolean(connection?.saveData);
+    const shouldLimitPreload = saveData || effectiveType === 'slow-2g' || effectiveType === '2g' || effectiveType === '3g';
+
+    if (shouldLimitPreload) {
+      return;
+    }
+
+    const preloadTabs: ActiveTab[] = ['matters', 'tasks', 'calendar', 'communications'];
     let disposed = false;
     let timer: number | null = null;
     let idleId: number | null = null;
@@ -221,9 +230,9 @@ const MainLayout = () => {
     };
 
     if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-      idleId = (window as any).requestIdleCallback(() => preloadSequentially(), { timeout: 2000 });
+      idleId = (window as any).requestIdleCallback(() => preloadSequentially(), { timeout: 2500 });
     } else {
-      timer = window.setTimeout(preloadSequentially, 900);
+      timer = window.setTimeout(preloadSequentially, 1400);
     }
 
     return () => {

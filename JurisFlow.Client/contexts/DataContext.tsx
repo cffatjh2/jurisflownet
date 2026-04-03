@@ -68,6 +68,87 @@ interface DataContextType {
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 type MatterWithClientId = Matter & { clientId?: string; relatedClientIds?: string[]; relatedClients?: Client[] };
+const DATA_BOOTSTRAP_CACHE_PREFIX = 'jf_bootstrap_cache';
+const DATA_BOOTSTRAP_CACHE_TTL_MS = 2 * 60 * 1000;
+
+type CachedBootstrapState = {
+  matters: Matter[];
+  clients: Client[];
+  timeEntries: TimeEntry[];
+  expenses: Expense[];
+  events: CalendarEvent[];
+  invoices: Invoice[];
+  leads: Lead[];
+  tasks: Task[];
+  taskTemplates: TaskTemplate[];
+  notifications: AppNotification[];
+};
+
+const getBootstrapCacheKey = (userId?: string | null) => {
+  if (typeof window === 'undefined' || !userId) return null;
+  const tenantSlug = localStorage.getItem('tenant_slug') || 'default';
+  return `${DATA_BOOTSTRAP_CACHE_PREFIX}:${tenantSlug}:${userId}`;
+};
+
+const readBootstrapCache = (cacheKey: string): CachedBootstrapState | null => {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = sessionStorage.getItem(cacheKey);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as { updatedAt?: number; payload?: CachedBootstrapState } | null;
+    if (!parsed?.updatedAt || !parsed?.payload) {
+      sessionStorage.removeItem(cacheKey);
+      return null;
+    }
+
+    if (Date.now() - parsed.updatedAt > DATA_BOOTSTRAP_CACHE_TTL_MS) {
+      sessionStorage.removeItem(cacheKey);
+      return null;
+    }
+
+    return parsed.payload;
+  } catch {
+    sessionStorage.removeItem(cacheKey);
+    return null;
+  }
+};
+
+const writeBootstrapCache = (cacheKey: string, payload: CachedBootstrapState) => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    sessionStorage.setItem(cacheKey, JSON.stringify({
+      updatedAt: Date.now(),
+      payload
+    }));
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const runWhenBrowserIdle = (callback: () => void, timeout = 800) => {
+  if (typeof window === 'undefined') {
+    callback();
+    return () => undefined;
+  }
+
+  const requestIdle = (window as any).requestIdleCallback as ((cb: () => void, options?: { timeout: number }) => number) | undefined;
+  const cancelIdle = (window as any).cancelIdleCallback as ((id: number) => void) | undefined;
+
+  if (typeof requestIdle === 'function') {
+    const idleId = requestIdle(callback, { timeout });
+    return () => {
+      if (typeof cancelIdle === 'function') {
+        cancelIdle(idleId);
+      }
+    };
+  }
+
+  const timerId = window.setTimeout(callback, timeout);
+  return () => window.clearTimeout(timerId);
+};
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const { isAuthenticated, user } = useAuth();
@@ -363,8 +444,28 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     };
   };
 
+  const normalizeInvoice = (invoice: any): Invoice => {
+    const amount = Number(invoice?.amount ?? invoice?.total ?? 0);
+    const amountPaid = Number(invoice?.amountPaid ?? 0);
+    const balance = Number(invoice?.balance ?? Math.max(0, amount - amountPaid));
+
+    return {
+      ...invoice,
+      subtotal: Number(invoice?.subtotal ?? 0),
+      taxAmount: Number(invoice?.taxAmount ?? invoice?.tax ?? 0),
+      discount: Number(invoice?.discount ?? 0),
+      amount,
+      amountPaid,
+      balance,
+      issueDate: invoice?.issueDate ?? invoice?.createdAt ?? new Date().toISOString(),
+      dueDate: invoice?.dueDate ?? invoice?.issueDate ?? invoice?.createdAt ?? new Date().toISOString(),
+      lineItems: Array.isArray(invoice?.lineItems) ? invoice.lineItems : undefined,
+      payments: Array.isArray(invoice?.payments) ? invoice.payments : undefined
+    } as Invoice;
+  };
+
   const hydrateInvoicesWithClients = (invoiceItems: Invoice[], clientItems: Client[]): Invoice[] => {
-    const safeInvoiceItems = sanitizeInvoices(invoiceItems);
+    const safeInvoiceItems = sanitizeInvoices(invoiceItems).map((invoice) => normalizeInvoice(invoice));
     if (safeInvoiceItems.length === 0) return [];
 
     const safeClientItems = sanitizeClients(clientItems);
@@ -429,7 +530,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     if (Array.isArray(payload.leads)) setLeads(sanitizeLeads(payload.leads));
     if (Array.isArray(payload.events)) setEvents(hasMatterSource ? filterByVisibleMatter(payload.events, nextMatters) : payload.events);
     if (Array.isArray(payload.invoices)) {
-      const nextInvoices = hasMatterSource ? filterByVisibleMatter(payload.invoices, nextMatters) : payload.invoices;
+      const normalizedInvoices = sanitizeInvoices(payload.invoices).map((invoice) => normalizeInvoice(invoice));
+      const nextInvoices = hasMatterSource ? filterByVisibleMatter(normalizedInvoices, nextMatters) : normalizedInvoices;
       setInvoices(incomingClients
         ? hydrateInvoicesWithClients(nextInvoices, incomingClients)
         : hydrateInvoicesWithClients(nextInvoices, clientsRef.current));
@@ -445,6 +547,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   // --- INITIAL LOAD ---
   useEffect(() => {
     let disposed = false;
+    let cancelDeferredLoad: (() => void) | null = null;
 
     const loadInitialFallback = async () => {
       const [m, t, te, e, n] = await Promise.all([
@@ -490,7 +593,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
       }
       if (Array.isArray(l)) setLeads(sanitizeLeads(l));
-      if (Array.isArray(i)) setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(i, visibleMatters), clientsRef.current));
+      if (Array.isArray(i)) {
+        const normalizedInvoices = sanitizeInvoices(i).map((invoice) => normalizeInvoice(invoice));
+        setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(normalizedInvoices, visibleMatters), clientsRef.current));
+      }
       if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
       console.log('Deferred data loaded via endpoint fallback');
@@ -502,6 +608,15 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         if (!isAuthenticated || !token) {
           clearLoadedData();
           return;
+        }
+
+        const cacheKey = getBootstrapCacheKey(user?.id);
+        if (cacheKey) {
+          const cachedPayload = readBootstrapCache(cacheKey);
+          if (cachedPayload) {
+            applyBootstrapPayload(cachedPayload);
+            console.log('Hydrated initial data from session cache');
+          }
         }
 
         console.log('Fetching initial data from API...');
@@ -542,17 +657,21 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           }
         };
 
-        const initialPromise = loadInitial();
-        const deferredPromise = loadDeferred();
-
-        await initialPromise;
+        await loadInitial();
         if (disposed) return;
-
-        void deferredPromise;
+        cancelDeferredLoad = runWhenBrowserIdle(() => {
+          if (!disposed) {
+            void loadDeferred();
+          }
+        }, 1000);
       } catch (error) {
         console.warn('Failed to load data from backend.', error);
         if ((!isAuthenticated || !token) && !disposed) {
           clearLoadedData();
+        }
+      } finally {
+        if (disposed && cancelDeferredLoad) {
+          cancelDeferredLoad();
         }
       }
     };
@@ -560,8 +679,50 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     loadData();
     return () => {
       disposed = true;
+      if (cancelDeferredLoad) {
+        cancelDeferredLoad();
+      }
     };
   }, [isAuthenticated, user?.id]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id || typeof window === 'undefined') return;
+
+    const cacheKey = getBootstrapCacheKey(user.id);
+    if (!cacheKey) return;
+
+    const hasCacheableData =
+      matters.length > 0 ||
+      clients.length > 0 ||
+      tasks.length > 0 ||
+      timeEntries.length > 0 ||
+      expenses.length > 0 ||
+      events.length > 0 ||
+      invoices.length > 0 ||
+      leads.length > 0 ||
+      notifications.length > 0 ||
+      taskTemplates.length > 0;
+
+    if (!hasCacheableData) {
+      sessionStorage.removeItem(cacheKey);
+      return;
+    }
+
+    const cachePayload: CachedBootstrapState = {
+      matters,
+      clients,
+      timeEntries,
+      expenses,
+      events,
+      invoices,
+      leads,
+      tasks,
+      taskTemplates,
+      notifications
+    };
+
+    return runWhenBrowserIdle(() => writeBootstrapCache(cacheKey, cachePayload), 900);
+  }, [isAuthenticated, user?.id, matters, clients, timeEntries, expenses, events, invoices, leads, tasks, taskTemplates, notifications]);
 
   useEffect(() => {
     setTasks((prev) => filterByVisibleMatter(prev, matters));
@@ -582,6 +743,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     if (!isAuthenticated) return;
 
     const fetchNotifications = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
       try {
         const notifs = await api.getNotifications(user?.id);
         if (notifs) setNotifications(notifs);
@@ -593,9 +758,19 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     // Initial fetch
     fetchNotifications();
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchNotifications();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     // Poll every 60 seconds
     const interval = setInterval(fetchNotifications, 60000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [isAuthenticated, user?.id]);
 
   // --- EVENT REMINDER SYSTEM ---
@@ -1071,7 +1246,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       if (!hasStringId(newInvoice)) {
         throw new Error('Invoice API returned an empty response.');
       }
-      const hydratedInvoice = hydrateInvoiceClient(newInvoice, new Map(clientsRef.current.map((client) => [client.id, client])));
+      const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(newInvoice), new Map(clientsRef.current.map((client) => [client.id, client])));
       setInvoices(prev => [hydratedInvoice, ...prev.filter(i => i.id !== temp.id)]);
       return hydratedInvoice;
     } catch (e) {
@@ -1087,7 +1262,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     try {
       const updated = await api.updateInvoice(id, data);
       if (updated) {
-        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(updated), new Map(clientsRef.current.map((client) => [client.id, client])));
         setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
         return hydratedInvoice;
       }
@@ -1117,7 +1292,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     try {
       const updated = await api.approveInvoice(id);
       if (updated) {
-        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(updated), new Map(clientsRef.current.map((client) => [client.id, client])));
         setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
         return hydratedInvoice;
       }
@@ -1135,7 +1310,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     try {
       const updated = await api.sendInvoice(id);
       if (updated) {
-        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(updated), new Map(clientsRef.current.map((client) => [client.id, client])));
         setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
         return hydratedInvoice;
       }

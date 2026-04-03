@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Diagnostics;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -58,6 +59,7 @@ namespace JurisFlow.Server.Controllers
 
             try
             {
+                var totalStopwatch = Stopwatch.StartNew();
                 var response = new BootstrapResponse();
                 var isPrivileged = _matterAccess.IsPrivileged(User);
                 var readableMatters = await _matterAccess
@@ -78,6 +80,7 @@ namespace JurisFlow.Server.Controllers
 
                 if (includeInitial)
                 {
+                    var initialStopwatch = Stopwatch.StartNew();
                     response.Matters = readableMatters;
 
                     var tasksQuery = _context.Tasks.AsNoTracking().AsQueryable();
@@ -146,10 +149,12 @@ namespace JurisFlow.Server.Controllers
                         .OrderByDescending(n => n.CreatedAt)
                         .Take(100)
                         .ToListAsync();
+                    _logger.LogInformation("Bootstrap initial scope loaded in {ElapsedMs} ms for user {UserId}", initialStopwatch.ElapsedMilliseconds, userId);
                 }
 
                 if (includeDeferred)
                 {
+                    var deferredStopwatch = Stopwatch.StartNew();
                     var expensesQuery = _context.Expenses.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
@@ -182,7 +187,6 @@ namespace JurisFlow.Server.Controllers
                     }
 
                     var invoices = await invoicesQuery
-                        .Include(i => i.LineItems)
                         .OrderByDescending(i => i.CreatedAt)
                         .ToListAsync();
                     if (!isPrivileged)
@@ -269,8 +273,10 @@ namespace JurisFlow.Server.Controllers
                     }
 
                     response.TaskTemplates = Array.Empty<object>();
+                    _logger.LogInformation("Bootstrap deferred scope loaded in {ElapsedMs} ms for user {UserId}", deferredStopwatch.ElapsedMilliseconds, userId);
                 }
 
+                _logger.LogInformation("Bootstrap scope {Scope} completed in {ElapsedMs} ms for user {UserId}", normalizedScope, totalStopwatch.ElapsedMilliseconds, userId);
                 return Ok(response);
             }
             catch (Exception ex)

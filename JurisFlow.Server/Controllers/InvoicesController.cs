@@ -81,7 +81,6 @@ namespace JurisFlow.Server.Controllers
             }
 
             var invoices = await query
-                .Include(i => i.LineItems)
                 .OrderByDescending(i => i.IssueDate)
                 .ToListAsync();
             await RedactSharedInvoiceNotesAsync(invoices);

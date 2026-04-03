@@ -67,6 +67,7 @@ const Billing: React.FC = () => {
     const [selectedInvoice, setSelectedInvoice] = useState<ExtendedInvoice | null>(null);
     const [billingSettings, setBillingSettings] = useState<BillingSettings | null>(null);
     const [settingsLoading, setSettingsLoading] = useState(false);
+    const [invoiceDetailsLoading, setInvoiceDetailsLoading] = useState(false);
     const [invoicePayorSummary, setInvoicePayorSummary] = useState<any | null>(null);
     const [invoicePayorSummaryLoading, setInvoicePayorSummaryLoading] = useState(false);
     const [payorAging, setPayorAging] = useState<any | null>(null);
@@ -152,6 +153,47 @@ const Billing: React.FC = () => {
             isMounted = false;
         };
     }, [invoices.length]);
+
+    useEffect(() => {
+        let isMounted = true;
+        const loadInvoiceDetails = async () => {
+            if (!showDetailModal || !selectedInvoice?.id) {
+                return;
+            }
+
+            setInvoiceDetailsLoading(true);
+            try {
+                const data = await api.getInvoice(selectedInvoice.id);
+                if (data && isMounted) {
+                    const amount = Number((data as any).amount ?? (data as any).total ?? selectedInvoice.amount ?? 0);
+                    const amountPaid = Number((data as any).amountPaid ?? selectedInvoice.payments?.reduce((sum, p) => sum + p.amount, 0) ?? 0);
+                    const normalizedDetails = {
+                        ...(data as Partial<ExtendedInvoice>),
+                        amount,
+                        subtotal: Number((data as any).subtotal ?? selectedInvoice.subtotal ?? 0),
+                        tax: Number((data as any).tax ?? (data as any).taxAmount ?? selectedInvoice.tax ?? 0),
+                        discount: Number((data as any).discount ?? selectedInvoice.discount ?? 0),
+                        amountPaid,
+                        balance: Number((data as any).balance ?? Math.max(0, amount - amountPaid)),
+                        lineItems: Array.isArray((data as any).lineItems) ? (data as any).lineItems : selectedInvoice.lineItems,
+                        payments: Array.isArray((data as any).payments) ? (data as any).payments : selectedInvoice.payments
+                    };
+                    setSelectedInvoice(prev => prev && prev.id === selectedInvoice.id
+                        ? { ...prev, ...normalizedDetails }
+                        : prev);
+                }
+            } catch (error) {
+                console.error('Failed to load invoice details', error);
+            } finally {
+                if (isMounted) setInvoiceDetailsLoading(false);
+            }
+        };
+
+        void loadInvoiceDetails();
+        return () => {
+            isMounted = false;
+        };
+    }, [showDetailModal, selectedInvoice?.id]);
 
     useEffect(() => {
         let isMounted = true;
@@ -1091,6 +1133,12 @@ const Billing: React.FC = () => {
                                     </div>
                                 </div>
                             </div>
+
+                            {invoiceDetailsLoading && (
+                                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                                    Loading latest invoice details...
+                                </div>
+                            )}
 
                             {/* Payor Allocation Summary (Split Billing) */}
                             <div className="mb-6">
