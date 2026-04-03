@@ -45,8 +45,59 @@ namespace JurisFlow.Server.Services
 
         public async Task<(string? entityId, string? officeId)> ResolveEntityOfficeAsync(string? entityId, string? officeId)
         {
-            var resolvedEntityId = string.IsNullOrWhiteSpace(entityId) ? await GetDefaultEntityIdAsync() : entityId;
-            var resolvedOfficeId = string.IsNullOrWhiteSpace(officeId) ? await GetDefaultOfficeIdAsync(resolvedEntityId) : officeId;
+            var resolvedEntityId = NormalizeId(entityId);
+            var resolvedOfficeId = NormalizeId(officeId);
+
+            if (!string.IsNullOrWhiteSpace(resolvedEntityId))
+            {
+                var entityExists = await _context.FirmEntities
+                    .AsNoTracking()
+                    .AnyAsync(e => e.Id == resolvedEntityId && e.IsActive);
+                if (!entityExists)
+                {
+                    resolvedEntityId = null;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
+            {
+                var office = await _context.Offices
+                    .AsNoTracking()
+                    .Where(o => o.Id == resolvedOfficeId && o.IsActive)
+                    .Select(o => new { o.Id, o.EntityId })
+                    .FirstOrDefaultAsync();
+
+                if (office == null)
+                {
+                    resolvedOfficeId = null;
+                }
+                else if (string.IsNullOrWhiteSpace(resolvedEntityId))
+                {
+                    resolvedEntityId = office.EntityId;
+                }
+                else if (!string.Equals(office.EntityId, resolvedEntityId, StringComparison.Ordinal))
+                {
+                    resolvedOfficeId = null;
+                }
+            }
+
+            resolvedEntityId ??= await GetDefaultEntityIdAsync();
+
+            if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
+            {
+                var officeMatchesEntity = await _context.Offices
+                    .AsNoTracking()
+                    .AnyAsync(o => o.Id == resolvedOfficeId
+                        && o.IsActive
+                        && (string.IsNullOrWhiteSpace(resolvedEntityId) || o.EntityId == resolvedEntityId));
+                if (!officeMatchesEntity)
+                {
+                    resolvedOfficeId = null;
+                }
+            }
+
+            resolvedOfficeId ??= await GetDefaultOfficeIdAsync(resolvedEntityId);
+
             return (resolvedEntityId, resolvedOfficeId);
         }
 
@@ -66,6 +117,11 @@ namespace JurisFlow.Server.Services
             }
 
             return await ResolveEntityOfficeAsync(entityId, officeId);
+        }
+
+        private static string? NormalizeId(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
     }
 }

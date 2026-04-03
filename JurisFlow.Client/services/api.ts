@@ -61,6 +61,11 @@ const getTenantSlug = () => {
     return localStorage.getItem(TENANT_STORAGE_KEY);
 };
 
+const mapInvoiceLineItemsForApi = (lineItems: any[] | undefined) => (lineItems || []).map((lineItem) => ({
+    ...lineItem,
+    serviceDate: lineItem?.serviceDate ?? lineItem?.date ?? null
+}));
+
 const parseResponseBody = async (res: Response) => {
     const contentType = res.headers.get('content-type') || '';
     const text = await res.text();
@@ -798,10 +803,20 @@ export const api = {
     },
     getInvoice: (id: string) => fetchJson(`/invoices/${id}`),
     createInvoice: (data: any) => {
-        const payload = { ...data, clientId: data.client?.id || data.clientId };
+        const payload = {
+            ...data,
+            clientId: data.client?.id || data.clientId,
+            lineItems: mapInvoiceLineItemsForApi(data?.lineItems)
+        };
         return fetchJson('/invoices', { method: 'POST', body: JSON.stringify(payload) });
     },
-    updateInvoice: (id: string, data: any) => fetchJson(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    updateInvoice: (id: string, data: any) => fetchJson(`/invoices/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+            ...data,
+            lineItems: mapInvoiceLineItemsForApi(data?.lineItems)
+        })
+    }),
     deleteInvoice: (id: string) => fetchJson(`/invoices/${id}`, { method: 'DELETE' }),
     exportInvoiceLedes: (id: string) => fetchFile(`/invoices/${id}/ledes`),
 

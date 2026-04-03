@@ -197,6 +197,7 @@ namespace JurisFlow.Server.Controllers
                         Id = Guid.NewGuid().ToString(),
                         Type = li.Type ?? "time",
                         Description = li.Description ?? string.Empty,
+                        ServiceDate = li.ServiceDate,
                         Quantity = li.Quantity ?? 1m,
                         Rate = li.Rate ?? 0m,
                         Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
@@ -212,7 +213,18 @@ namespace JurisFlow.Server.Controllers
             RecalculateTotals(invoice);
 
             _context.Invoices.Add(invoice);
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Invoice create failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
+                return BadRequest(new
+                {
+                    message = "Invoice could not be created with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
+                });
+            }
             await _auditLogger.LogAsync(HttpContext, "invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_create");
 
@@ -303,6 +315,7 @@ namespace JurisFlow.Server.Controllers
                         InvoiceId = invoice.Id,
                         Type = li.Type ?? "time",
                         Description = li.Description ?? string.Empty,
+                        ServiceDate = li.ServiceDate,
                         Quantity = li.Quantity ?? 1m,
                         Rate = li.Rate ?? 0m,
                         Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
@@ -318,7 +331,18 @@ namespace JurisFlow.Server.Controllers
             RecalculateTotals(invoice);
             invoice.UpdatedAt = DateTime.UtcNow;
 
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Invoice update failed for invoice {InvoiceId}.", id);
+                return BadRequest(new
+                {
+                    message = "Invoice could not be updated with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
+                });
+            }
             await _auditLogger.LogAsync(HttpContext, "invoice.update", "Invoice", invoice.Id, $"Status={invoice.Status}, Total={invoice.Total}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_update");
 
@@ -488,7 +512,8 @@ namespace JurisFlow.Server.Controllers
                 var units = li.Quantity;
                 var unitCost = li.Rate;
                 var fee = li.Amount;
-                sb.AppendLine($"{lineNo}|{invoice.IssueDate:yyyyMMdd}|{NormalizeUtbmsCode(li.TaskCode)}|{NormalizeUtbmsCode(li.ActivityCode)}|{NormalizeUtbmsCode(li.ExpenseCode)}|{desc}|{unitCost.ToString("F2", CultureInfo.InvariantCulture)}|{units.ToString("F2", CultureInfo.InvariantCulture)}|{fee.ToString("F2", CultureInfo.InvariantCulture)}");
+                var serviceDate = li.ServiceDate ?? invoice.IssueDate;
+                sb.AppendLine($"{lineNo}|{serviceDate:yyyyMMdd}|{NormalizeUtbmsCode(li.TaskCode)}|{NormalizeUtbmsCode(li.ActivityCode)}|{NormalizeUtbmsCode(li.ExpenseCode)}|{desc}|{unitCost.ToString("F2", CultureInfo.InvariantCulture)}|{units.ToString("F2", CultureInfo.InvariantCulture)}|{fee.ToString("F2", CultureInfo.InvariantCulture)}");
                 lineNo++;
             }
 
@@ -803,6 +828,7 @@ namespace JurisFlow.Server.Controllers
     {
         public string? Type { get; set; }
         public string? Description { get; set; }
+        public DateTime? ServiceDate { get; set; }
         public decimal? Quantity { get; set; }
         public decimal? Rate { get; set; }
         public string? TaskCode { get; set; }

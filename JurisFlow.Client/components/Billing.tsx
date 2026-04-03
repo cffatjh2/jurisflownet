@@ -9,6 +9,7 @@ import PaymentHistory from './PaymentHistory';
 import { useConfirm } from './ConfirmDialog';
 import { api } from '../services/api';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
+import { downloadInvoicePdf } from '../utils/invoicePdf';
 
 // Helper functions for status checks (handles both legacy strings and new enums)
 const normalizeStatus = (status: any) => (status ?? '').toString().toLowerCase();
@@ -31,6 +32,7 @@ interface ExtendedInvoice {
     lineItems?: {
         id: string;
         description: string;
+        date?: string;
         quantity: number;
         rate: number;
         amount: number;
@@ -66,6 +68,7 @@ const Billing: React.FC = () => {
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [selectedInvoice, setSelectedInvoice] = useState<ExtendedInvoice | null>(null);
     const [billingSettings, setBillingSettings] = useState<BillingSettings | null>(null);
+    const [firmSettings, setFirmSettings] = useState<any | null>(null);
     const [settingsLoading, setSettingsLoading] = useState(false);
     const [invoiceDetailsLoading, setInvoiceDetailsLoading] = useState(false);
     const [invoicePayorSummary, setInvoicePayorSummary] = useState<any | null>(null);
@@ -100,9 +103,15 @@ const Billing: React.FC = () => {
         const loadSettings = async () => {
             setSettingsLoading(true);
             try {
-                const data = await api.settings.getBilling();
-                if (data && isMounted) {
-                    setBillingSettings(data);
+                const [billingData, firmData] = await Promise.all([
+                    api.settings.getBilling(),
+                    api.settings.getFirm()
+                ]);
+                if (billingData && isMounted) {
+                    setBillingSettings(billingData);
+                }
+                if (firmData && isMounted) {
+                    setFirmSettings(firmData);
                 }
             } catch (error) {
                 console.error('Failed to load billing settings', error);
@@ -287,28 +296,30 @@ const Billing: React.FC = () => {
             .filter(t => t.matterId === selectedMatterId && !t.billed)
             .filter(t => t.isBillable !== false)
             .filter(t => isEntryApproved(t.approvalStatus))
-            .map(t => ({
-                id: t.id,
-                description: t.description,
-                quantity: t.duration / 60,
-                rate: t.rate,
-                amount: (t.duration / 60) * t.rate,
-                type: 'time' as const,
-                activityCode: t.activityCode,
+              .map(t => ({
+                  id: t.id,
+                  description: t.description,
+                  date: t.date,
+                  quantity: t.duration / 60,
+                  rate: t.rate,
+                  amount: (t.duration / 60) * t.rate,
+                  type: 'time' as const,
+                  activityCode: t.activityCode,
                 taskCode: t.taskCode
             }));
 
         const matExp = expenses
             .filter(e => e.matterId === selectedMatterId && !e.billed)
             .filter(e => isEntryApproved(e.approvalStatus))
-            .map(e => ({
-                id: e.id,
-                description: e.description,
-                quantity: 1,
-                rate: e.amount,
-                amount: e.amount,
-                type: 'expense' as const,
-                expenseCode: e.expenseCode
+              .map(e => ({
+                  id: e.id,
+                  description: e.description,
+                  date: e.date,
+                  quantity: 1,
+                  rate: e.amount,
+                  amount: e.amount,
+                  type: 'expense' as const,
+                  expenseCode: e.expenseCode
             }));
 
         const lineItems = [...matTime, ...matExp];
@@ -408,6 +419,40 @@ const Billing: React.FC = () => {
         } catch (error: any) {
             console.error('Failed to create invoice', error);
             toast.error(error?.message || 'Failed to create invoice.');
+        }
+    };
+
+    const handleDownloadInvoicePdf = async (invoice: ExtendedInvoice) => {
+        try {
+            const [invoiceDetails, latestFirmSettings] = await Promise.all([
+                api.getInvoice(invoice.id),
+                firmSettings ? Promise.resolve(firmSettings) : api.settings.getFirm()
+            ]);
+            const resolvedMatterId = (invoiceDetails as any)?.matterId || invoice.matterId;
+            const resolvedClientId = (invoiceDetails as any)?.clientId || invoice.clientId;
+            const matter = matters.find(item => item.id === resolvedMatterId);
+            const client = invoice.client || clients.find(item => item.id === resolvedClientId);
+            const amount = Number((invoiceDetails as any)?.amount ?? (invoiceDetails as any)?.total ?? invoice.amount ?? 0);
+            const amountPaid = Number((invoiceDetails as any)?.amountPaid ?? 0);
+            await downloadInvoicePdf({
+                ...(invoiceDetails || {}),
+                firm: latestFirmSettings || firmSettings || undefined,
+                client,
+                matter: matter ? {
+                    id: matter.id,
+                    name: matter.name,
+                    caseNumber: matter.caseNumber,
+                    responsibleAttorney: matter.responsibleAttorney
+                } : undefined,
+                amount,
+                total: amount,
+                amountPaid,
+                balance: Number((invoiceDetails as any)?.balance ?? Math.max(0, amount - amountPaid)),
+                lineItems: Array.isArray((invoiceDetails as any)?.lineItems) ? (invoiceDetails as any).lineItems : invoice.lineItems
+            });
+        } catch (error) {
+            console.error('Failed to download invoice PDF', error);
+            toast.error('Failed to download invoice PDF.');
         }
     };
 
@@ -1263,10 +1308,17 @@ const Billing: React.FC = () => {
                             >
                                 Delete Invoice
                             </button>
-                            <div className="flex gap-2">
-                                {billingSettings?.ledesEnabled && (
-                                    <button
-                                        onClick={() => handleExportLedes(selectedInvoice)}
+                              <div className="flex gap-2">
+                                  <button
+                                      onClick={() => handleDownloadInvoicePdf(selectedInvoice)}
+                                      className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200 flex items-center gap-2"
+                                  >
+                                      <Download className="w-4 h-4" />
+                                      Download PDF
+                                  </button>
+                                  {billingSettings?.ledesEnabled && (
+                                      <button
+                                          onClick={() => handleExportLedes(selectedInvoice)}
                                         className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200 flex items-center gap-2"
                                     >
                                         <Download className="w-4 h-4" />

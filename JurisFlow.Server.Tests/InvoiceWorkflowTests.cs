@@ -90,6 +90,115 @@ public class InvoiceWorkflowTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task CreateInvoiceFallsBackToValidEntityOfficeAndPersistsServiceDates()
+    {
+        var clientId = Guid.NewGuid().ToString();
+        var matterId = Guid.NewGuid().ToString();
+        var entityId = Guid.NewGuid().ToString();
+        var officeId = Guid.NewGuid().ToString();
+        var email = $"invoice-create-success-{Guid.NewGuid():N}@example.com";
+        var serviceDate = new DateTime(2026, 4, 3, 0, 0, 0, DateTimeKind.Utc);
+
+        await SeedAsync(async db =>
+        {
+            db.FirmEntities.Add(new FirmEntity
+            {
+                Id = entityId,
+                Name = "Main Entity",
+                IsDefault = true,
+                IsActive = true
+            });
+
+            db.Offices.Add(new Office
+            {
+                Id = officeId,
+                EntityId = entityId,
+                Name = "Main Office",
+                IsDefault = true,
+                IsActive = true
+            });
+
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Portal Client",
+                Email = email,
+                NormalizedEmail = EmailAddressNormalizer.Normalize(email),
+                Type = "Individual",
+                Status = "Active"
+            });
+
+            db.Matters.Add(new Matter
+            {
+                Id = matterId,
+                CaseNumber = "INV-CASE-2",
+                Name = "Invoice Create Matter",
+                PracticeArea = "CivilLitigation",
+                Status = "Open",
+                FeeStructure = "Hourly",
+                ResponsibleAttorney = "Admin User",
+                ClientId = clientId
+            });
+
+            var firmSettings = await db.FirmSettings.FirstOrDefaultAsync();
+            if (firmSettings == null)
+            {
+                db.FirmSettings.Add(new FirmSettings
+                {
+                    FirmName = "Test Firm"
+                });
+            }
+            else
+            {
+                firmSettings.FirmName = "Test Firm";
+            }
+
+            await db.SaveChangesAsync();
+        });
+
+        var payload = JsonContent.Create(new
+        {
+            clientId,
+            matterId,
+            entityId = "stale-entity-id",
+            officeId = "stale-office-id",
+            status = "Draft",
+            dueDate = DateTime.UtcNow.AddDays(14),
+            terms = "Net 14",
+            notes = "Thank you for your business.",
+            lineItems = new[]
+            {
+                new
+                {
+                    type = "time",
+                    description = "Draft motion to compel",
+                    serviceDate,
+                    quantity = 1.5m,
+                    rate = 400m,
+                    activityCode = "A101"
+                }
+            }
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/invoices", "admin-1", "Admin", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var invoice = await db.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.MatterId == matterId);
+        Assert.NotNull(invoice);
+        Assert.Equal(entityId, invoice!.EntityId);
+        Assert.Equal(officeId, invoice.OfficeId);
+        var lineItem = Assert.Single(invoice.LineItems);
+        Assert.Equal(serviceDate, lineItem.ServiceDate);
+    }
+
+    [Fact]
     public async Task SendInvoiceMarksInvoiceSentAndQueuesClientNotification()
     {
         var clientId = Guid.NewGuid().ToString();
@@ -215,5 +324,106 @@ public class InvoiceWorkflowTests : IClassFixture<TestApplicationFactory>
         var invoices = document.RootElement.EnumerateArray().ToList();
         Assert.Single(invoices);
         Assert.Equal("INV-SENT-1", invoices[0].GetProperty("number").GetString());
+    }
+
+    [Fact]
+    public async Task ClientPortalInvoiceDetailsReturnsLineItemsAndFirmSummary()
+    {
+        var clientId = Guid.NewGuid().ToString();
+        var matterId = Guid.NewGuid().ToString();
+        var invoiceId = Guid.NewGuid().ToString();
+        var email = $"invoice-detail-{Guid.NewGuid():N}@example.com";
+        var serviceDate = new DateTime(2026, 4, 3, 0, 0, 0, DateTimeKind.Utc);
+
+        await SeedAsync(async db =>
+        {
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Invoice Client",
+                Email = email,
+                NormalizedEmail = EmailAddressNormalizer.Normalize(email),
+                Type = "Individual",
+                Status = "Active",
+                PortalEnabled = true
+            });
+
+            db.Matters.Add(new Matter
+            {
+                Id = matterId,
+                CaseNumber = "INV-CASE-3",
+                Name = "Invoice Detail Matter",
+                PracticeArea = "CivilLitigation",
+                Status = "Open",
+                FeeStructure = "Hourly",
+                ResponsibleAttorney = "Admin User",
+                ClientId = clientId
+            });
+
+            db.Invoices.Add(new Invoice
+            {
+                Id = invoiceId,
+                Number = "INV-SENT-2",
+                ClientId = clientId,
+                MatterId = matterId,
+                Status = InvoiceStatus.Sent,
+                IssueDate = DateTime.UtcNow,
+                DueDate = DateTime.UtcNow.AddDays(14),
+                Subtotal = 600m,
+                Total = 600m,
+                Balance = 600m,
+                Terms = "Net 14"
+            });
+
+            db.InvoiceLineItems.Add(new InvoiceLineItem
+            {
+                Id = Guid.NewGuid().ToString(),
+                InvoiceId = invoiceId,
+                Type = "time",
+                Description = "Prepare client status report",
+                ServiceDate = serviceDate,
+                Quantity = 1.5m,
+                Rate = 400m,
+                Amount = 600m,
+                ActivityCode = "A105"
+            });
+
+            var firmSettings = await db.FirmSettings.FirstOrDefaultAsync();
+            if (firmSettings == null)
+            {
+                db.FirmSettings.Add(new FirmSettings
+                {
+                    FirmName = "Test Firm",
+                    Address = "100 Main St",
+                    City = "New York",
+                    State = "NY",
+                    ZipCode = "10001",
+                    Phone = "212-555-0100"
+                });
+            }
+            else
+            {
+                firmSettings.FirmName = "Test Firm";
+                firmSettings.Address = "100 Main St";
+                firmSettings.City = "New York";
+                firmSettings.State = "NY";
+                firmSettings.ZipCode = "10001";
+                firmSettings.Phone = "212-555-0100";
+            }
+
+            await db.SaveChangesAsync();
+        });
+
+        var request = CreateRequest(HttpMethod.Get, $"/api/client/invoices/{invoiceId}", clientId, "Client");
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("INV-SENT-2", document.RootElement.GetProperty("number").GetString());
+        Assert.Equal("Test Firm", document.RootElement.GetProperty("firm").GetProperty("name").GetString());
+        var lineItems = document.RootElement.GetProperty("lineItems").EnumerateArray().ToList();
+        Assert.Single(lineItems);
+        Assert.Equal("Prepare client status report", lineItems[0].GetProperty("description").GetString());
     }
 }

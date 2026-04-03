@@ -28,6 +28,7 @@ namespace JurisFlow.Server.Models
         [MaxLength(255)]
         public string Description { get; set; } = string.Empty;
 
+        public DateTime? ServiceDate { get; set; }
         public decimal Quantity { get; set; } = 1;
         public decimal Rate { get; set; } = 0;
         public decimal Amount { get; set; } = 0;

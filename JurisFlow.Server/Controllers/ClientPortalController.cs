@@ -282,6 +282,109 @@ namespace JurisFlow.Server.Controllers
             return Ok(response);
         }
 
+        [HttpGet("invoices/{id}")]
+        public async Task<IActionResult> GetInvoiceDetails(string id)
+        {
+            if (!TryGetClientId(out var clientId)) return Unauthorized();
+
+            var invoice = await TenantScope(_context.Invoices)
+                .Include(i => i.LineItems)
+                .FirstOrDefaultAsync(i => i.Id == id
+                    && i.ClientId == clientId
+                    && (i.Status == InvoiceStatus.Sent
+                        || i.Status == InvoiceStatus.PartiallyPaid
+                        || i.Status == InvoiceStatus.Paid
+                        || i.Status == InvoiceStatus.Overdue
+                        || i.Status == InvoiceStatus.Cancelled
+                        || i.Status == InvoiceStatus.WrittenOff));
+
+            if (invoice == null)
+            {
+                return NotFound();
+            }
+
+            var client = await TenantScope(_context.Clients)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == clientId);
+
+            Matter? matter = null;
+            if (!string.IsNullOrWhiteSpace(invoice.MatterId))
+            {
+                matter = await TenantScope(_context.Matters)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(m => m.Id == invoice.MatterId);
+            }
+
+            var firm = await TenantScope(_context.FirmSettings)
+                .AsNoTracking()
+                .FirstOrDefaultAsync()
+                ?? new FirmSettings();
+
+            return Ok(new
+            {
+                id = invoice.Id,
+                number = invoice.Number,
+                clientId = invoice.ClientId,
+                client = client == null ? null : new
+                {
+                    id = client.Id,
+                    name = client.Name,
+                    email = client.Email,
+                    company = client.Company
+                },
+                matterId = invoice.MatterId,
+                matter = matter == null ? null : new
+                {
+                    id = matter.Id,
+                    name = matter.Name,
+                    caseNumber = matter.CaseNumber,
+                    responsibleAttorney = matter.ResponsibleAttorney
+                },
+                status = NormalizeInvoiceStatus(invoice.Status),
+                issueDate = invoice.IssueDate,
+                dueDate = invoice.DueDate,
+                subtotal = invoice.Subtotal,
+                tax = invoice.Tax,
+                discount = invoice.Discount,
+                amount = invoice.Total,
+                total = invoice.Total,
+                amountPaid = invoice.AmountPaid,
+                balance = invoice.Balance,
+                notes = invoice.Notes,
+                terms = invoice.Terms,
+                createdAt = invoice.CreatedAt,
+                updatedAt = invoice.UpdatedAt,
+                lineItems = invoice.LineItems
+                    .OrderBy(li => li.ServiceDate ?? li.CreatedAt)
+                    .ThenBy(li => li.CreatedAt)
+                    .Select(li => new
+                    {
+                        id = li.Id,
+                        invoiceId = li.InvoiceId,
+                        type = li.Type,
+                        description = li.Description,
+                        date = li.ServiceDate,
+                        quantity = li.Quantity,
+                        rate = li.Rate,
+                        amount = li.Amount,
+                        taskCode = li.TaskCode,
+                        expenseCode = li.ExpenseCode,
+                        activityCode = li.ActivityCode
+                    }),
+                firm = new
+                {
+                    name = firm.FirmName,
+                    taxId = firm.TaxId,
+                    address = firm.Address,
+                    city = firm.City,
+                    state = firm.State,
+                    zipCode = firm.ZipCode,
+                    phone = firm.Phone,
+                    website = firm.Website
+                }
+            });
+        }
+
         [HttpGet("documents")]
         public async Task<IActionResult> GetDocuments()
         {

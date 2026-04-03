@@ -4,6 +4,7 @@ import { useClientAuth } from '../../contexts/ClientAuthContext';
 import PaymentCheckout from '../PaymentCheckout';
 import { CreditCard, Download, CheckCircle } from '../Icons';
 import { clientApi } from '../../services/clientApi';
+import { downloadInvoicePdf } from '../../utils/invoicePdf';
 
 const ClientInvoices: React.FC = () => {
   const { client } = useClientAuth();
@@ -79,6 +80,21 @@ const ClientInvoices: React.FC = () => {
         balance: 0
       };
     }));
+  };
+
+  const handleDownloadInvoice = async (invoice: Invoice) => {
+    try {
+      const details = await clientApi.fetchJson(`/invoices/${invoice.id}`);
+      await downloadInvoicePdf({
+        ...(details || {}),
+        client: (details as any)?.client || invoice.client || client || undefined,
+        firm: (details as any)?.firm || undefined,
+        matter: (details as any)?.matter || undefined,
+        lineItems: Array.isArray((details as any)?.lineItems) ? (details as any).lineItems : invoice.lineItems
+      });
+    } catch (error) {
+      console.error('Error downloading invoice PDF:', error);
+    }
   };
 
   if (loading) {
@@ -180,7 +196,11 @@ const ClientInvoices: React.FC = () => {
                         Pay Now
                       </button>
                     )}
-                    <button className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg">
+                    <button
+                      onClick={() => handleDownloadInvoice(invoice)}
+                      className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                      aria-label={`Download PDF for ${invoice.number}`}
+                    >
                       <Download className="w-4 h-4" />
                     </button>
                   </div>
