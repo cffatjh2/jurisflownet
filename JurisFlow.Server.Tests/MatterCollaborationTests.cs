@@ -127,6 +127,54 @@ public class MatterCollaborationTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task AttorneyCanCreateMatterWithoutSecondaryClients()
+    {
+        var clientId = Guid.NewGuid().ToString();
+
+        await SeedAsync(async db =>
+        {
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Matter Create Client",
+                Email = $"matter-create-{Guid.NewGuid():N}@example.com",
+                NormalizedEmail = $"matter-create-{Guid.NewGuid():N}@example.com",
+                Type = "Individual",
+                Status = "Active"
+            });
+
+            await db.SaveChangesAsync();
+        });
+
+        var payload = JsonContent.Create(new
+        {
+            caseNumber = "CASE-NEW-1001",
+            name = "New Matter",
+            practiceArea = "Civil Litigation",
+            status = "Open",
+            feeStructure = "Hourly",
+            responsibleAttorney = "Fatih Alpaslan",
+            clientId,
+            billableRate = 400
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/matters", "attorney-create-1", "Attorney", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var matter = await db.Matters.AsNoTracking().FirstOrDefaultAsync(m => m.CaseNumber == "CASE-NEW-1001");
+        Assert.NotNull(matter);
+        Assert.Equal(clientId, matter!.ClientId);
+        Assert.Equal("attorney-create-1", matter.CreatedByUserId);
+    }
+
+    [Fact]
     public async Task SecondaryLinkedClientCanCreateAppointmentForSharedMatter()
     {
         var primaryClientId = Guid.NewGuid().ToString();

@@ -84,7 +84,7 @@ namespace JurisFlow.Server.Controllers
                 .OrderByDescending(m => m.OpenDate)
                 .ToListAsync(HttpContext.RequestAborted);
 
-            await _matterClientLinks.PopulateRelatedClientsAsync(matters, HttpContext.RequestAborted);
+            await TryPopulateRelatedClientsAsync(matters, HttpContext.RequestAborted);
             return matters;
         }
 
@@ -100,7 +100,7 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
-            await _matterClientLinks.PopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
+            await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
             return matter;
         }
 
@@ -147,13 +147,16 @@ namespace JurisFlow.Server.Controllers
             await using var tx = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
             _context.Matters.Add(matter);
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
-            await _matterClientLinks.SyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+            if (relatedClientResolution.ClientIds.Count > 0)
+            {
+                await TrySyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+            }
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
             await tx.CommitAsync(HttpContext.RequestAborted);
 
-            await _matterClientLinks.PopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
+            await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
 
-            await _auditLogger.LogAsync(HttpContext, "matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
+            await TryAuditAsync("matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
 
             return CreatedAtAction("GetMatter", new { id = matter.Id }, matter);
         }
@@ -227,17 +230,17 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
             if (relatedClientResolution != null)
             {
-                await _matterClientLinks.SyncRelatedClientsAsync(existingMatter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+                await TrySyncRelatedClientsAsync(existingMatter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
             }
             else
             {
-                await _matterClientLinks.RemovePrimaryClientDuplicatesAsync(existingMatter.Id, resolvedClientId, HttpContext.RequestAborted);
+                await TryRemovePrimaryClientDuplicatesAsync(existingMatter.Id, resolvedClientId, HttpContext.RequestAborted);
             }
 
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
             await tx.CommitAsync(HttpContext.RequestAborted);
 
-            await _auditLogger.LogAsync(HttpContext, "matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
+            await TryAuditAsync("matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
             await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
 
             return NoContent();
@@ -360,7 +363,7 @@ namespace JurisFlow.Server.Controllers
                 _context.Matters.Remove(matter);
                 await _context.SaveChangesAsync(ct);
 
-                await _auditLogger.LogAsync(HttpContext, "matter.delete", "Matter", id, $"Deleted matter {matter.Name}");
+            await TryAuditAsync("matter.delete", "Matter", id, $"Deleted matter {matter.Name}");
                 await tx.CommitAsync(ct);
 
                 return NoContent();
@@ -399,7 +402,7 @@ namespace JurisFlow.Server.Controllers
             matter.Status = "Archived";
             await _context.SaveChangesAsync();
 
-            await _auditLogger.LogAsync(HttpContext, "matter.archive", "Matter", id, "Archived matter");
+            await TryAuditAsync("matter.archive", "Matter", id, "Archived matter");
             await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_archive");
 
             return Ok(matter);
@@ -420,7 +423,7 @@ namespace JurisFlow.Server.Controllers
             matter.Status = "Open"; // Restore to Open
             await _context.SaveChangesAsync();
 
-            await _auditLogger.LogAsync(HttpContext, "matter.restore", "Matter", id, "Restored matter");
+            await TryAuditAsync("matter.restore", "Matter", id, "Restored matter");
             await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_restore");
 
             return Ok(matter);
@@ -654,6 +657,70 @@ namespace JurisFlow.Server.Controllers
                 .AnyAsync(c => c.Id == normalizedClientId);
 
             return clientExists ? normalizedClientId : null;
+        }
+
+        private async Task TrySyncRelatedClientsAsync(string matterId, IReadOnlyCollection<string> relatedClientIds, CancellationToken cancellationToken)
+        {
+            if (relatedClientIds.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await _matterClientLinks.SyncRelatedClientsAsync(matterId, relatedClientIds, cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while syncing related clients for matter {MatterId}. Proceeding without secondary client links.", matterId);
+            }
+        }
+
+        private async Task TryRemovePrimaryClientDuplicatesAsync(string matterId, string primaryClientId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _matterClientLinks.RemovePrimaryClientDuplicatesAsync(matterId, primaryClientId, cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while removing duplicate primary links for matter {MatterId}.", matterId);
+            }
+        }
+
+        private async Task TryPopulateRelatedClientsAsync(IList<Matter> matters, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _matterClientLinks.PopulateRelatedClientsAsync(matters, cancellationToken);
+            }
+            catch (Exception ex) when (IsMissingSchemaException(ex))
+            {
+                foreach (var matter in matters)
+                {
+                    matter.RelatedClientIds = new List<string>();
+                    matter.RelatedClients = new List<Client>();
+                }
+
+                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while loading related clients. Returning matters without secondary client links.");
+            }
+        }
+
+        private Task TryPopulateRelatedClientsAsync(Matter matter, CancellationToken cancellationToken)
+        {
+            return TryPopulateRelatedClientsAsync(new List<Matter> { matter }, cancellationToken);
+        }
+
+        private async Task TryAuditAsync(string action, string entity, string entityId, string? details = null)
+        {
+            try
+            {
+                await _auditLogger.LogAsync(HttpContext, action, entity, entityId, details);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Audit logging failed during matter workflow. Action={Action} EntityId={EntityId}", action, entityId);
+            }
         }
 
         private async Task TryTriggerOutcomeFeePlannerAsync(string matterId, string triggerType)
