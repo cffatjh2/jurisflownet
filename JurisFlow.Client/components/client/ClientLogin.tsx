@@ -32,7 +32,7 @@ const ClientLogin: React.FC = () => {
         setError(result.error || 'Invalid email or password');
       }
     } catch (err) {
-      setError('Invalid email or password');
+      setError(err instanceof Error && err.message ? err.message : 'Invalid email or password');
     } finally {
       setLoading(false);
     }

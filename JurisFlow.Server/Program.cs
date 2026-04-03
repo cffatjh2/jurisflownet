@@ -325,6 +325,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<IClaimsTransformation, RoleAliasClaimsTransformation>();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
+builder.Services.AddScoped<PasswordVerificationService>();
 builder.Services.AddScoped<MatterAccessService>();
 builder.Services.AddScoped<MatterClientLinkService>();
 builder.Services.AddSingleton<OutcomeFeePlannerTriggerQueue>();

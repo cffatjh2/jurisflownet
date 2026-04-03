@@ -164,7 +164,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
             setMfaExpiresAt(result.challengeExpiresAt || '');
             setError('');
           } else if (!result.success) {
-            setError(t('error_login'));
+            setError(result.error || t('error_login'));
           }
         }
       } else {
@@ -177,7 +177,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         }
       }
     } catch (err) {
-      setError(userType === 'attorney' ? t('error_login') : 'Invalid email or password');
+      setError(getErrorMessage(err, userType === 'attorney' ? t('error_login') : 'Invalid email or password'));
     } finally {
       setLoading(false);
     }

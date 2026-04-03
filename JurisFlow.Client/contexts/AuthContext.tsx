@@ -45,6 +45,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
+  const parseLoginError = async (res: Response): Promise<string> => {
+    let message = 'Login failed';
+
+    try {
+      const payload = await res.json();
+      if (typeof payload?.message === 'string' && payload.message.trim()) {
+        message = payload.message.trim();
+      }
+
+      if (res.status === 429 && typeof payload?.retryAfterSeconds === 'number' && payload.retryAfterSeconds > 0) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(payload.retryAfterSeconds));
+        const retryAfterMinutes = Math.ceil(retryAfterSeconds / 60);
+        message = `${message} Try again in about ${retryAfterMinutes} minute${retryAfterMinutes === 1 ? '' : 's'}.`;
+      }
+    } catch {
+      if (res.status === 401) {
+        message = 'Invalid email or password';
+      } else if (res.status === 429) {
+        message = 'Too many failed login attempts. Please retry later.';
+      }
+    }
+
+    return message;
+  };
+
   const storeSession = (session?: { id?: string; expiresAt?: string }) => {
     if (typeof window === 'undefined') return;
     if (!session?.id || !session.expiresAt) return;
@@ -94,7 +119,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         body: JSON.stringify({ email, password })
       });
       if (!res.ok) {
-        return { success: false, error: 'Login failed' };
+        return { success: false, error: await parseLoginError(res) };
       }
       const data = await res.json();
       if (data?.mfaRequired) {

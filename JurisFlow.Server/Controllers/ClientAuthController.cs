@@ -25,6 +25,7 @@ namespace JurisFlow.Server.Controllers
         private readonly SessionTokenService _sessionTokenService;
         private readonly TenantContext _tenantContext;
         private readonly LoginAttemptService _loginAttemptService;
+        private readonly PasswordVerificationService _passwordVerificationService;
         private readonly ILogger<ClientAuthController> _logger;
 
         public ClientAuthController(
@@ -34,6 +35,7 @@ namespace JurisFlow.Server.Controllers
             SessionTokenService sessionTokenService,
             TenantContext tenantContext,
             LoginAttemptService loginAttemptService,
+            PasswordVerificationService passwordVerificationService,
             ILogger<ClientAuthController> logger)
         {
             _context = context;
@@ -42,6 +44,7 @@ namespace JurisFlow.Server.Controllers
             _sessionTokenService = sessionTokenService;
             _tenantContext = tenantContext;
             _loginAttemptService = loginAttemptService;
+            _passwordVerificationService = passwordVerificationService;
             _logger = logger;
         }
 
@@ -52,7 +55,6 @@ namespace JurisFlow.Server.Controllers
         }
 
         [AllowAnonymous]
-        [EnableRateLimiting("ClientAuthLogin")]
         [HttpPost("login")]
         public async Task<IActionResult> ClientLogin([FromBody] ClientLoginDto? loginDto)
         {
@@ -106,7 +108,10 @@ namespace JurisFlow.Server.Controllers
                 return await RejectInvalidLoginAsync(tenantId, email, ipAddress, client.Id);
             }
 
-            bool isPasswordValid = BCrypt.Net.BCrypt.Verify(loginDto.Password, client.PasswordHash);
+            bool isPasswordValid = await _passwordVerificationService.VerifyAsync(
+                loginDto.Password,
+                client.PasswordHash,
+                HttpContext.RequestAborted);
 
             if (!isPasswordValid)
             {
