@@ -37,6 +37,12 @@ namespace JurisFlow.Server.Controllers
             public string? ReturnPath { get; set; }
         }
 
+        public class OAuthRefreshDto
+        {
+            public string RefreshToken { get; set; } = string.Empty;
+            public string? Target { get; set; }
+        }
+
         private sealed class OAuthStatePayload
         {
             public string Provider { get; set; } = string.Empty;
@@ -158,6 +164,70 @@ namespace JurisFlow.Server.Controllers
                 idToken = token.IdToken,
                 target = statePayload?.Target,
                 returnPath = statePayload?.ReturnPath
+            });
+        }
+
+        [HttpPost("google/oauth/refresh")]
+        public async Task<IActionResult> RefreshGoogleToken([FromBody] OAuthRefreshDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.RefreshToken))
+            {
+                return BadRequest(new { message = "Refresh token is required." });
+            }
+
+            var principalId = GetPrincipalId();
+            if (string.IsNullOrWhiteSpace(principalId))
+            {
+                return Unauthorized();
+            }
+
+            var target = NormalizeTarget("google", dto.Target);
+            if (target == null)
+            {
+                return BadRequest(new { message = "Unsupported Google OAuth target." });
+            }
+
+            var clientId = _configuration["Integrations:Google:ClientId"];
+            var clientSecret = _configuration["Integrations:Google:ClientSecret"];
+            if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
+            {
+                return StatusCode(500, new { message = "Google OAuth is not configured." });
+            }
+
+            var form = new Dictionary<string, string>
+            {
+                ["refresh_token"] = dto.RefreshToken,
+                ["client_id"] = clientId,
+                ["client_secret"] = clientSecret,
+                ["grant_type"] = "refresh_token"
+            };
+
+            var client = _httpClientFactory.CreateClient();
+            var response = await client.PostAsync(
+                "https://oauth2.googleapis.com/token",
+                new FormUrlEncodedContent(form));
+
+            var payload = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                return StatusCode((int)response.StatusCode, new { message = "Google token refresh failed.", detail = payload });
+            }
+
+            var token = ExtractTokenResponse(payload);
+            if (string.IsNullOrWhiteSpace(token.AccessToken))
+            {
+                return StatusCode(502, new { message = "Google token refresh returned no access token." });
+            }
+
+            return Ok(new
+            {
+                accessToken = token.AccessToken,
+                refreshToken = string.IsNullOrWhiteSpace(token.RefreshToken) ? dto.RefreshToken : token.RefreshToken,
+                tokenType = token.TokenType,
+                scope = token.Scope,
+                expiresIn = token.ExpiresIn,
+                idToken = token.IdToken,
+                target
             });
         }
 

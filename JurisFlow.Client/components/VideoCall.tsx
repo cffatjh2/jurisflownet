@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from '../contexts/LanguageContext';
 import { Video, Phone, X, Plus } from './Icons';
-import { googleMeetService } from '../services/googleMeetService';
+import { googleMeetService, isGoogleMeetAuthExpiredError } from '../services/googleMeetService';
 import { microsoftTeamsService } from '../services/microsoftTeamsService';
 import { zoomService } from '../services/zoomService';
 import { toast } from './Toast';
-import { getOAuthAccessToken, getPreferredGoogleAccessToken } from '../services/oauthSecurity';
+import { clearOAuthTokens, getOAuthAccessToken, refreshGoogleOAuthAccessToken } from '../services/oauthSecurity';
 
 interface VideoCallRoom {
   id: string;
@@ -30,7 +30,7 @@ const VideoCall: React.FC = () => {
   });
 
   // Check for access tokens
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() => getPreferredGoogleAccessToken());
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() => getOAuthAccessToken('google-meet'));
   const [microsoftAccessToken, setMicrosoftAccessToken] = useState<string | null>(() => getOAuthAccessToken('microsoft-teams'));
   const [zoomAccessToken, setZoomAccessToken] = useState<string | null>(() => getOAuthAccessToken('zoom'));
 
@@ -47,7 +47,7 @@ const VideoCall: React.FC = () => {
     }
 
     // Refresh OAuth token snapshots (migrates legacy localStorage tokens to sessionStorage).
-    setGoogleAccessToken(getPreferredGoogleAccessToken());
+    setGoogleAccessToken(getOAuthAccessToken('google-meet'));
     setMicrosoftAccessToken(getOAuthAccessToken('microsoft-teams'));
     setZoomAccessToken(getOAuthAccessToken('zoom'));
   }, []);
@@ -96,20 +96,38 @@ const VideoCall: React.FC = () => {
       let link = '';
       let meetingData: any = {};
 
+      const createGoogleMeeting = async (accessToken: string) => googleMeetService.createMeeting(
+        accessToken,
+        newRoom.title,
+        startTime,
+        endTime,
+        newRoom.matterId ? `Related to case: ${newRoom.matterId}` : ''
+      );
+
       switch (newRoom.type) {
         case 'google-meet':
           if (!googleAccessToken) {
-            toast.error('Please connect Google account first');
+            toast.error('Please connect Google Meet first');
             setCreating(false);
             return;
           }
-          meetingData = await googleMeetService.createMeeting(
-            googleAccessToken,
-            newRoom.title,
-            startTime,
-            endTime,
-            newRoom.matterId ? `Related to case: ${newRoom.matterId}` : ''
-          );
+          try {
+            meetingData = await createGoogleMeeting(googleAccessToken);
+          } catch (error) {
+            if (!isGoogleMeetAuthExpiredError(error)) {
+              throw error;
+            }
+
+            const refreshedToken = await refreshGoogleOAuthAccessToken('google-meet').catch(() => null);
+            if (!refreshedToken) {
+              clearOAuthTokens('google-meet');
+              setGoogleAccessToken(null);
+              throw new Error('Google Meet connection expired. Please reconnect Google Meet and try again.');
+            }
+
+            setGoogleAccessToken(refreshedToken);
+            meetingData = await createGoogleMeeting(refreshedToken);
+          }
           link = meetingData.meetLink || meetingData.hangoutLink || '';
           break;
 

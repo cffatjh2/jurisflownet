@@ -225,7 +225,7 @@ namespace JurisFlow.Server.Controllers
                     message = "Invoice could not be created with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
                 });
             }
-            await _auditLogger.LogAsync(HttpContext, "invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
+            await TryAuditAsync("invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_create");
 
             return CreatedAtAction(nameof(GetInvoice), new { id = invoice.Id }, invoice);
@@ -343,7 +343,7 @@ namespace JurisFlow.Server.Controllers
                     message = "Invoice could not be updated with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
                 });
             }
-            await _auditLogger.LogAsync(HttpContext, "invoice.update", "Invoice", invoice.Id, $"Status={invoice.Status}, Total={invoice.Total}");
+            await TryAuditAsync("invoice.update", "Invoice", invoice.Id, $"Status={invoice.Status}, Total={invoice.Total}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_update");
 
             return Ok(invoice);
@@ -374,7 +374,7 @@ namespace JurisFlow.Server.Controllers
             invoice.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.approve", "Invoice", invoice.Id, $"Status={invoice.Status}");
+            await TryAuditAsync("invoice.approve", "Invoice", invoice.Id, $"Status={invoice.Status}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_approve");
 
             return Ok(invoice);
@@ -409,12 +409,12 @@ namespace JurisFlow.Server.Controllers
 
             invoice.UpdatedAt = DateTime.UtcNow;
 
+            await _context.SaveChangesAsync();
             if (shouldNotifyClient)
             {
-                await QueueClientInvoiceNotificationAsync(invoice);
+                await TryQueueClientInvoiceNotificationAsync(invoice);
             }
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.send", "Invoice", invoice.Id, $"Status={invoice.Status}");
+            await TryAuditAsync("invoice.send", "Invoice", invoice.Id, $"Status={invoice.Status}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_send");
 
             return Ok(invoice);
@@ -454,7 +454,7 @@ namespace JurisFlow.Server.Controllers
 
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.payment.apply", "Invoice", invoice.Id, $"Amount={amount}, Balance={invoice.Balance}");
+            await TryAuditAsync("invoice.payment.apply", "Invoice", invoice.Id, $"Amount={amount}, Balance={invoice.Balance}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_payment_apply");
 
             return Ok(invoice);
@@ -540,7 +540,7 @@ namespace JurisFlow.Server.Controllers
             invoice.Balance = 0m;
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.writeoff", "Invoice", invoice.Id, $"Reason={dto.Reason}");
+            await TryAuditAsync("invoice.writeoff", "Invoice", invoice.Id, $"Reason={dto.Reason}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_writeoff");
 
             return Ok(invoice);
@@ -566,7 +566,7 @@ namespace JurisFlow.Server.Controllers
             invoice.Balance = 0m;
             invoice.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.cancel", "Invoice", invoice.Id, $"Reason={dto.Reason}");
+            await TryAuditAsync("invoice.cancel", "Invoice", invoice.Id, $"Reason={dto.Reason}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_cancel");
 
             return Ok(invoice);
@@ -591,7 +591,7 @@ namespace JurisFlow.Server.Controllers
             _context.InvoiceLineItems.RemoveRange(invoice.LineItems);
             _context.Invoices.Remove(invoice);
             await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "invoice.delete", "Invoice", id, "Deleted invoice");
+            await TryAuditAsync("invoice.delete", "Invoice", id, "Deleted invoice");
 
             return NoContent();
         }
@@ -630,6 +630,31 @@ namespace JurisFlow.Server.Controllers
                 Type = "info",
                 Link = "tab:invoices"
             });
+        }
+
+        private async Task TryQueueClientInvoiceNotificationAsync(Invoice invoice)
+        {
+            try
+            {
+                await QueueClientInvoiceNotificationAsync(invoice);
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Client invoice notification failed for invoice {InvoiceId}", invoice.Id);
+            }
+        }
+
+        private async Task TryAuditAsync(string action, string entity, string entityId, string? details = null)
+        {
+            try
+            {
+                await _auditLogger.LogAsync(HttpContext, action, entity, entityId, details);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Audit logging failed during invoice workflow. Action={Action} EntityId={EntityId}", action, entityId);
+            }
         }
 
         private async Task<BillingSettings> GetBillingSettingsAsync()

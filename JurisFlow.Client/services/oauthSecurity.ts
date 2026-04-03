@@ -73,6 +73,21 @@ export const getOAuthAccessToken = (target: OAuthTarget): string | null => {
   return null;
 };
 
+export const getOAuthRefreshToken = (target: OAuthTarget): string | null => {
+  const keys = TOKEN_KEYS[target];
+  const sessionToken = readSessionToken(keys.refresh);
+  if (sessionToken) return sessionToken;
+
+  const legacyToken = readLegacyToken(keys.refresh);
+  if (legacyToken && hasWindow()) {
+    sessionStorage.setItem(keys.refresh, legacyToken);
+    removeLegacyToken(keys.refresh);
+    return legacyToken;
+  }
+
+  return null;
+};
+
 export const setOAuthTokens = (target: OAuthTarget, accessToken: string, refreshToken?: string | null): void => {
   if (!hasWindow()) return;
   const keys = TOKEN_KEYS[target];
@@ -101,6 +116,33 @@ export const getPreferredGoogleAccessToken = (): string | null => {
   return getOAuthAccessToken('google-meet')
     || getOAuthAccessToken('gmail')
     || getOAuthAccessToken('google-docs');
+};
+
+export const refreshGoogleOAuthAccessToken = async (
+  target: Extract<OAuthTarget, 'gmail' | 'google-docs' | 'google-meet'>
+): Promise<string | null> => {
+  const refreshToken = getOAuthRefreshToken(target);
+  if (!refreshToken) {
+    return null;
+  }
+
+  const response = await fetch('/api/google/oauth/refresh', {
+    method: 'POST',
+    headers: buildOAuthAuthHeaders(true),
+    body: JSON.stringify({
+      target,
+      refreshToken
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.accessToken || typeof payload.accessToken !== 'string') {
+    const message = payload?.message || 'Unable to refresh Google authorization.';
+    throw new Error(message);
+  }
+
+  setOAuthTokens(target, payload.accessToken, payload?.refreshToken || refreshToken);
+  return payload.accessToken;
 };
 
 export const requestOAuthState = async (

@@ -1,8 +1,8 @@
 // Google Meet Service - Creates real Google Meet meetings via Calendar API
-import { toast } from '../components/Toast';
 import { getGoogleClientId } from './googleConfig';
 import { requestOAuthState } from './oauthSecurity';
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
+const GOOGLE_MEET_AUTH_EXPIRED = 'GOOGLE_MEET_AUTH_EXPIRED';
 
 export interface GoogleMeetMeeting {
   id: string;
@@ -54,8 +54,35 @@ export const googleMeetService = {
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to create meeting: ${error}`);
+      const rawError = await response.text();
+      let parsedMessage = rawError;
+      try {
+        const payload = JSON.parse(rawError);
+        parsedMessage = payload?.error?.message || payload?.message || rawError;
+        const reason = payload?.error?.status || payload?.error?.errors?.[0]?.reason;
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          reason === 'UNAUTHENTICATED' ||
+          rawError.includes('Invalid Credentials')
+        ) {
+          const authError: Error & { code?: string } = new Error('Google Meet authorization expired. Please reconnect Google Meet and try again.');
+          authError.code = GOOGLE_MEET_AUTH_EXPIRED;
+          throw authError;
+        }
+      } catch (parseError: any) {
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          rawError.includes('Invalid Credentials')
+        ) {
+          const authError: Error & { code?: string } = new Error('Google Meet authorization expired. Please reconnect Google Meet and try again.');
+          authError.code = GOOGLE_MEET_AUTH_EXPIRED;
+          throw authError;
+        }
+      }
+
+      throw new Error(`Failed to create meeting: ${parsedMessage}`);
     }
 
     const data = await response.json();
@@ -89,5 +116,12 @@ export const googleMeetService = {
 
     return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${responseType}&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
   }
+};
+
+export const isGoogleMeetAuthExpiredError = (error: unknown): boolean => {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: string }).code === GOOGLE_MEET_AUTH_EXPIRED;
 };
 
