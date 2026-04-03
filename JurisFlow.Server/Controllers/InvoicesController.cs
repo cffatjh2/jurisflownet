@@ -112,123 +112,134 @@ namespace JurisFlow.Server.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateInvoice([FromBody] InvoiceCreateDto dto)
         {
-            var requestedMatterId = string.IsNullOrWhiteSpace(dto.MatterId) ? null : dto.MatterId.Trim();
-            var requestedClientId = string.IsNullOrWhiteSpace(dto.ClientId) ? null : dto.ClientId.Trim();
-
-            Matter? selectedMatter = null;
-            if (string.IsNullOrWhiteSpace(requestedMatterId))
-            {
-                if (!_matterAccess.IsPrivileged(User))
-                {
-                    return BadRequest(new { message = "MatterId is required for invoice creation." });
-                }
-            }
-            else if (!await _matterAccess.CanManageMatterAsync(requestedMatterId, User, cancellationToken: HttpContext.RequestAborted))
-            {
-                return Forbid();
-            }
-            else
-            {
-                selectedMatter = await _context.Matters
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(m => m.Id == requestedMatterId, HttpContext.RequestAborted);
-                if (selectedMatter == null)
-                {
-                    return BadRequest(new { message = "Selected matter was not found." });
-                }
-            }
-
-            var resolvedClientId = ResolveInvoiceClientId(requestedClientId, selectedMatter);
-            if (string.IsNullOrWhiteSpace(resolvedClientId))
-            {
-                return BadRequest(new { message = "ClientId is required for invoice creation." });
-            }
-
-            if (!await _context.Clients.AsNoTracking().AnyAsync(c => c.Id == resolvedClientId, HttpContext.RequestAborted))
-            {
-                return BadRequest(new { message = "Selected client was not found." });
-            }
-
-            if (await IsPeriodLocked(dto.IssueDate ?? DateTime.UtcNow))
-            {
-                return BadRequest(new { message = "Billing period is locked. Cannot create invoice." });
-            }
-
-            var billingSettings = await GetBillingSettingsAsync();
-            var invoiceNumber = string.IsNullOrWhiteSpace(dto.Number)
-                ? await GenerateInvoiceNumberAsync(billingSettings.InvoicePrefix)
-                : dto.Number;
-
-            if (billingSettings.UtbmsCodesRequired && dto.LineItems != null)
-            {
-                var issues = GetUtbmsIssues(dto.LineItems);
-                if (issues.Count > 0)
-                {
-                    return BadRequest(new { message = "UTBMS codes are required for this invoice.", issues });
-                }
-            }
-
-            var (resolvedEntityId, resolvedOfficeId) = await _firmStructure.ResolveEntityOfficeFromMatterAsync(dto.MatterId, dto.EntityId, dto.OfficeId);
-
-            var invoice = new Invoice
-            {
-                Id = Guid.NewGuid().ToString(),
-                Number = invoiceNumber,
-                ClientId = resolvedClientId,
-                MatterId = requestedMatterId,
-                EntityId = resolvedEntityId,
-                OfficeId = resolvedOfficeId,
-                Status = dto.Status ?? InvoiceStatus.Draft,
-                IssueDate = dto.IssueDate ?? DateTime.UtcNow,
-                DueDate = dto.DueDate,
-                Notes = dto.Notes,
-                Terms = dto.Terms,
-                Discount = dto.Discount ?? 0m,
-                Tax = dto.Tax ?? 0m,
-                AmountPaid = 0m
-            };
-
-            if (dto.LineItems != null)
-            {
-                foreach (var li in dto.LineItems)
-                {
-                    invoice.LineItems.Add(new InvoiceLineItem
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        Type = li.Type ?? "time",
-                        Description = li.Description ?? string.Empty,
-                        ServiceDate = li.ServiceDate,
-                        Quantity = li.Quantity ?? 1m,
-                        Rate = li.Rate ?? 0m,
-                        Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
-                        TaskCode = NormalizeUtbmsCode(li.TaskCode),
-                        ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
-                        ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
-                    });
-                }
-            }
-
-            RecalculateTotals(invoice);
-
-            _context.Invoices.Add(invoice);
             try
             {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateException ex)
-            {
-                _logger.LogError(ex, "Invoice create failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
-                return BadRequest(new
+                var requestedMatterId = string.IsNullOrWhiteSpace(dto.MatterId) ? null : dto.MatterId.Trim();
+                var requestedClientId = string.IsNullOrWhiteSpace(dto.ClientId) ? null : dto.ClientId.Trim();
+
+                Matter? selectedMatter = null;
+                if (string.IsNullOrWhiteSpace(requestedMatterId))
                 {
-                    message = "Invoice could not be created with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
+                    if (!_matterAccess.IsPrivileged(User))
+                    {
+                        return BadRequest(new { message = "MatterId is required for invoice creation." });
+                    }
+                }
+                else if (!await _matterAccess.CanManageMatterAsync(requestedMatterId, User, cancellationToken: HttpContext.RequestAborted))
+                {
+                    return Forbid();
+                }
+                else
+                {
+                    selectedMatter = await _context.Matters
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(m => m.Id == requestedMatterId, HttpContext.RequestAborted);
+                    if (selectedMatter == null)
+                    {
+                        return BadRequest(new { message = "Selected matter was not found." });
+                    }
+                }
+
+                var resolvedClientId = ResolveInvoiceClientId(requestedClientId, selectedMatter);
+                if (string.IsNullOrWhiteSpace(resolvedClientId))
+                {
+                    return BadRequest(new { message = "ClientId is required for invoice creation." });
+                }
+
+                if (!await _context.Clients.AsNoTracking().AnyAsync(c => c.Id == resolvedClientId, HttpContext.RequestAborted))
+                {
+                    return BadRequest(new { message = "Selected client was not found." });
+                }
+
+                if (await IsPeriodLocked(dto.IssueDate ?? DateTime.UtcNow))
+                {
+                    return BadRequest(new { message = "Billing period is locked. Cannot create invoice." });
+                }
+
+                var billingSettings = await GetBillingSettingsAsync();
+                var invoiceNumber = string.IsNullOrWhiteSpace(dto.Number)
+                    ? await GenerateInvoiceNumberAsync(billingSettings.InvoicePrefix)
+                    : dto.Number;
+
+                if (billingSettings.UtbmsCodesRequired && dto.LineItems != null)
+                {
+                    var issues = GetUtbmsIssues(dto.LineItems);
+                    if (issues.Count > 0)
+                    {
+                        return BadRequest(new { message = "UTBMS codes are required for this invoice.", issues });
+                    }
+                }
+
+                var (resolvedEntityId, resolvedOfficeId) = await _firmStructure.ResolveEntityOfficeFromMatterAsync(dto.MatterId, dto.EntityId, dto.OfficeId);
+
+                var invoice = new Invoice
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Number = invoiceNumber,
+                    ClientId = resolvedClientId,
+                    MatterId = requestedMatterId,
+                    EntityId = resolvedEntityId,
+                    OfficeId = resolvedOfficeId,
+                    Status = dto.Status ?? InvoiceStatus.Draft,
+                    IssueDate = dto.IssueDate ?? DateTime.UtcNow,
+                    DueDate = dto.DueDate,
+                    Notes = dto.Notes,
+                    Terms = dto.Terms,
+                    Discount = dto.Discount ?? 0m,
+                    Tax = dto.Tax ?? 0m,
+                    AmountPaid = 0m
+                };
+
+                if (dto.LineItems != null)
+                {
+                    foreach (var li in dto.LineItems)
+                    {
+                        invoice.LineItems.Add(new InvoiceLineItem
+                        {
+                            Id = Guid.NewGuid().ToString(),
+                            Type = li.Type ?? "time",
+                            Description = li.Description ?? string.Empty,
+                            ServiceDate = li.ServiceDate,
+                            Quantity = li.Quantity ?? 1m,
+                            Rate = li.Rate ?? 0m,
+                            Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
+                            TaskCode = NormalizeUtbmsCode(li.TaskCode),
+                            ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
+                            ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        });
+                    }
+                }
+
+                RecalculateTotals(invoice);
+
+                _context.Invoices.Add(invoice);
+                try
+                {
+                    await _context.SaveChangesAsync();
+                }
+                catch (DbUpdateException ex)
+                {
+                    _logger.LogError(ex, "Invoice create failed for matter {MatterId} client {ClientId}.", requestedMatterId, resolvedClientId);
+                    return BadRequest(new
+                    {
+                        message = "Invoice could not be created with the selected matter or billing structure. Please verify the matter, client, entity, and office assignments."
+                    });
+                }
+                await TryAuditAsync("invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
+                await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_create");
+
+                return CreatedAtAction(nameof(GetInvoice), new { id = invoice.Id }, invoice);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unhandled invoice creation failure for matter {MatterId} client {ClientId}.", dto.MatterId, dto.ClientId);
+                return StatusCode(500, new
+                {
+                    message = "Invoice creation failed. Please verify billing settings, invoice line items, and firm structure configuration."
                 });
             }
-            await TryAuditAsync("invoice.create", "Invoice", invoice.Id, $"Client={invoice.ClientId}, Total={invoice.Total}");
-            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_create");
-
-            return CreatedAtAction(nameof(GetInvoice), new { id = invoice.Id }, invoice);
         }
 
         // PUT: api/Invoices/{id}
@@ -659,26 +670,44 @@ namespace JurisFlow.Server.Controllers
 
         private async Task<BillingSettings> GetBillingSettingsAsync()
         {
-            var settings = await _context.BillingSettings.FirstOrDefaultAsync();
-            if (settings == null)
+            try
             {
-                settings = new BillingSettings();
-                _context.BillingSettings.Add(settings);
-                await _context.SaveChangesAsync();
+                var settings = await _context.BillingSettings.FirstOrDefaultAsync();
+                if (settings == null)
+                {
+                    settings = new BillingSettings();
+                    _context.BillingSettings.Add(settings);
+                    await _context.SaveChangesAsync();
+                }
+
+                return settings;
             }
-            return settings;
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Billing settings lookup failed. Using in-memory defaults for current invoice operation.");
+                return new BillingSettings();
+            }
         }
 
         private async Task<FirmSettings> GetFirmSettingsAsync()
         {
-            var settings = await _context.FirmSettings.FirstOrDefaultAsync();
-            if (settings == null)
+            try
             {
-                settings = new FirmSettings();
-                _context.FirmSettings.Add(settings);
-                await _context.SaveChangesAsync();
+                var settings = await _context.FirmSettings.FirstOrDefaultAsync();
+                if (settings == null)
+                {
+                    settings = new FirmSettings();
+                    _context.FirmSettings.Add(settings);
+                    await _context.SaveChangesAsync();
+                }
+
+                return settings;
             }
-            return settings;
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Firm settings lookup failed. Using in-memory defaults for current invoice operation.");
+                return new FirmSettings();
+            }
         }
 
         private async Task<bool> CanReadInvoiceAsync(Invoice invoice)
@@ -747,16 +776,30 @@ namespace JurisFlow.Server.Controllers
 
         private async Task<string> GenerateInvoiceNumberAsync(string prefix)
         {
-            var normalized = string.IsNullOrWhiteSpace(prefix) ? "INV-" : prefix.Trim();
-            if (!normalized.EndsWith("-", StringComparison.Ordinal))
+            try
             {
-                normalized += "-";
-            }
+                var normalized = string.IsNullOrWhiteSpace(prefix) ? "INV-" : prefix.Trim();
+                if (!normalized.EndsWith("-", StringComparison.Ordinal))
+                {
+                    normalized += "-";
+                }
 
-            var year = DateTime.UtcNow.Year;
-            var yearPrefix = $"{normalized}{year}-";
-            var count = await _context.Invoices.CountAsync(i => i.Number != null && i.Number.StartsWith(yearPrefix));
-            return $"{yearPrefix}{(count + 1).ToString("D4", CultureInfo.InvariantCulture)}";
+                var year = DateTime.UtcNow.Year;
+                var yearPrefix = $"{normalized}{year}-";
+                var count = await _context.Invoices.CountAsync(i => i.Number != null && i.Number.StartsWith(yearPrefix));
+                return $"{yearPrefix}{(count + 1).ToString("D4", CultureInfo.InvariantCulture)}";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Invoice number sequence lookup failed. Falling back to timestamp-based invoice number.");
+                var normalized = string.IsNullOrWhiteSpace(prefix) ? "INV-" : prefix.Trim();
+                if (!normalized.EndsWith("-", StringComparison.Ordinal))
+                {
+                    normalized += "-";
+                }
+
+                return $"{normalized}{DateTime.UtcNow:yyyy-MMddHHmmss}";
+            }
         }
 
         private List<string> GetUtbmsIssues(IEnumerable<InvoiceLineItemDto> lineItems)

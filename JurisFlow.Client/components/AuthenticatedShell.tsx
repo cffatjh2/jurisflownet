@@ -169,6 +169,7 @@ const ComponentSwitcher = ({ activeTab }: { activeTab: ActiveTab }) => {
 };
 
 const MainLayout = () => {
+  const staffTabEnabled = false;
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [mountedTabs, setMountedTabs] = useState<ActiveTab[]>(['dashboard']);
   const { t } = useTranslation();
@@ -178,8 +179,9 @@ const MainLayout = () => {
   const [isCmdOpen, setIsCmdOpen] = useState(false);
 
   const activateTab = (tab: ActiveTab) => {
-    setActiveTab(tab);
-    setMountedTabs(prev => (prev.includes(tab) ? prev : [...prev, tab]));
+    const safeTab = !staffTabEnabled && tab === 'employees' ? 'dashboard' : tab;
+    setActiveTab(safeTab);
+    setMountedTabs(prev => (prev.includes(safeTab) ? prev : [...prev, safeTab]));
   };
 
   useEffect(() => {
@@ -284,7 +286,9 @@ const MainLayout = () => {
           <NavButton tab="billing" icon={CreditCard} label={t('nav_billing')} />
           <NavButton tab="trust" icon={Scale} label="Trust (IOLTA)" />
           <NavButton tab="time" icon={Timer} label={t('nav_time')} />
-          <NavButton tab="employees" icon={Users} label={t('nav_employees') || 'Employees'} />
+          {staffTabEnabled && (
+            <NavButton tab="employees" icon={Users} label={t('nav_employees') || 'Employees'} />
+          )}
           <NavButton tab="reports" icon={BarChart3} label="Reports" />
           <NavButton tab="ai" icon={BrainCircuit} label={t('nav_ai')} />
         </nav>

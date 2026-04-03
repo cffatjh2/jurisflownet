@@ -203,6 +203,51 @@ const buildInitialMatterForm = () => ({
   opposingCounselEmail: ''
 });
 
+type MatterAnalysisSectionProps = {
+  title: string;
+  subtitle?: string;
+  actions?: React.ReactNode;
+  defaultExpanded?: boolean;
+  className?: string;
+  titleClassName?: string;
+  children: React.ReactNode;
+};
+
+const MatterAnalysisSection: React.FC<MatterAnalysisSectionProps> = ({
+  title,
+  subtitle,
+  actions,
+  defaultExpanded = true,
+  className = 'bg-white border border-slate-200 rounded-lg p-3',
+  titleClassName = 'text-[11px] font-bold uppercase text-slate-500',
+  children
+}) => {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <div className={className}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className={titleClassName}>{title}</p>
+          {subtitle && <p className="mt-1 text-[11px] text-gray-500">{subtitle}</p>}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {actions}
+          <button
+            type="button"
+            onClick={() => setExpanded(prev => !prev)}
+            className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+          >
+            <ChevronRight className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+            {expanded ? 'Hide' : 'Show'}
+          </button>
+        </div>
+      </div>
+      {expanded && <div className="mt-3">{children}</div>}
+    </div>
+  );
+};
+
 const Matters: React.FC = () => {
   const matterSecondaryClientsEnabled = false;
   const { t, formatCurrency, formatDate } = useTranslation();
@@ -1405,30 +1450,34 @@ const Matters: React.FC = () => {
 
             {/* Client Transparency Reviewer (Phase 3) */}
             <div className="px-6 py-5 border-b border-gray-100 bg-emerald-50/30">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Client Transparency Review</h3>
-                  <p className="text-xs text-gray-500">Draft vs published snapshot, client-safe wording review, and publish policy</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => selectedMatter?.id && refreshSelectedMatterTransparencyWorkspace(selectedMatter.id, true)}
-                  disabled={!selectedMatter?.id || selectedMatterTransparencyLoading}
-                  className="px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                >
-                  {selectedMatterTransparencyLoading ? 'Refreshing...' : 'Refresh'}
-                </button>
-              </div>
-
-              {selectedMatterTransparencyLoading && !selectedMatterTransparencyWorkspace ? (
-                <div className="text-xs text-gray-500">Loading transparency review workspace...</div>
-              ) : !selectedMatterTransparencyWorkspace ? (
-                <div className="text-xs text-gray-500">No transparency review workspace available yet.</div>
-              ) : (
-                <div className="space-y-3">
+              <MatterAnalysisSection
+                title="Client Transparency Review"
+                subtitle="Draft vs published snapshot, client-safe wording review, and publish policy"
+                className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4"
+                titleClassName="text-sm font-bold text-slate-800 uppercase tracking-wide"
+                actions={(
+                  <button
+                    type="button"
+                    onClick={() => selectedMatter?.id && refreshSelectedMatterTransparencyWorkspace(selectedMatter.id, true)}
+                    disabled={!selectedMatter?.id || selectedMatterTransparencyLoading}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    {selectedMatterTransparencyLoading ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                )}
+              >
+                {selectedMatterTransparencyLoading && !selectedMatterTransparencyWorkspace ? (
+                  <div className="text-xs text-gray-500">Loading transparency review workspace...</div>
+                ) : !selectedMatterTransparencyWorkspace ? (
+                  <div className="text-xs text-gray-500">No transparency review workspace available yet.</div>
+                ) : (
+                  <div className="space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="bg-white border border-emerald-100 rounded-lg p-3">
-                      <p className="text-[11px] font-bold uppercase text-emerald-700 mb-1">Draft Snapshot</p>
+                    <MatterAnalysisSection
+                      title="Draft Snapshot"
+                      className="bg-white border border-emerald-100 rounded-lg p-3"
+                      titleClassName="text-[11px] font-bold uppercase text-emerald-700"
+                    >
                       {selectedMatterTransparencyWorkspace?.draft?.snapshot ? (
                         <div className="space-y-1 text-[11px] text-slate-700">
                           <p className="font-semibold">
@@ -1441,9 +1490,11 @@ const Matters: React.FC = () => {
                       ) : (
                         <p className="text-[11px] text-gray-500">No draft snapshot.</p>
                       )}
-                    </div>
-                    <div className="bg-white border border-slate-200 rounded-lg p-3">
-                      <p className="text-[11px] font-bold uppercase text-slate-500 mb-1">Published Snapshot</p>
+                    </MatterAnalysisSection>
+                    <MatterAnalysisSection
+                      title="Published Snapshot"
+                      className="bg-white border border-slate-200 rounded-lg p-3"
+                    >
                       {selectedMatterTransparencyWorkspace?.published?.snapshot ? (
                         <div className="space-y-1 text-[11px] text-slate-700">
                           <p className="font-semibold">
@@ -1459,12 +1510,13 @@ const Matters: React.FC = () => {
                       ) : (
                         <p className="text-[11px] text-gray-500">No published snapshot yet.</p>
                       )}
-                    </div>
+                    </MatterAnalysisSection>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-bold uppercase text-slate-500">Publish Policy</p>
+                  <MatterAnalysisSection
+                    title="Publish Policy"
+                    className="bg-white border border-slate-200 rounded-lg p-3"
+                    actions={(
                       <button
                         type="button"
                         onClick={saveSelectedMatterTransparencyPolicy}
@@ -1473,7 +1525,8 @@ const Matters: React.FC = () => {
                       >
                         {selectedMatterTransparencyPolicySaving ? 'Saving...' : 'Save Policy'}
                       </button>
-                    </div>
+                    )}
+                  >
                     <div className="grid grid-cols-2 gap-2">
                       <select
                         value={selectedMatterTransparencyPolicyDraft.publishPolicy}
@@ -1522,15 +1575,17 @@ const Matters: React.FC = () => {
                         )}
                       </div>
                     )}
-                  </div>
+                  </MatterAnalysisSection>
 
-                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-bold uppercase text-slate-500">Draft vs Published Compare</p>
+                  <MatterAnalysisSection
+                    title="Draft vs Published Compare"
+                    className="bg-white border border-slate-200 rounded-lg p-3"
+                    actions={(
                       <span className="text-[10px] text-gray-400">
                         Review item: {selectedMatterTransparencyWorkspace?.pendingReviewItem?.status || 'none'}
                       </span>
-                    </div>
+                    )}
+                  >
                     {selectedMatterTransparencyWorkspace?.draftVsPublished ? (
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-700">
                         <p>Summary changed: {String(!!selectedMatterTransparencyWorkspace.draftVsPublished.summaryChanged)}</p>
@@ -1546,11 +1601,12 @@ const Matters: React.FC = () => {
                     ) : (
                       <div className="text-[11px] text-gray-500">No compare data.</div>
                     )}
-                  </div>
+                  </MatterAnalysisSection>
 
-                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-bold uppercase text-slate-500">Evidence Quality (Phase 4)</p>
+                  <MatterAnalysisSection
+                    title="Evidence Quality (Phase 4)"
+                    className="bg-white border border-slate-200 rounded-lg p-3"
+                    actions={(
                       <button
                         type="button"
                         onClick={reverifySelectedMatterTransparencyEvidence}
@@ -1559,7 +1615,8 @@ const Matters: React.FC = () => {
                       >
                         {selectedMatterTransparencyEvidenceActionLoading ? 'Reverifying...' : 'Batch Re-verify'}
                       </button>
-                    </div>
+                    )}
+                  >
                     {selectedMatterTransparencyEvidenceLoading ? (
                       <div className="text-[11px] text-gray-500">Loading evidence metrics...</div>
                     ) : (
@@ -1577,8 +1634,11 @@ const Matters: React.FC = () => {
                           <div className="text-[11px] text-gray-500">No metrics available.</div>
                         )}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          <div className="rounded border border-emerald-100 bg-emerald-50/30 p-2">
-                            <div className="text-[10px] font-bold uppercase text-emerald-700 mb-1">Draft Evidence</div>
+                          <MatterAnalysisSection
+                            title="Draft Evidence"
+                            className="rounded border border-emerald-100 bg-emerald-50/30 p-2"
+                            titleClassName="text-[10px] font-bold uppercase text-emerald-700"
+                          >
                             {selectedMatterTransparencyDraftEvidence?.quality ? (
                               <div className="text-[11px] text-slate-700 space-y-1">
                                 <p>Coverage: {Math.round(Number(selectedMatterTransparencyDraftEvidence.quality.coverage || 0) * 100)}%</p>
@@ -1586,9 +1646,12 @@ const Matters: React.FC = () => {
                                 <p>Total sources: {Number(selectedMatterTransparencyDraftEvidence.quality.totalSources || 0)}</p>
                               </div>
                             ) : <div className="text-[11px] text-gray-500">No draft evidence.</div>}
-                          </div>
-                          <div className="rounded border border-slate-200 bg-slate-50/50 p-2">
-                            <div className="text-[10px] font-bold uppercase text-slate-600 mb-1">Published Evidence</div>
+                          </MatterAnalysisSection>
+                          <MatterAnalysisSection
+                            title="Published Evidence"
+                            className="rounded border border-slate-200 bg-slate-50/50 p-2"
+                            titleClassName="text-[10px] font-bold uppercase text-slate-600"
+                          >
                             {selectedMatterTransparencyPublishedEvidence?.quality ? (
                               <div className="text-[11px] text-slate-700 space-y-1">
                                 <p>Coverage: {Math.round(Number(selectedMatterTransparencyPublishedEvidence.quality.coverage || 0) * 100)}%</p>
@@ -1596,14 +1659,16 @@ const Matters: React.FC = () => {
                                 <p>Total sources: {Number(selectedMatterTransparencyPublishedEvidence.quality.totalSources || 0)}</p>
                               </div>
                             ) : <div className="text-[11px] text-gray-500">No published evidence.</div>}
-                          </div>
+                          </MatterAnalysisSection>
                         </div>
                       </div>
                     )}
-                  </div>
+                  </MatterAnalysisSection>
 
-                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
-                    <p className="text-[11px] font-bold uppercase text-slate-500">Client-Safe Wording Review</p>
+                  <MatterAnalysisSection
+                    title="Client-Safe Wording Review"
+                    className="bg-white border border-slate-200 rounded-lg p-3"
+                  >
                     <input
                       type="text"
                       value={selectedMatterTransparencyRewriteDraft.assignedTo}
@@ -1698,34 +1763,36 @@ const Matters: React.FC = () => {
                         Override Publish
                       </button>
                     </div>
+                  </MatterAnalysisSection>
                   </div>
-                </div>
-              )}
+                )}
+              </MatterAnalysisSection>
             </div>
 
             {/* Outcome-to-Fee Planner (Phase 3 Drift View) */}
             <div className="px-6 py-5 border-b border-gray-100 bg-slate-50/60">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Outcome-to-Fee Planner</h3>
-                  <p className="text-xs text-gray-500">Dynamic forecast drift and version deltas</p>
-                </div>
-                <button
-                  type="button"
-                  disabled={!selectedMatterPlanner?.plan?.id || selectedMatterPlannerRecomputing}
-                  onClick={recomputeSelectedMatterPlanner}
-                  className="px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {selectedMatterPlannerRecomputing ? 'Recomputing...' : 'Recompute'}
-                </button>
-              </div>
-
-              {selectedMatterPlannerLoading ? (
-                <div className="text-xs text-gray-500">Loading planner...</div>
-              ) : !selectedMatterPlanner?.plan ? (
-                <div className="text-xs text-gray-500">No planner version saved for this matter yet.</div>
-              ) : (
-                <div className="space-y-3">
+              <MatterAnalysisSection
+                title="Outcome-to-Fee Planner"
+                subtitle="Dynamic forecast drift and version deltas"
+                className="rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+                titleClassName="text-sm font-bold text-slate-800 uppercase tracking-wide"
+                actions={(
+                  <button
+                    type="button"
+                    disabled={!selectedMatterPlanner?.plan?.id || selectedMatterPlannerRecomputing}
+                    onClick={recomputeSelectedMatterPlanner}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {selectedMatterPlannerRecomputing ? 'Recomputing...' : 'Recompute'}
+                  </button>
+                )}
+              >
+                {selectedMatterPlannerLoading ? (
+                  <div className="text-xs text-gray-500">Loading planner...</div>
+                ) : !selectedMatterPlanner?.plan ? (
+                  <div className="text-xs text-gray-500">No planner version saved for this matter yet.</div>
+                ) : (
+                  <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-white border border-slate-200 rounded-lg p-3">
                       <p className="text-[11px] font-bold uppercase text-slate-500 mb-1">Current Version</p>
@@ -2137,8 +2204,9 @@ const Matters: React.FC = () => {
                       </>
                     )}
                   </div>
-                </div>
-              )}
+                  </div>
+                )}
+              </MatterAnalysisSection>
             </div>
 
             {/* Timeline */}

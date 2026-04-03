@@ -89,6 +89,96 @@ namespace JurisFlow.Server.Services
                 "UpdatedAt" timestamp with time zone NOT NULL
             );
             """,
+            """ALTER TABLE IF EXISTS "MatterClientLinks" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """ALTER TABLE IF EXISTS "MatterClientLinks" ADD COLUMN IF NOT EXISTS "CreatedAt" timestamp with time zone NOT NULL DEFAULT now();""",
+            """ALTER TABLE IF EXISTS "MatterClientLinks" ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now();""",
+            """ALTER TABLE IF EXISTS "MatterNotes" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """ALTER TABLE IF EXISTS "MatterNotes" ADD COLUMN IF NOT EXISTS "CreatedAt" timestamp with time zone NOT NULL DEFAULT now();""",
+            """ALTER TABLE IF EXISTS "MatterNotes" ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now();""",
+            """
+            CREATE TABLE IF NOT EXISTS "BillingSettings" (
+                "Id" text PRIMARY KEY,
+                "DefaultHourlyRate" double precision NOT NULL DEFAULT 350,
+                "PartnerRate" double precision NOT NULL DEFAULT 500,
+                "AssociateRate" double precision NOT NULL DEFAULT 300,
+                "ParalegalRate" double precision NOT NULL DEFAULT 150,
+                "BillingIncrement" integer NOT NULL DEFAULT 6,
+                "MinimumTimeEntry" integer NOT NULL DEFAULT 6,
+                "RoundingRule" text NOT NULL DEFAULT 'up',
+                "DefaultPaymentTerms" integer NOT NULL DEFAULT 30,
+                "InvoicePrefix" text NOT NULL DEFAULT 'INV-',
+                "DefaultTaxRate" double precision NOT NULL DEFAULT 0,
+                "LedesEnabled" boolean NOT NULL DEFAULT FALSE,
+                "UtbmsCodesRequired" boolean NOT NULL DEFAULT FALSE,
+                "EvergreenRetainerMinimum" double precision NOT NULL DEFAULT 5000,
+                "TrustBalanceAlerts" boolean NOT NULL DEFAULT TRUE,
+                "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "TenantId" text NULL
+            );
+            """,
+            """ALTER TABLE IF EXISTS "BillingSettings" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """
+            CREATE TABLE IF NOT EXISTS "FirmSettings" (
+                "Id" text PRIMARY KEY,
+                "FirmName" text NOT NULL DEFAULT 'Your Law Firm',
+                "TaxId" text NULL,
+                "LedesFirmId" text NULL,
+                "Address" text NULL,
+                "City" text NULL,
+                "State" text NULL,
+                "ZipCode" text NULL,
+                "Phone" text NULL,
+                "Website" text NULL,
+                "IntegrationsJson" text NULL,
+                "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "TenantId" text NULL
+            );
+            """,
+            """ALTER TABLE IF EXISTS "FirmSettings" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """
+            CREATE TABLE IF NOT EXISTS "Invoices" (
+                "Id" text PRIMARY KEY,
+                "Number" character varying(50) NULL,
+                "ClientId" text NULL,
+                "MatterId" text NULL,
+                "EntityId" text NULL,
+                "OfficeId" text NULL,
+                "Status" integer NOT NULL DEFAULT 0,
+                "IssueDate" timestamp with time zone NOT NULL DEFAULT now(),
+                "DueDate" timestamp with time zone NULL,
+                "Subtotal" numeric NOT NULL DEFAULT 0,
+                "Tax" numeric NOT NULL DEFAULT 0,
+                "Discount" numeric NOT NULL DEFAULT 0,
+                "Total" numeric NOT NULL DEFAULT 0,
+                "AmountPaid" numeric NOT NULL DEFAULT 0,
+                "Balance" numeric NOT NULL DEFAULT 0,
+                "Notes" text NULL,
+                "Terms" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "TenantId" text NULL
+            );
+            """,
+            """ALTER TABLE IF EXISTS "Invoices" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """
+            CREATE TABLE IF NOT EXISTS "InvoiceLineItems" (
+                "Id" text PRIMARY KEY,
+                "InvoiceId" text NOT NULL,
+                "Type" character varying(20) NOT NULL DEFAULT 'time',
+                "TaskCode" character varying(20) NULL,
+                "ExpenseCode" character varying(20) NULL,
+                "ActivityCode" character varying(20) NULL,
+                "Description" character varying(255) NOT NULL DEFAULT '',
+                "ServiceDate" timestamp with time zone NULL,
+                "Quantity" numeric NOT NULL DEFAULT 1,
+                "Rate" numeric NOT NULL DEFAULT 0,
+                "Amount" numeric NOT NULL DEFAULT 0,
+                "CreatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "TenantId" text NULL
+            );
+            """,
+            """ALTER TABLE IF EXISTS "InvoiceLineItems" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
             """ALTER TABLE IF EXISTS "Invoices" ADD COLUMN IF NOT EXISTS "Number" character varying(50) NULL;""",
             """ALTER TABLE IF EXISTS "Invoices" ADD COLUMN IF NOT EXISTS "ClientId" text NULL;""",
             """ALTER TABLE IF EXISTS "Invoices" ADD COLUMN IF NOT EXISTS "MatterId" text NULL;""",
