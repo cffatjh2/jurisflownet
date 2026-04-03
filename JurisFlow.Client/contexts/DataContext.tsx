@@ -42,9 +42,11 @@ interface DataContextType {
   addDocument: (item: DocumentFile) => void;
   updateDocument: (id: string, data: Partial<DocumentFile>) => void;
   deleteDocument: (id: string) => void;
-  addInvoice: (item: any) => Promise<void>;
-  updateInvoice: (id: string, data: any) => void;
-  deleteInvoice: (id: string) => void;
+  addInvoice: (item: any) => Promise<Invoice>;
+  updateInvoice: (id: string, data: any) => Promise<Invoice | null>;
+  deleteInvoice: (id: string) => Promise<void>;
+  approveInvoice: (id: string) => Promise<Invoice | null>;
+  sendInvoice: (id: string) => Promise<Invoice | null>;
   addClient: (item: any) => Promise<Client>;
   updateClient: (id: string, data: Partial<Client> & { statusChangeNote?: string }) => Promise<void>;
   addLead: (item: any) => Promise<void>;
@@ -228,6 +230,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const sanitizeLeads = (items: Lead[] | null | undefined): Lead[] =>
     sanitizeIdentifiableItems<Lead>(items);
 
+  const sanitizeInvoices = (items: Invoice[] | null | undefined): Invoice[] =>
+    sanitizeIdentifiableItems<Invoice>(items);
+
   const sanitizeMatterLinkedItems = <T extends { id?: unknown; matterId?: string | null }>(items: T[] | null | undefined): T[] =>
     sanitizeIdentifiableItems<T>(items);
 
@@ -302,6 +307,39 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return safeMatterItems.map((matter) => hydrateMatterClient(matter, clientById));
   };
 
+  const getInvoiceClientId = (invoice: Partial<Invoice>): string | undefined => {
+    const fromInvoice = typeof invoice.clientId === 'string' ? invoice.clientId.trim() : '';
+    if (fromInvoice) return fromInvoice;
+
+    const fromClient = typeof invoice.client?.id === 'string' ? invoice.client.id.trim() : '';
+    return fromClient || undefined;
+  };
+
+  const hydrateInvoiceClient = (invoice: Invoice, clientById: Map<string, Client>): Invoice => {
+    const clientId = getInvoiceClientId(invoice);
+    if (!clientId) {
+      return invoice;
+    }
+
+    const resolvedClient = clientById.get(clientId) || invoice.client;
+    return {
+      ...invoice,
+      clientId,
+      ...(resolvedClient ? { client: resolvedClient } : {})
+    };
+  };
+
+  const hydrateInvoicesWithClients = (invoiceItems: Invoice[], clientItems: Client[]): Invoice[] => {
+    const safeInvoiceItems = sanitizeInvoices(invoiceItems);
+    if (safeInvoiceItems.length === 0) return [];
+
+    const safeClientItems = sanitizeClients(clientItems);
+    if (safeClientItems.length === 0) return safeInvoiceItems;
+
+    const clientById = new Map(safeClientItems.map((client) => [client.id, client]));
+    return safeInvoiceItems.map((invoice) => hydrateInvoiceClient(invoice, clientById));
+  };
+
   const filterVisibleMatters = (matterItems: Matter[]): Matter[] => {
     return sanitizeMatters(matterItems).filter((matter) => String(matter.status || '').toLowerCase() !== 'deleted');
   };
@@ -352,10 +390,16 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     if (incomingClients) {
       setClients(incomingClients);
       setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, incomingClients)));
+      setInvoices((prev) => hydrateInvoicesWithClients(prev, incomingClients));
     }
     if (Array.isArray(payload.leads)) setLeads(sanitizeLeads(payload.leads));
     if (Array.isArray(payload.events)) setEvents(hasMatterSource ? filterByVisibleMatter(payload.events, nextMatters) : payload.events);
-    if (Array.isArray(payload.invoices)) setInvoices(hasMatterSource ? filterByVisibleMatter(payload.invoices, nextMatters) : payload.invoices);
+    if (Array.isArray(payload.invoices)) {
+      const nextInvoices = hasMatterSource ? filterByVisibleMatter(payload.invoices, nextMatters) : payload.invoices;
+      setInvoices(incomingClients
+        ? hydrateInvoicesWithClients(nextInvoices, incomingClients)
+        : hydrateInvoicesWithClients(nextInvoices, clientsRef.current));
+    }
     if (Array.isArray(payload.notifications)) setNotifications(payload.notifications);
     if (Array.isArray(payload.documents)) {
       const normalizedDocuments = payload.documents.map(normalizeDocument);
@@ -412,7 +456,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
       }
       if (Array.isArray(l)) setLeads(sanitizeLeads(l));
-      if (Array.isArray(i)) setInvoices(filterByVisibleMatter(i, visibleMatters));
+      if (Array.isArray(i)) setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(i, visibleMatters), clientsRef.current));
       if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
       console.log('Deferred data loaded via endpoint fallback');
@@ -493,6 +537,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setDocuments((prev) => filterByVisibleMatter(prev, matters));
     setInvoices((prev) => filterByVisibleMatter(prev, matters));
   }, [matters]);
+
+  useEffect(() => {
+    if (clients.length === 0) return;
+    setInvoices((prev) => hydrateInvoicesWithClients(prev, clients));
+  }, [clients]);
 
   // --- NOTIFICATION POLLING ---
   useEffect(() => {
@@ -978,37 +1027,88 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const addInvoice = async (invoiceData: any) => {
+  const addInvoice = async (invoiceData: any): Promise<Invoice> => {
     const temp = { ...invoiceData, id: `inv-${Date.now()}` };
     setInvoices(prev => [temp, ...prev]);
     try {
       const newInvoice = await api.createInvoice(invoiceData);
-      setInvoices(prev => [newInvoice, ...prev.filter(i => i.id !== temp.id)]);
-    } catch (e) { console.error("API Error", e); }
+      if (!hasStringId(newInvoice)) {
+        throw new Error('Invoice API returned an empty response.');
+      }
+      const hydratedInvoice = hydrateInvoiceClient(newInvoice, new Map(clientsRef.current.map((client) => [client.id, client])));
+      setInvoices(prev => [hydratedInvoice, ...prev.filter(i => i.id !== temp.id)]);
+      return hydratedInvoice;
+    } catch (e) {
+      console.error("API Error (addInvoice)", e);
+      setInvoices(prev => prev.filter(i => i.id !== temp.id));
+      throw e;
+    }
   };
 
-  const updateInvoice = (id: string, data: any) => {
+  const updateInvoice = async (id: string, data: any): Promise<Invoice | null> => {
     const prev = invoices;
     setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...data } : inv));
-    api.updateInvoice(id, data)
-      .then(updated => {
-        if (updated) {
-          setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...updated } : inv));
-        }
-      })
-      .catch(e => {
-        console.error("API Error (updateInvoice)", e);
-        setInvoices(prev);
-      });
+    try {
+      const updated = await api.updateInvoice(id, data);
+      if (updated) {
+        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
+        return hydratedInvoice;
+      }
+      return null;
+    } catch (e) {
+      console.error("API Error (updateInvoice)", e);
+      setInvoices(prev);
+      throw e;
+    }
   };
 
-  const deleteInvoice = (id: string) => {
+  const deleteInvoice = async (id: string): Promise<void> => {
     const prev = invoices;
     setInvoices(items => items.filter(inv => inv.id !== id));
-    api.deleteInvoice(id).catch(e => {
+    try {
+      await api.deleteInvoice(id);
+    } catch (e) {
       console.error("API Error (deleteInvoice)", e);
       setInvoices(prev);
-    });
+      throw e;
+    }
+  };
+
+  const approveInvoice = async (id: string): Promise<Invoice | null> => {
+    const prev = invoices;
+    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: 'APPROVED' } : inv));
+    try {
+      const updated = await api.approveInvoice(id);
+      if (updated) {
+        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
+        return hydratedInvoice;
+      }
+      return null;
+    } catch (e) {
+      console.error("API Error (approveInvoice)", e);
+      setInvoices(prev);
+      throw e;
+    }
+  };
+
+  const sendInvoice = async (id: string): Promise<Invoice | null> => {
+    const prev = invoices;
+    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: 'SENT' } : inv));
+    try {
+      const updated = await api.sendInvoice(id);
+      if (updated) {
+        const hydratedInvoice = hydrateInvoiceClient(updated, new Map(clientsRef.current.map((client) => [client.id, client])));
+        setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
+        return hydratedInvoice;
+      }
+      return null;
+    } catch (e) {
+      console.error("API Error (sendInvoice)", e);
+      setInvoices(prev);
+      throw e;
+    }
   };
 
   const markAsBilled = async (matterId: string) => {
@@ -1222,7 +1322,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       matters, clients, timeEntries, expenses, messages, events, documents, invoices, leads, tasks, taskTemplates, notifications,
       activeTimer, startTimer, stopTimer, updateTimer, pauseTimer, resumeTimer,
       addMatter, updateMatter, deleteMatter,
-      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, addClient, addLead, updateLead, deleteLead, addTask,
+      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, addClient, addLead, updateLead, deleteLead, addTask,
       updateTaskStatus, updateTask, deleteTask, archiveTask, createTasksFromTemplate, markAsBilled, markNotificationRead, markNotificationUnread, markAllNotificationsRead, updateUserProfile, updateClient,
       bulkAssignDocuments
     }}>

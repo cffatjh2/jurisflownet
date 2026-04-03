@@ -34,9 +34,14 @@ const VideoCall: React.FC = () => {
   const [microsoftAccessToken, setMicrosoftAccessToken] = useState<string | null>(() => getOAuthAccessToken('microsoft-teams'));
   const [zoomAccessToken, setZoomAccessToken] = useState<string | null>(() => getOAuthAccessToken('zoom'));
 
+  const getRoomsStorageKey = () => {
+    const tenantSlug = typeof window !== 'undefined' ? localStorage.getItem('tenant_slug') : null;
+    return `video_call_rooms:${tenantSlug || 'default'}`;
+  };
+
   useEffect(() => {
     // Load saved rooms from localStorage
-    const savedRooms = localStorage.getItem('video_call_rooms');
+    const savedRooms = localStorage.getItem(getRoomsStorageKey());
     if (savedRooms) {
       setRooms(JSON.parse(savedRooms));
     }
@@ -98,25 +103,13 @@ const VideoCall: React.FC = () => {
             setCreating(false);
             return;
           }
-
-          const meetResponse = await fetch('/api/video-calls/google-meet', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              accessToken: googleAccessToken,
-              title: newRoom.title,
-              startTime: startTime.toISOString(),
-              endTime: endTime.toISOString(),
-              description: newRoom.matterId ? `Related to case: ${newRoom.matterId}` : ''
-            })
-          });
-
-          if (!meetResponse.ok) {
-            const error = await meetResponse.json();
-            throw new Error(error.message || 'Failed to create Google Meet');
-          }
-
-          meetingData = await meetResponse.json();
+          meetingData = await googleMeetService.createMeeting(
+            googleAccessToken,
+            newRoom.title,
+            startTime,
+            endTime,
+            newRoom.matterId ? `Related to case: ${newRoom.matterId}` : ''
+          );
           link = meetingData.meetLink || meetingData.hangoutLink || '';
           break;
 
@@ -126,25 +119,13 @@ const VideoCall: React.FC = () => {
             setCreating(false);
             return;
           }
-
-          const teamsResponse = await fetch('/api/video-calls/teams', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              accessToken: microsoftAccessToken,
-              subject: newRoom.title,
-              startTime: startTime.toISOString(),
-              endTime: endTime.toISOString(),
-              content: newRoom.matterId ? `<p>Related to case: ${newRoom.matterId}</p>` : ''
-            })
-          });
-
-          if (!teamsResponse.ok) {
-            const error = await teamsResponse.json();
-            throw new Error(error.message || 'Failed to create Teams meeting');
-          }
-
-          meetingData = await teamsResponse.json();
+          meetingData = await microsoftTeamsService.createMeeting(
+            microsoftAccessToken,
+            newRoom.title,
+            startTime,
+            endTime,
+            newRoom.matterId ? `<p>Related to case: ${newRoom.matterId}</p>` : ''
+          );
           link = meetingData.joinUrl || meetingData.meetingUrl || '';
           break;
 
@@ -154,24 +135,12 @@ const VideoCall: React.FC = () => {
             setCreating(false);
             return;
           }
-
-          const zoomResponse = await fetch('/api/video-calls/zoom', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              accessToken: zoomAccessToken,
-              topic: newRoom.title,
-              startTime: startTime.toISOString(),
-              duration: newRoom.duration
-            })
-          });
-
-          if (!zoomResponse.ok) {
-            const error = await zoomResponse.json();
-            throw new Error(error.message || 'Failed to create Zoom meeting');
-          }
-
-          meetingData = await zoomResponse.json();
+          meetingData = await zoomService.createMeeting(
+            zoomAccessToken,
+            newRoom.title,
+            startTime,
+            newRoom.duration
+          );
           link = meetingData.joinUrl || '';
           break;
       }
@@ -191,7 +160,7 @@ const VideoCall: React.FC = () => {
 
       const updatedRooms = [room, ...rooms];
       setRooms(updatedRooms);
-      localStorage.setItem('video_call_rooms', JSON.stringify(updatedRooms));
+      localStorage.setItem(getRoomsStorageKey(), JSON.stringify(updatedRooms));
 
       setShowCreateModal(false);
       setNewRoom({
@@ -218,7 +187,7 @@ const VideoCall: React.FC = () => {
   const handleDeleteRoom = (id: string) => {
     const updatedRooms = rooms.filter(r => r.id !== id);
     setRooms(updatedRooms);
-    localStorage.setItem('video_call_rooms', JSON.stringify(updatedRooms));
+    localStorage.setItem(getRoomsStorageKey(), JSON.stringify(updatedRooms));
   };
 
   const getTypeIcon = (type: string) => {

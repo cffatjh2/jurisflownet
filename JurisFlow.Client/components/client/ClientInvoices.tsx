@@ -50,7 +50,7 @@ const ClientInvoices: React.FC = () => {
   const filteredInvoices = invoices.filter(inv => {
     const status = normalizeStatus(inv.status);
     if (filter === 'paid') return status === 'paid';
-    if (filter === 'unpaid') return status === 'sent';
+    if (filter === 'unpaid') return status === 'sent' || status === 'partially_paid' || status === 'partially paid';
     if (filter === 'overdue') return status === 'overdue';
     return true;
   });
@@ -59,7 +59,7 @@ const ClientInvoices: React.FC = () => {
   const unpaidAmount = invoices
     .filter(i => {
       const status = normalizeStatus(i.status);
-      return status === 'overdue' || status === 'sent';
+      return status === 'overdue' || status === 'sent' || status === 'partially_paid' || status === 'partially paid';
     })
     .reduce((sum, inv) => sum + inv.amount, 0);
 
@@ -107,7 +107,7 @@ const ClientInvoices: React.FC = () => {
           <div className="text-2xl font-bold text-yellow-600">
             {invoices.filter(i => {
               const status = normalizeStatus(i.status);
-              return status === 'sent' || status === 'overdue';
+              return status === 'sent' || status === 'overdue' || status === 'partially_paid' || status === 'partially paid';
             }).length}
           </div>
         </div>

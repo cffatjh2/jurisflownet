@@ -22,7 +22,10 @@ interface ExtendedInvoice {
     id: string;
     number?: string;
     client: any;
+    clientId?: string;
+    matterId?: string;
     amount: number;
+    issueDate?: string;
     dueDate: string;
     status: any; // Can be string or InvoiceStatus enum
     lineItems?: {
@@ -54,7 +57,7 @@ interface ExtendedInvoice {
 
 const Billing: React.FC = () => {
     const { t, formatCurrency, formatDate } = useTranslation();
-    const { invoices, addInvoice, updateInvoice, deleteInvoice, matters, timeEntries, expenses, markAsBilled, clients } = useData();
+    const { invoices, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, matters, timeEntries, expenses, markAsBilled, clients } = useData();
     const { confirm } = useConfirm();
 
     // Modal states
@@ -299,7 +302,7 @@ const Billing: React.FC = () => {
     }, [billingSettings, invoicePreview]);
 
     // Create Invoice
-    const handleCreateInvoice = (e: React.FormEvent) => {
+    const handleCreateInvoice = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedMatterId || !invoicePreview) return;
 
@@ -315,12 +318,22 @@ const Billing: React.FC = () => {
 
         const resolvedEntityId = invoiceEntityId || invoicePreview.matter.entityId || '';
         const resolvedOfficeId = invoiceOfficeId || invoicePreview.matter.officeId || '';
+        const resolvedClientId = invoicePreview.matter.clientId || invoicePreview.matter.client?.id;
+        const resolvedClient = invoicePreview.matter.client || clients.find(client => client.id === resolvedClientId);
+
+        if (!resolvedClientId || !resolvedClient) {
+            toast.error('The selected matter does not have a valid client.');
+            return;
+        }
 
         const newInvoice: ExtendedInvoice = {
             id: `inv${Date.now()}`,
             number: `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,
-            client: invoicePreview.matter.client,
+            client: resolvedClient,
+            clientId: resolvedClientId,
+            matterId: selectedMatterId,
             amount: invoicePreview.total,
+            issueDate: new Date().toISOString(),
             dueDate: new Date(Date.now() + (billingSettings?.defaultPaymentTerms ?? 14) * 24 * 60 * 60 * 1000).toISOString(),
             status: 'DRAFT',
             lineItems: invoicePreview.lineItems,
@@ -333,22 +346,27 @@ const Billing: React.FC = () => {
             officeId: resolvedOfficeId || undefined
         };
 
-        addInvoice({
-            ...newInvoice,
-            entityId: resolvedEntityId || undefined,
-            officeId: resolvedOfficeId || undefined
-        });
-        markAsBilled(selectedMatterId);
+        try {
+            await addInvoice({
+                ...newInvoice,
+                entityId: resolvedEntityId || undefined,
+                officeId: resolvedOfficeId || undefined
+            });
+            await markAsBilled(selectedMatterId);
 
-        // Reset form
-        setShowCreateModal(false);
-        setSelectedMatterId('');
-        setInvoiceNotes('');
-        setTaxRate(0);
-        setDiscountAmount(0);
-        setInvoiceEntityId('');
-        setInvoiceOfficeId('');
-        toast.success('Invoice created successfully!');
+            // Reset form
+            setShowCreateModal(false);
+            setSelectedMatterId('');
+            setInvoiceNotes('');
+            setTaxRate(0);
+            setDiscountAmount(0);
+            setInvoiceEntityId('');
+            setInvoiceOfficeId('');
+            toast.success('Invoice created successfully!');
+        } catch (error: any) {
+            console.error('Failed to create invoice', error);
+            toast.error(error?.message || 'Failed to create invoice.');
+        }
     };
 
     // Record Payment
@@ -410,8 +428,16 @@ const Billing: React.FC = () => {
         });
         if (!ok) return;
 
-        updateInvoice(invoice.id, { status: 'SENT' });
-        toast.success('Invoice sent to client!');
+        try {
+            const updatedInvoice = await sendInvoice(invoice.id);
+            if (updatedInvoice) {
+                setSelectedInvoice(prev => prev && prev.id === invoice.id ? { ...prev, ...updatedInvoice } : prev);
+            }
+            toast.success('Invoice sent to client!');
+        } catch (error: any) {
+            console.error('Failed to send invoice', error);
+            toast.error(error?.message || 'Failed to send invoice.');
+        }
     };
 
     const handleExportLedes = async (invoice: ExtendedInvoice) => {
@@ -445,10 +471,15 @@ const Billing: React.FC = () => {
         });
         if (!ok) return;
 
-        deleteInvoice(invoice.id);
-        setShowDetailModal(false);
-        setSelectedInvoice(null);
-        toast.success('Invoice deleted');
+        try {
+            await deleteInvoice(invoice.id);
+            setShowDetailModal(false);
+            setSelectedInvoice(null);
+            toast.success('Invoice deleted');
+        } catch (error: any) {
+            console.error('Failed to delete invoice', error);
+            toast.error(error?.message || 'Failed to delete invoice.');
+        }
     };
 
     // Get status badge
@@ -1198,9 +1229,14 @@ const Billing: React.FC = () => {
                                     <>
                                         <button
                                             onClick={async () => {
-                                                updateInvoice(selectedInvoice.id, { status: 'APPROVED' });
-                                                toast.success('Invoice approved.');
-                                                setSelectedInvoice(prev => prev ? { ...prev, status: 'APPROVED' as any } : null);
+                                                try {
+                                                    const updatedInvoice = await approveInvoice(selectedInvoice.id);
+                                                    toast.success('Invoice approved.');
+                                                    setSelectedInvoice(prev => prev ? { ...prev, ...(updatedInvoice || { status: 'APPROVED' as any }) } : null);
+                                                } catch (error: any) {
+                                                    console.error('Failed to approve invoice', error);
+                                                    toast.error(error?.message || 'Failed to approve invoice.');
+                                                }
                                             }}
                                             className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700"
                                         >

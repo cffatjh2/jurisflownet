@@ -113,16 +113,41 @@ namespace JurisFlow.Server.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateInvoice([FromBody] InvoiceCreateDto dto)
         {
-            if (string.IsNullOrWhiteSpace(dto.MatterId))
+            var requestedMatterId = string.IsNullOrWhiteSpace(dto.MatterId) ? null : dto.MatterId.Trim();
+            var requestedClientId = string.IsNullOrWhiteSpace(dto.ClientId) ? null : dto.ClientId.Trim();
+
+            Matter? selectedMatter = null;
+            if (string.IsNullOrWhiteSpace(requestedMatterId))
             {
                 if (!_matterAccess.IsPrivileged(User))
                 {
-                    return Forbid();
+                    return BadRequest(new { message = "MatterId is required for invoice creation." });
                 }
             }
-            else if (!await _matterAccess.CanManageMatterAsync(dto.MatterId, User, cancellationToken: HttpContext.RequestAborted))
+            else if (!await _matterAccess.CanManageMatterAsync(requestedMatterId, User, cancellationToken: HttpContext.RequestAborted))
             {
                 return Forbid();
+            }
+            else
+            {
+                selectedMatter = await _context.Matters
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(m => m.Id == requestedMatterId, HttpContext.RequestAborted);
+                if (selectedMatter == null)
+                {
+                    return BadRequest(new { message = "Selected matter was not found." });
+                }
+            }
+
+            var resolvedClientId = ResolveInvoiceClientId(requestedClientId, selectedMatter);
+            if (string.IsNullOrWhiteSpace(resolvedClientId))
+            {
+                return BadRequest(new { message = "ClientId is required for invoice creation." });
+            }
+
+            if (!await _context.Clients.AsNoTracking().AnyAsync(c => c.Id == resolvedClientId, HttpContext.RequestAborted))
+            {
+                return BadRequest(new { message = "Selected client was not found." });
             }
 
             if (await IsPeriodLocked(dto.IssueDate ?? DateTime.UtcNow))
@@ -150,8 +175,8 @@ namespace JurisFlow.Server.Controllers
             {
                 Id = Guid.NewGuid().ToString(),
                 Number = invoiceNumber,
-                ClientId = dto.ClientId,
-                MatterId = dto.MatterId,
+                ClientId = resolvedClientId,
+                MatterId = requestedMatterId,
                 EntityId = resolvedEntityId,
                 OfficeId = resolvedOfficeId,
                 Status = dto.Status ?? InvoiceStatus.Draft,
@@ -211,15 +236,41 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Billing period is locked. Cannot update invoice." });
             }
 
-            if (!string.IsNullOrWhiteSpace(dto.MatterId) &&
-                !await _matterAccess.CanManageMatterAsync(dto.MatterId, User, cancellationToken: HttpContext.RequestAborted))
+            var requestedMatterId = string.IsNullOrWhiteSpace(dto.MatterId) ? invoice.MatterId : dto.MatterId.Trim();
+            var requestedClientId = string.IsNullOrWhiteSpace(dto.ClientId) ? invoice.ClientId : dto.ClientId.Trim();
+
+            if (!string.IsNullOrWhiteSpace(requestedMatterId) &&
+                !await _matterAccess.CanManageMatterAsync(requestedMatterId, User, cancellationToken: HttpContext.RequestAborted))
             {
                 return Forbid();
             }
 
+            Matter? selectedMatter = null;
+            if (!string.IsNullOrWhiteSpace(requestedMatterId))
+            {
+                selectedMatter = await _context.Matters
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(m => m.Id == requestedMatterId, HttpContext.RequestAborted);
+                if (selectedMatter == null)
+                {
+                    return BadRequest(new { message = "Selected matter was not found." });
+                }
+            }
+
+            var resolvedClientId = ResolveInvoiceClientId(requestedClientId, selectedMatter);
+            if (string.IsNullOrWhiteSpace(resolvedClientId))
+            {
+                return BadRequest(new { message = "ClientId is required for invoice update." });
+            }
+
+            if (!await _context.Clients.AsNoTracking().AnyAsync(c => c.Id == resolvedClientId, HttpContext.RequestAborted))
+            {
+                return BadRequest(new { message = "Selected client was not found." });
+            }
+
             if (!string.IsNullOrWhiteSpace(dto.Number)) invoice.Number = dto.Number;
-            if (!string.IsNullOrWhiteSpace(dto.ClientId)) invoice.ClientId = dto.ClientId;
-            if (!string.IsNullOrWhiteSpace(dto.MatterId)) invoice.MatterId = dto.MatterId;
+            invoice.ClientId = resolvedClientId;
+            invoice.MatterId = requestedMatterId;
             if (!string.IsNullOrWhiteSpace(dto.EntityId)) invoice.EntityId = dto.EntityId;
             if (!string.IsNullOrWhiteSpace(dto.OfficeId)) invoice.OfficeId = dto.OfficeId;
             if (dto.Status.HasValue) invoice.Status = dto.Status.Value;
@@ -271,6 +322,77 @@ namespace JurisFlow.Server.Controllers
             await _context.SaveChangesAsync();
             await _auditLogger.LogAsync(HttpContext, "invoice.update", "Invoice", invoice.Id, $"Status={invoice.Status}, Total={invoice.Total}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_update");
+
+            return Ok(invoice);
+        }
+
+        // POST: api/Invoices/{id}/approve
+        [HttpPost("{id}/approve")]
+        public async Task<IActionResult> ApproveInvoice(string id)
+        {
+            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
+
+            if (await IsPeriodLocked(DateTime.UtcNow))
+            {
+                return BadRequest(new { message = "Billing period is locked. Cannot approve invoice." });
+            }
+
+            if (invoice.Status is InvoiceStatus.Cancelled or InvoiceStatus.WrittenOff)
+            {
+                return BadRequest(new { message = "Cancelled or written-off invoices cannot be approved." });
+            }
+
+            invoice.Status = InvoiceStatus.Approved;
+            invoice.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(HttpContext, "invoice.approve", "Invoice", invoice.Id, $"Status={invoice.Status}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_approve");
+
+            return Ok(invoice);
+        }
+
+        // POST: api/Invoices/{id}/send
+        [HttpPost("{id}/send")]
+        public async Task<IActionResult> SendInvoice(string id)
+        {
+            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            if (invoice == null) return NotFound();
+            if (!await CanManageInvoiceAsync(invoice))
+            {
+                return Forbid();
+            }
+
+            if (await IsPeriodLocked(DateTime.UtcNow))
+            {
+                return BadRequest(new { message = "Billing period is locked. Cannot send invoice." });
+            }
+
+            if (invoice.Status is InvoiceStatus.Cancelled or InvoiceStatus.WrittenOff)
+            {
+                return BadRequest(new { message = "Cancelled or written-off invoices cannot be sent." });
+            }
+
+            var shouldNotifyClient = invoice.Status is InvoiceStatus.Draft or InvoiceStatus.PendingApproval or InvoiceStatus.Approved;
+            if (shouldNotifyClient)
+            {
+                invoice.Status = InvoiceStatus.Sent;
+            }
+
+            invoice.UpdatedAt = DateTime.UtcNow;
+
+            if (shouldNotifyClient)
+            {
+                await QueueClientInvoiceNotificationAsync(invoice);
+            }
+            await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(HttpContext, "invoice.send", "Invoice", invoice.Id, $"Status={invoice.Status}");
+            await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_send");
 
             return Ok(invoice);
         }
@@ -448,6 +570,42 @@ namespace JurisFlow.Server.Controllers
             await _auditLogger.LogAsync(HttpContext, "invoice.delete", "Invoice", id, "Deleted invoice");
 
             return NoContent();
+        }
+
+        private static string? ResolveInvoiceClientId(string? requestedClientId, Matter? matter)
+        {
+            var normalizedClientId = string.IsNullOrWhiteSpace(requestedClientId) ? null : requestedClientId.Trim();
+            if (matter == null)
+            {
+                return normalizedClientId;
+            }
+
+            if (string.IsNullOrWhiteSpace(matter.ClientId))
+            {
+                return null;
+            }
+
+            return matter.ClientId;
+        }
+
+        private async Task QueueClientInvoiceNotificationAsync(Invoice invoice)
+        {
+            var client = await _context.Clients
+                .AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == invoice.ClientId, HttpContext.RequestAborted);
+            if (client == null)
+            {
+                return;
+            }
+
+            _context.Notifications.Add(new Notification
+            {
+                ClientId = client.Id,
+                Title = "New Invoice Available",
+                Message = $"Invoice {invoice.Number ?? invoice.Id} for ${invoice.Total:0.00} is now available in your client portal.",
+                Type = "info",
+                Link = "tab:invoices"
+            });
         }
 
         private async Task<BillingSettings> GetBillingSettingsAsync()

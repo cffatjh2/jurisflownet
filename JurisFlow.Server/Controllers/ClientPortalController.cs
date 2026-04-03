@@ -244,7 +244,13 @@ namespace JurisFlow.Server.Controllers
             var client = await TenantScope(_context.Clients).FirstOrDefaultAsync(c => c.Id == clientId);
 
             var invoices = await TenantScope(_context.Invoices)
-                .Where(i => i.ClientId == clientId)
+                .Where(i => i.ClientId == clientId
+                    && (i.Status == InvoiceStatus.Sent
+                        || i.Status == InvoiceStatus.PartiallyPaid
+                        || i.Status == InvoiceStatus.Paid
+                        || i.Status == InvoiceStatus.Overdue
+                        || i.Status == InvoiceStatus.Cancelled
+                        || i.Status == InvoiceStatus.WrittenOff))
                 .OrderByDescending(i => i.IssueDate)
                 .ToListAsync();
 
