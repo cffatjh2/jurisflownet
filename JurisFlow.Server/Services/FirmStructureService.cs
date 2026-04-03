@@ -1,15 +1,18 @@
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
+using Microsoft.Extensions.Logging;
 
 namespace JurisFlow.Server.Services
 {
     public class FirmStructureService
     {
         private readonly JurisFlowDbContext _context;
+        private readonly ILogger<FirmStructureService> _logger;
 
-        public FirmStructureService(JurisFlowDbContext context)
+        public FirmStructureService(JurisFlowDbContext context, ILogger<FirmStructureService> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         public async Task<string?> GetDefaultEntityIdAsync()
@@ -48,75 +51,91 @@ namespace JurisFlow.Server.Services
             var resolvedEntityId = NormalizeId(entityId);
             var resolvedOfficeId = NormalizeId(officeId);
 
-            if (!string.IsNullOrWhiteSpace(resolvedEntityId))
+            try
             {
-                var entityExists = await _context.FirmEntities
-                    .AsNoTracking()
-                    .AnyAsync(e => e.Id == resolvedEntityId && e.IsActive);
-                if (!entityExists)
+                if (!string.IsNullOrWhiteSpace(resolvedEntityId))
                 {
-                    resolvedEntityId = null;
+                    var entityExists = await _context.FirmEntities
+                        .AsNoTracking()
+                        .AnyAsync(e => e.Id == resolvedEntityId && e.IsActive);
+                    if (!entityExists)
+                    {
+                        resolvedEntityId = null;
+                    }
                 }
-            }
 
-            if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
+                if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
+                {
+                    var office = await _context.Offices
+                        .AsNoTracking()
+                        .Where(o => o.Id == resolvedOfficeId && o.IsActive)
+                        .Select(o => new { o.Id, o.EntityId })
+                        .FirstOrDefaultAsync();
+
+                    if (office == null)
+                    {
+                        resolvedOfficeId = null;
+                    }
+                    else if (string.IsNullOrWhiteSpace(resolvedEntityId))
+                    {
+                        resolvedEntityId = office.EntityId;
+                    }
+                    else if (!string.Equals(office.EntityId, resolvedEntityId, StringComparison.Ordinal))
+                    {
+                        resolvedOfficeId = null;
+                    }
+                }
+
+                resolvedEntityId ??= await GetDefaultEntityIdAsync();
+
+                if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
+                {
+                    var officeMatchesEntity = await _context.Offices
+                        .AsNoTracking()
+                        .AnyAsync(o => o.Id == resolvedOfficeId
+                            && o.IsActive
+                            && (string.IsNullOrWhiteSpace(resolvedEntityId) || o.EntityId == resolvedEntityId));
+                    if (!officeMatchesEntity)
+                    {
+                        resolvedOfficeId = null;
+                    }
+                }
+
+                resolvedOfficeId ??= await GetDefaultOfficeIdAsync(resolvedEntityId);
+
+                return (resolvedEntityId, resolvedOfficeId);
+            }
+            catch (Exception ex)
             {
-                var office = await _context.Offices
-                    .AsNoTracking()
-                    .Where(o => o.Id == resolvedOfficeId && o.IsActive)
-                    .Select(o => new { o.Id, o.EntityId })
-                    .FirstOrDefaultAsync();
-
-                if (office == null)
-                {
-                    resolvedOfficeId = null;
-                }
-                else if (string.IsNullOrWhiteSpace(resolvedEntityId))
-                {
-                    resolvedEntityId = office.EntityId;
-                }
-                else if (!string.Equals(office.EntityId, resolvedEntityId, StringComparison.Ordinal))
-                {
-                    resolvedOfficeId = null;
-                }
+                _logger.LogWarning(ex, "Firm structure lookup failed. Falling back to no entity/office binding for this write.");
+                return (null, null);
             }
-
-            resolvedEntityId ??= await GetDefaultEntityIdAsync();
-
-            if (!string.IsNullOrWhiteSpace(resolvedOfficeId))
-            {
-                var officeMatchesEntity = await _context.Offices
-                    .AsNoTracking()
-                    .AnyAsync(o => o.Id == resolvedOfficeId
-                        && o.IsActive
-                        && (string.IsNullOrWhiteSpace(resolvedEntityId) || o.EntityId == resolvedEntityId));
-                if (!officeMatchesEntity)
-                {
-                    resolvedOfficeId = null;
-                }
-            }
-
-            resolvedOfficeId ??= await GetDefaultOfficeIdAsync(resolvedEntityId);
-
-            return (resolvedEntityId, resolvedOfficeId);
         }
 
         public async Task<(string? entityId, string? officeId)> ResolveEntityOfficeFromMatterAsync(string? matterId, string? entityId, string? officeId)
         {
-            if (!string.IsNullOrWhiteSpace(matterId))
+            try
             {
-                var matter = await _context.Matters
-                    .Where(m => m.Id == matterId)
-                    .Select(m => new { m.EntityId, m.OfficeId })
-                    .FirstOrDefaultAsync();
-                if (matter != null)
+                if (!string.IsNullOrWhiteSpace(matterId))
                 {
-                    entityId ??= matter.EntityId;
-                    officeId ??= matter.OfficeId;
+                    var matter = await _context.Matters
+                        .Where(m => m.Id == matterId)
+                        .Select(m => new { m.EntityId, m.OfficeId })
+                        .FirstOrDefaultAsync();
+                    if (matter != null)
+                    {
+                        entityId ??= matter.EntityId;
+                        officeId ??= matter.OfficeId;
+                    }
                 }
-            }
 
-            return await ResolveEntityOfficeAsync(entityId, officeId);
+                return await ResolveEntityOfficeAsync(entityId, officeId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Matter-based entity/office resolution failed. Falling back to no entity/office binding for this write.");
+                return (null, null);
+            }
         }
 
         private static string? NormalizeId(string? value)

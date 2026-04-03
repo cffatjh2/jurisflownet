@@ -19,6 +19,7 @@ namespace JurisFlow.Server.Controllers
     public class MattersController : ControllerBase
     {
         private const string DeletedMatterStatus = "Deleted";
+        private static bool EnableSecondaryClientWrites => false;
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
@@ -109,53 +110,55 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<Matter>> PostMatter(Matter matter)
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
-            var currentUserId = GetUserId();
-            if (string.IsNullOrWhiteSpace(currentUserId))
+
+            try
             {
-                return Unauthorized();
+                var currentUserId = GetUserId();
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized();
+                }
+                if (string.IsNullOrWhiteSpace(matter.ClientId))
+                {
+                    return BadRequest(new { message = "ClientId is required." });
+                }
+
+                var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+                if (resolvedClientId == null)
+                {
+                    return BadRequest(new { message = "Selected client was not found." });
+                }
+
+                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, matter.RelatedClientIds);
+
+                matter.Id = Guid.NewGuid().ToString();
+                matter.OpenDate = DateTime.UtcNow;
+                matter.ClientId = resolvedClientId;
+                matter.CreatedByUserId = currentUserId;
+                NormalizeSharingSettings(matter);
+
+                var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+                matter.EntityId = resolved.entityId;
+                matter.OfficeId = resolved.officeId;
+
+                _context.Matters.Add(matter);
+                await _context.SaveChangesAsync(HttpContext.RequestAborted);
+                if (relatedClientResolution.ClientIds.Count > 0)
+                {
+                    await TrySyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+                }
+
+                await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
+
+                await TryAuditAsync("matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
+
+                return CreatedAtAction("GetMatter", new { id = matter.Id }, matter);
             }
-            if (string.IsNullOrWhiteSpace(matter.ClientId))
+            catch (Exception ex)
             {
-                return BadRequest(new { message = "ClientId is required." });
+                _logger.LogError(ex, "Matter create failed. RootCause={RootCause}", ex.GetBaseException().Message);
+                return StatusCode(500, new { message = "Failed to create matter." });
             }
-
-            var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
-            if (resolvedClientId == null)
-            {
-                return BadRequest(new { message = "Selected client was not found." });
-            }
-
-            var relatedClientResolution = await _matterClientLinks.ResolveRelatedClientIdsAsync(
-                resolvedClientId,
-                matter.RelatedClientIds,
-                HttpContext.RequestAborted);
-            if (relatedClientResolution.InvalidClientIds.Count > 0)
-            {
-                return BadRequest(new { message = "One or more additional clients were not found." });
-            }
-
-            matter.Id = Guid.NewGuid().ToString();
-            matter.OpenDate = DateTime.UtcNow;
-            matter.ClientId = resolvedClientId;
-            matter.CreatedByUserId = currentUserId;
-            NormalizeSharingSettings(matter);
-
-            var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
-            matter.EntityId = resolved.entityId;
-            matter.OfficeId = resolved.officeId;
-
-            _context.Matters.Add(matter);
-            await _context.SaveChangesAsync(HttpContext.RequestAborted);
-            if (relatedClientResolution.ClientIds.Count > 0)
-            {
-                await TrySyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
-            }
-
-            await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
-
-            await TryAuditAsync("matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
-
-            return CreatedAtAction("GetMatter", new { id = matter.Id }, matter);
         }
 
         // PUT: api/Matters/5
@@ -164,79 +167,73 @@ namespace JurisFlow.Server.Controllers
         {
             if (id != matter.Id) return BadRequest();
             if (!ModelState.IsValid) return BadRequest(ModelState);
-            if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
-            {
-                return Forbid();
-            }
-            if (string.IsNullOrWhiteSpace(matter.ClientId))
-            {
-                return BadRequest(new { message = "ClientId is required." });
-            }
 
-            var existingMatter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
-            if (existingMatter == null)
+            try
             {
-                return NotFound();
-            }
-
-            var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
-            if (resolvedClientId == null)
-            {
-                return BadRequest(new { message = "Selected client was not found." });
-            }
-
-            MatterRelatedClientResolution? relatedClientResolution = null;
-            if (matter.RelatedClientIds != null)
-            {
-                relatedClientResolution = await _matterClientLinks.ResolveRelatedClientIdsAsync(
-                    resolvedClientId,
-                    matter.RelatedClientIds,
-                    HttpContext.RequestAborted);
-                if (relatedClientResolution.InvalidClientIds.Count > 0)
+                if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
                 {
-                    return BadRequest(new { message = "One or more additional clients were not found." });
+                    return Forbid();
                 }
+                if (string.IsNullOrWhiteSpace(matter.ClientId))
+                {
+                    return BadRequest(new { message = "ClientId is required." });
+                }
+
+                var existingMatter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
+                if (existingMatter == null)
+                {
+                    return NotFound();
+                }
+
+                var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+                if (resolvedClientId == null)
+                {
+                    return BadRequest(new { message = "Selected client was not found." });
+                }
+
+                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, matter.RelatedClientIds);
+
+                var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+
+                existingMatter.CaseNumber = matter.CaseNumber;
+                existingMatter.Name = matter.Name;
+                existingMatter.PracticeArea = matter.PracticeArea;
+                existingMatter.CourtType = matter.CourtType;
+                existingMatter.Outcome = matter.Outcome;
+                existingMatter.Status = matter.Status;
+                existingMatter.FeeStructure = matter.FeeStructure;
+                existingMatter.OpenDate = matter.OpenDate;
+                existingMatter.ResponsibleAttorney = matter.ResponsibleAttorney;
+                existingMatter.BillableRate = matter.BillableRate;
+                existingMatter.TrustBalance = matter.TrustBalance;
+                existingMatter.CurrentOutcomeFeePlanId = matter.CurrentOutcomeFeePlanId;
+                existingMatter.EntityId = resolved.entityId;
+                existingMatter.OfficeId = resolved.officeId;
+                existingMatter.ClientId = resolvedClientId;
+                existingMatter.ConflictCheckDate = matter.ConflictCheckDate;
+                existingMatter.ConflictCheckCleared = matter.ConflictCheckCleared;
+                existingMatter.ConflictWaiverObtained = matter.ConflictWaiverObtained;
+                existingMatter.ShareWithFirm = matter.ShareWithFirm;
+                existingMatter.ShareBillingWithFirm = matter.ShareBillingWithFirm;
+                existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
+                NormalizeSharingSettings(existingMatter);
+
+                await _context.SaveChangesAsync(HttpContext.RequestAborted);
+                if (relatedClientResolution.ClientIds.Count > 0)
+                {
+                    await TrySyncRelatedClientsAsync(existingMatter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+                }
+
+                await TryAuditAsync("matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
+                await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
+
+                return NoContent();
             }
-
-            var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
-
-            existingMatter.CaseNumber = matter.CaseNumber;
-            existingMatter.Name = matter.Name;
-            existingMatter.PracticeArea = matter.PracticeArea;
-            existingMatter.CourtType = matter.CourtType;
-            existingMatter.Outcome = matter.Outcome;
-            existingMatter.Status = matter.Status;
-            existingMatter.FeeStructure = matter.FeeStructure;
-            existingMatter.OpenDate = matter.OpenDate;
-            existingMatter.ResponsibleAttorney = matter.ResponsibleAttorney;
-            existingMatter.BillableRate = matter.BillableRate;
-            existingMatter.TrustBalance = matter.TrustBalance;
-            existingMatter.CurrentOutcomeFeePlanId = matter.CurrentOutcomeFeePlanId;
-            existingMatter.EntityId = resolved.entityId;
-            existingMatter.OfficeId = resolved.officeId;
-            existingMatter.ClientId = resolvedClientId;
-            existingMatter.ConflictCheckDate = matter.ConflictCheckDate;
-            existingMatter.ConflictCheckCleared = matter.ConflictCheckCleared;
-            existingMatter.ConflictWaiverObtained = matter.ConflictWaiverObtained;
-            existingMatter.ShareWithFirm = matter.ShareWithFirm;
-            existingMatter.ShareBillingWithFirm = matter.ShareBillingWithFirm;
-            existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
-            NormalizeSharingSettings(existingMatter);
-
-            await _context.SaveChangesAsync(HttpContext.RequestAborted);
-            if (relatedClientResolution != null)
+            catch (Exception ex)
             {
-                await TrySyncRelatedClientsAsync(existingMatter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+                _logger.LogError(ex, "Matter update failed for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
+                return StatusCode(500, new { message = "Failed to update matter." });
             }
-            else
-            {
-                await TryRemovePrimaryClientDuplicatesAsync(existingMatter.Id, resolvedClientId, HttpContext.RequestAborted);
-            }
-
-            await TryAuditAsync("matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
-            await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
-
-            return NoContent();
         }
 
         // DELETE: api/Matters/5
@@ -652,6 +649,16 @@ namespace JurisFlow.Server.Controllers
             return clientExists ? normalizedClientId : null;
         }
 
+        private Task<MatterRelatedClientResolution> ResolveRelatedClientsForWriteAsync(string primaryClientId, IEnumerable<string>? requestedClientIds)
+        {
+            if ((requestedClientIds?.Any(id => !string.IsNullOrWhiteSpace(id)) ?? false))
+            {
+                _logger.LogInformation("Ignoring secondary client links on matter write while the feature is temporarily disabled. PrimaryClientId={PrimaryClientId}", primaryClientId);
+            }
+
+            return Task.FromResult(new MatterRelatedClientResolution(Array.Empty<string>(), Array.Empty<string>()));
+        }
+
         private async Task TrySyncRelatedClientsAsync(string matterId, IReadOnlyCollection<string> relatedClientIds, CancellationToken cancellationToken)
         {
             if (relatedClientIds.Count == 0)
@@ -701,11 +708,7 @@ namespace JurisFlow.Server.Controllers
 
         private async Task TryPopulateRelatedClientsAsync(IList<Matter> matters, CancellationToken cancellationToken)
         {
-            try
-            {
-                await _matterClientLinks.PopulateRelatedClientsAsync(matters, cancellationToken);
-            }
-            catch (Exception ex) when (IsMissingSchemaException(ex))
+            if (!EnableSecondaryClientWrites)
             {
                 foreach (var matter in matters)
                 {
@@ -713,7 +716,22 @@ namespace JurisFlow.Server.Controllers
                     matter.RelatedClients = new List<Client>();
                 }
 
-                _logger.LogWarning(ex, "MatterClientLinks schema is unavailable while loading related clients. Returning matters without secondary client links.");
+                return;
+            }
+
+            try
+            {
+                await _matterClientLinks.PopulateRelatedClientsAsync(matters, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                foreach (var matter in matters)
+                {
+                    matter.RelatedClientIds = new List<string>();
+                    matter.RelatedClients = new List<Client>();
+                }
+
+                _logger.LogWarning(ex, "Matter related client population failed. Returning matters without secondary client links.");
             }
         }
 

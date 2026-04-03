@@ -177,7 +177,34 @@ const buildOutcomePlannerPreview = (params: {
   };
 };
 
+const buildInitialMatterForm = () => ({
+  name: '',
+  caseNumber: '',
+  practiceArea: PracticeArea.CivilLitigation,
+  feeStructure: FeeStructure.Hourly,
+  partyId: '',
+  partyType: 'client' as 'client' | 'lead',
+  relatedClientIds: [] as string[],
+  trustAmount: '' as string | number,
+  courtType: '',
+  bailStatus: 'None',
+  bailAmount: '' as string | number,
+  outcome: '',
+  shareWithFirm: false,
+  shareBillingWithFirm: false,
+  shareNotesWithFirm: false,
+  entityId: '',
+  officeId: '',
+  opposingPartyName: '',
+  opposingPartyType: 'Individual' as 'Individual' | 'Corporation' | 'Government',
+  opposingPartyCompany: '',
+  opposingCounselName: '',
+  opposingCounselFirm: '',
+  opposingCounselEmail: ''
+});
+
 const Matters: React.FC = () => {
+  const matterSecondaryClientsEnabled = false;
   const { t, formatCurrency, formatDate } = useTranslation();
   const { matters, clients, leads, addMatter, updateMatter, deleteMatter, addClient, timeEntries, documents, messages, tasks } = useData();
   const [showModal, setShowModal] = useState(false);
@@ -450,32 +477,7 @@ const Matters: React.FC = () => {
   }, [selectedMatter?.id]);
 
   // Form State
-  const [formData, setFormData] = useState({
-    name: '',
-    caseNumber: '',
-    practiceArea: PracticeArea.CivilLitigation,
-    feeStructure: FeeStructure.Hourly,
-    partyId: '',
-    partyType: 'client' as 'client' | 'lead',
-    relatedClientIds: [] as string[],
-    trustAmount: '' as string | number,
-    courtType: '',
-    bailStatus: 'None',
-    bailAmount: '' as string | number,
-    outcome: '',
-    shareWithFirm: false,
-    shareBillingWithFirm: false,
-    shareNotesWithFirm: false,
-    entityId: '',
-    officeId: '',
-    // Opposing Party
-    opposingPartyName: '',
-    opposingPartyType: 'Individual' as 'Individual' | 'Corporation' | 'Government',
-    opposingPartyCompany: '',
-    opposingCounselName: '',
-    opposingCounselFirm: '',
-    opposingCounselEmail: ''
-  });
+  const [formData, setFormData] = useState(buildInitialMatterForm);
 
   // US Court Types from enum
   const courtOptions = Object.values(CourtType);
@@ -974,7 +976,7 @@ const Matters: React.FC = () => {
       shareNotesWithFirm: formData.shareWithFirm && formData.shareBillingWithFirm && formData.shareNotesWithFirm,
       entityId: formData.entityId || undefined,
       officeId: formData.officeId || undefined,
-      relatedClientIds: formData.relatedClientIds
+      relatedClientIds: matterSecondaryClientsEnabled ? formData.relatedClientIds : []
     };
     const plannerDraftSnapshot: OutcomePlannerDraft = { ...outcomePlannerDraft };
     const shouldAutoSavePlanner = plannerDraftSnapshot.enabled && plannerDraftSnapshot.autoSave;
@@ -988,7 +990,7 @@ const Matters: React.FC = () => {
         sourceLeadId: selectedLead?.id,
         entityId: formData.entityId || undefined,
         officeId: formData.officeId || undefined,
-        relatedClientIds: formData.relatedClientIds
+        relatedClientIds: matterSecondaryClientsEnabled ? formData.relatedClientIds : []
       });
 
       if (shouldAutoSavePlanner) {
@@ -1007,31 +1009,7 @@ const Matters: React.FC = () => {
       }
 
       setShowModal(false);
-      setFormData({
-        name: '',
-        caseNumber: '',
-        practiceArea: PracticeArea.CivilLitigation,
-        feeStructure: FeeStructure.Hourly,
-        partyId: '',
-        partyType: 'client',
-        relatedClientIds: [],
-        trustAmount: '',
-        courtType: '',
-        bailStatus: 'None',
-        bailAmount: '',
-        outcome: '',
-        shareWithFirm: false,
-        shareBillingWithFirm: false,
-        shareNotesWithFirm: false,
-        entityId: '',
-        officeId: '',
-        opposingPartyName: '',
-        opposingPartyType: 'Individual',
-        opposingPartyCompany: '',
-        opposingCounselName: '',
-        opposingCounselFirm: '',
-        opposingCounselEmail: ''
-      });
+      setFormData(buildInitialMatterForm());
       resetOutcomePlannerState();
     } catch (error) {
       console.error('Failed to create matter', error);
@@ -1236,7 +1214,7 @@ const Matters: React.FC = () => {
         </div>
         <Can perform="matter.create">
           <button
-            onClick={() => { resetOutcomePlannerState(); setShowModal(true); }}
+            onClick={() => { resetOutcomePlannerState(); setEditData(null); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); setShowModal(true); }}
             className="bg-slate-800 text-white px-5 py-2.5 rounded-lg shadow-lg hover:bg-slate-700 transition-colors text-sm font-medium flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
@@ -2296,7 +2274,7 @@ const Matters: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800">{editData ? 'Edit Matter' : t('create_matter_modal')}</h3>
-              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData((prev) => ({ ...prev, relatedClientIds: [] })); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={editData ? (e) => {
               e.preventDefault();
@@ -2318,7 +2296,7 @@ const Matters: React.FC = () => {
                   shareNotesWithFirm: !!editData.shareWithFirm && !!editData.shareBillingWithFirm && !!editData.shareNotesWithFirm,
                   entityId: editData.entityId,
                   officeId: editData.officeId,
-                  relatedClientIds: Array.isArray(editData.relatedClientIds) ? editData.relatedClientIds : []
+                  relatedClientIds: []
                 });
                 setShowModal(false);
                 setEditData(null);
@@ -2393,6 +2371,7 @@ const Matters: React.FC = () => {
                   </button>
                 </div>
               )}
+              {matterSecondaryClientsEnabled && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                 <div>
                   <h4 className="text-sm font-bold text-slate-800">Client Access</h4>
@@ -2440,6 +2419,7 @@ const Matters: React.FC = () => {
                   )}
                 </div>
               </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('practice_area')}</label>
@@ -2864,7 +2844,7 @@ const Matters: React.FC = () => {
               )}
 
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData((prev) => ({ ...prev, relatedClientIds: [] })); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
+                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
                 <button type="submit" disabled={matterSubmitting} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
                   {matterSubmitting ? t('saving') : t('save')}
                 </button>

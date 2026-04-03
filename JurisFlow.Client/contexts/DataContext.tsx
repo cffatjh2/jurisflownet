@@ -868,6 +868,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       const payload = { ...matterData };
       delete payload.client;
       delete payload.relatedClients;
+      delete payload.relatedClientIds;
       if (!payload.clientId) {
         throw new Error('Client is required to create a matter.');
       }
@@ -936,6 +937,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       } as Partial<Matter>;
       delete (payload as any).client;
       delete (payload as any).relatedClients;
+      delete (payload as any).relatedClientIds;
 
       const updated = await api.updateMatter(id, payload);
       setMatters(prev => prev.map(m => {
