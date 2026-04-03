@@ -23,17 +23,20 @@ namespace JurisFlow.Server.Controllers
         private readonly IConfiguration _configuration;
         private readonly ILogger<BootstrapController> _logger;
         private readonly MatterAccessService _matterAccess;
+        private readonly MatterClientLinkService _matterClientLinks;
 
         public BootstrapController(
             JurisFlowDbContext context,
             IConfiguration configuration,
             ILogger<BootstrapController> logger,
-            MatterAccessService matterAccess)
+            MatterAccessService matterAccess,
+            MatterClientLinkService matterClientLinks)
         {
             _context = context;
             _configuration = configuration;
             _logger = logger;
             _matterAccess = matterAccess;
+            _matterClientLinks = matterClientLinks;
         }
 
         [HttpGet]
@@ -61,6 +64,7 @@ namespace JurisFlow.Server.Controllers
                     .ApplyReadableScope(_context.Matters.AsNoTracking(), User)
                     .OrderByDescending(m => m.OpenDate)
                     .ToListAsync();
+                await _matterClientLinks.PopulateRelatedClientsAsync(readableMatters, HttpContext.RequestAborted);
                 var readableMatterIds = readableMatters
                     .Select(m => m.Id)
                     .ToList();

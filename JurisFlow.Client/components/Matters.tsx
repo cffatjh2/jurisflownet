@@ -11,6 +11,7 @@ import { toast } from './Toast';
 import { Combobox } from './common/Combobox';
 import ClientSelectorModal from './ClientSelectorModal';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
+import MatterNotesPanel from './MatterNotesPanel';
 
 type PlannerComplexity = 'low' | 'medium' | 'high';
 type PlannerClaimSizeBand = 'small' | 'medium' | 'large' | 'enterprise';
@@ -277,6 +278,14 @@ const Matters: React.FC = () => {
   }, [matters]);
 
   useEffect(() => {
+    if (!selectedMatter?.id) return;
+    const refreshedMatter = matters.find((matter) => matter.id === selectedMatter.id);
+    if (refreshedMatter && refreshedMatter !== selectedMatter) {
+      setSelectedMatter(refreshedMatter);
+    }
+  }, [matters, selectedMatter]);
+
+  useEffect(() => {
     void refreshOutcomePlannerPortfolioMetrics();
   }, []);
 
@@ -448,6 +457,7 @@ const Matters: React.FC = () => {
     feeStructure: FeeStructure.Hourly,
     partyId: '',
     partyType: 'client' as 'client' | 'lead',
+    relatedClientIds: [] as string[],
     trustAmount: '' as string | number,
     courtType: '',
     bailStatus: 'None',
@@ -472,6 +482,30 @@ const Matters: React.FC = () => {
 
   const formEntityId = editData?.entityId ?? formData.entityId;
   const formOfficeId = editData?.officeId ?? formData.officeId;
+  const primaryClientId = editData
+    ? (resolveMatterClient(editData as Matter)?.id || editData.clientId || '')
+    : (formData.partyType === 'client' ? formData.partyId : '');
+  const additionalClientOptions = useMemo(
+    () => clients.filter((client) => client.id !== primaryClientId),
+    [clients, primaryClientId]
+  );
+
+  const toggleRelatedClientId = (clientId: string, checked: boolean) => {
+    if (editData) {
+      const currentIds = Array.isArray(editData.relatedClientIds) ? editData.relatedClientIds : [];
+      const nextIds = checked
+        ? Array.from(new Set([...currentIds, clientId]))
+        : currentIds.filter((id) => id !== clientId);
+      setEditData({ ...editData, relatedClientIds: nextIds });
+      return;
+    }
+
+    const currentIds = Array.isArray(formData.relatedClientIds) ? formData.relatedClientIds : [];
+    const nextIds = checked
+      ? Array.from(new Set([...currentIds, clientId]))
+      : currentIds.filter((id) => id !== clientId);
+    setFormData({ ...formData, relatedClientIds: nextIds });
+  };
 
   const outcomePlannerPreview = useMemo(() => {
     if (!outcomePlannerDraft.enabled || !!editData) return null;
@@ -939,7 +973,8 @@ const Matters: React.FC = () => {
       shareBillingWithFirm: formData.shareWithFirm && formData.shareBillingWithFirm,
       shareNotesWithFirm: formData.shareWithFirm && formData.shareBillingWithFirm && formData.shareNotesWithFirm,
       entityId: formData.entityId || undefined,
-      officeId: formData.officeId || undefined
+      officeId: formData.officeId || undefined,
+      relatedClientIds: formData.relatedClientIds
     };
     const plannerDraftSnapshot: OutcomePlannerDraft = { ...outcomePlannerDraft };
     const shouldAutoSavePlanner = plannerDraftSnapshot.enabled && plannerDraftSnapshot.autoSave;
@@ -952,7 +987,8 @@ const Matters: React.FC = () => {
         client: resolvedClient,
         sourceLeadId: selectedLead?.id,
         entityId: formData.entityId || undefined,
-        officeId: formData.officeId || undefined
+        officeId: formData.officeId || undefined,
+        relatedClientIds: formData.relatedClientIds
       });
 
       if (shouldAutoSavePlanner) {
@@ -978,6 +1014,7 @@ const Matters: React.FC = () => {
         feeStructure: FeeStructure.Hourly,
         partyId: '',
         partyType: 'client',
+        relatedClientIds: [],
         trustAmount: '',
         courtType: '',
         bailStatus: 'None',
@@ -1361,6 +1398,30 @@ const Matters: React.FC = () => {
               <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
                 <p className="text-xs font-bold text-gray-500 uppercase mb-1">Fee Structure</p>
                 <p className="text-xl font-bold text-slate-800">{selectedMatter.feeStructure}</p>
+              </div>
+            </div>
+
+            <div className="px-6 py-5 border-b border-gray-100 bg-white">
+              <div className="mb-3">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Clients</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  The primary client remains the main billing/contact record. Additional clients can view matter-linked calendar items in the client portal.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {resolveMatterClient(selectedMatter) && (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    Primary: {resolveMatterClient(selectedMatter)?.name}
+                  </span>
+                )}
+                {(selectedMatter.relatedClients || []).map((client) => (
+                  <span key={client.id} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                    Additional: {client.name}
+                  </span>
+                ))}
+                {(!selectedMatter.relatedClients || selectedMatter.relatedClients.length === 0) && (
+                  <span className="text-xs text-gray-500">No additional clients linked to this matter.</span>
+                )}
               </div>
             </div>
 
@@ -2166,13 +2227,20 @@ const Matters: React.FC = () => {
               </div>
             </div>
 
+            <MatterNotesPanel matterId={selectedMatter.id} />
+
             {/* Actions Footer */}
             <div className="p-4 border-t border-gray-100 bg-gray-50 flex gap-2">
               <Can perform="matter.edit">
                 <button
                   className="flex-1 py-2 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-100 shadow-sm"
                   onClick={() => {
-                    setEditData(selectedMatter);
+                    setEditData({
+                      ...selectedMatter,
+                      relatedClientIds: Array.isArray(selectedMatter.relatedClientIds)
+                        ? selectedMatter.relatedClientIds
+                        : (selectedMatter.relatedClients || []).map((client) => client.id)
+                    });
                     resetOutcomePlannerState();
                     setShowModal(true);
                   }}
@@ -2228,7 +2296,7 @@ const Matters: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800">{editData ? 'Edit Matter' : t('create_matter_modal')}</h3>
-              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData((prev) => ({ ...prev, relatedClientIds: [] })); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={editData ? (e) => {
               e.preventDefault();
@@ -2249,7 +2317,8 @@ const Matters: React.FC = () => {
                   shareBillingWithFirm: !!editData.shareWithFirm && !!editData.shareBillingWithFirm,
                   shareNotesWithFirm: !!editData.shareWithFirm && !!editData.shareBillingWithFirm && !!editData.shareNotesWithFirm,
                   entityId: editData.entityId,
-                  officeId: editData.officeId
+                  officeId: editData.officeId,
+                  relatedClientIds: Array.isArray(editData.relatedClientIds) ? editData.relatedClientIds : []
                 });
                 setShowModal(false);
                 setEditData(null);
@@ -2324,6 +2393,53 @@ const Matters: React.FC = () => {
                   </button>
                 </div>
               )}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">Client Access</h4>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Primary client stays as the main billing/contact record. Additional clients are optional and can view the linked case calendar in the client portal.
+                  </p>
+                </div>
+                {editData && (
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">Primary Client</label>
+                    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-800">
+                      {resolveMatterClient(editData as Matter)?.name || 'Unknown Client'}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-2 uppercase">Additional Clients (optional)</label>
+                  {additionalClientOptions.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-200 bg-white px-3 py-3 text-sm text-gray-500">
+                      No other clients available to link.
+                    </div>
+                  ) : (
+                    <div className="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-3">
+                      {additionalClientOptions.map((client) => {
+                        const selectedIds = editData
+                          ? (Array.isArray(editData.relatedClientIds) ? editData.relatedClientIds : [])
+                          : formData.relatedClientIds;
+                        const checked = selectedIds.includes(client.id);
+                        return (
+                          <label key={client.id} className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                              checked={checked}
+                              onChange={(e) => toggleRelatedClientId(client.id, e.target.checked)}
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-slate-800">{client.name}</p>
+                              <p className="text-xs text-gray-500">{client.email}</p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">{t('practice_area')}</label>
@@ -2748,7 +2864,7 @@ const Matters: React.FC = () => {
               )}
 
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
+                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData((prev) => ({ ...prev, relatedClientIds: [] })); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
                 <button type="submit" disabled={matterSubmitting} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
                   {matterSubmitting ? t('saving') : t('save')}
                 </button>
@@ -2884,7 +3000,12 @@ const Matters: React.FC = () => {
                     })();
 
                 const newClient = await addClient(payload);
-                setFormData({ ...formData, partyId: newClient.id, partyType: 'client' });
+                setFormData({
+                  ...formData,
+                  partyId: newClient.id,
+                  partyType: 'client',
+                  relatedClientIds: formData.relatedClientIds.filter((id) => id !== newClient.id)
+                });
                 setShowNewClientModal(false);
                 setNewClientData({ name: '', email: '', phone: '', mobile: '', company: '', type: 'Individual', status: 'Active', address: '', city: '', state: '', zipCode: '', country: '', taxId: '', notes: '', password: '' });
               } catch (error: any) {
@@ -2980,7 +3101,12 @@ const Matters: React.FC = () => {
         clients={clients}
         leads={leads}
         onSelect={(type, id, name) => {
-          setFormData({ ...formData, partyId: id, partyType: type });
+          setFormData({
+            ...formData,
+            partyId: id,
+            partyType: type,
+            relatedClientIds: formData.relatedClientIds.filter((clientId) => clientId !== id)
+          });
           setSelectedPartyName(name);
           setShowClientSelector(false);
         }}

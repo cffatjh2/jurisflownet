@@ -67,7 +67,7 @@ interface DataContextType {
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
-type MatterWithClientId = Matter & { clientId?: string };
+type MatterWithClientId = Matter & { clientId?: string; relatedClientIds?: string[]; relatedClients?: Client[] };
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const { isAuthenticated, user } = useAuth();
@@ -277,22 +277,56 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return fromClient || undefined;
   };
 
+  const getMatterRelatedClientIds = (matter: Partial<MatterWithClientId>): string[] => {
+    const fromIds = Array.isArray(matter.relatedClientIds)
+      ? matter.relatedClientIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim())
+      : [];
+    const fromClients = Array.isArray(matter.relatedClients)
+      ? matter.relatedClients
+          .filter((client): client is Client => !!client && typeof client.id === 'string' && client.id.trim().length > 0)
+          .map((client) => client.id.trim())
+      : [];
+
+    const primaryClientId = getMatterClientId(matter);
+    return Array.from(new Set([...fromIds, ...fromClients]))
+      .filter((id) => !primaryClientId || id !== primaryClientId);
+  };
+
   const hydrateMatterClient = (matter: Matter, clientById: Map<string, Client>): Matter => {
     const matterWithClientId = matter as MatterWithClientId;
     const clientId = getMatterClientId(matterWithClientId);
+    const relatedClientIds = getMatterRelatedClientIds(matterWithClientId);
+    const existingRelatedClients = Array.isArray(matterWithClientId.relatedClients)
+      ? matterWithClientId.relatedClients.filter((client): client is Client => !!client && typeof client.id === 'string')
+      : [];
+
+    const resolvedRelatedClients = relatedClientIds
+      .map((id) => clientById.get(id) || existingRelatedClients.find((client) => client.id === id))
+      .filter((client): client is Client => !!client);
+
     if (!clientId) {
-      return matter;
+      if (relatedClientIds.length === 0) {
+        return matter;
+      }
+
+      return {
+        ...matter,
+        relatedClientIds,
+        relatedClients: resolvedRelatedClients
+      } as Matter;
     }
 
     const resolvedClient = clientById.get(clientId) || matterWithClientId.client;
-    if (!resolvedClient && matterWithClientId.clientId === clientId) {
+    if (!resolvedClient && matterWithClientId.clientId === clientId && relatedClientIds.length === 0) {
       return matter;
     }
 
     return {
       ...matter,
       ...(resolvedClient ? { client: resolvedClient } : {}),
-      clientId
+      clientId,
+      relatedClientIds,
+      relatedClients: resolvedRelatedClients
     } as Matter;
   };
 
@@ -658,6 +692,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     try {
       const payload = { ...matterData };
       delete payload.client;
+      delete payload.relatedClients;
       if (!payload.clientId) {
         throw new Error('Client is required to create a matter.');
       }
@@ -725,6 +760,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         clientId: getMatterClientId(mergedPayload as MatterWithClientId)
       } as Partial<Matter>;
       delete (payload as any).client;
+      delete (payload as any).relatedClients;
 
       const updated = await api.updateMatter(id, payload);
       setMatters(prev => prev.map(m => {

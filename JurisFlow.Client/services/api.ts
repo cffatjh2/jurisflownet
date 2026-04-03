@@ -1,5 +1,6 @@
 import {
     Matter,
+    MatterNote,
     Task,
     TimeEntry,
     Lead,
@@ -728,6 +729,14 @@ export const api = {
     createMatter: (data: Partial<Matter>) => fetchJson('/matters', { method: 'POST', body: JSON.stringify(data) }),
     updateMatter: (id: string, data: Partial<Matter>) => fetchJson(`/matters/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteMatter: (id: string) => fetchJson(`/matters/${id}`, { method: 'DELETE' }),
+    getMatterNotes: (matterId: string) =>
+        fetchJson(`/matters/${encodeURIComponent(matterId)}/notes`) as Promise<MatterNote[] | null>,
+    createMatterNote: (matterId: string, data: { title?: string; body: string }) =>
+        fetchJson(`/matters/${encodeURIComponent(matterId)}/notes`, { method: 'POST', body: JSON.stringify(data) }) as Promise<MatterNote | null>,
+    updateMatterNote: (matterId: string, noteId: string, data: { title?: string; body: string }) =>
+        fetchJson(`/matters/${encodeURIComponent(matterId)}/notes/${encodeURIComponent(noteId)}`, { method: 'PUT', body: JSON.stringify(data) }) as Promise<MatterNote | null>,
+    deleteMatterNote: (matterId: string, noteId: string) =>
+        fetchJson(`/matters/${encodeURIComponent(matterId)}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }),
 
     // Tasks
     getTasks: () => fetchJson('/tasks'),

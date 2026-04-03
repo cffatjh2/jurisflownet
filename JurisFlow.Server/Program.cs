@@ -326,6 +326,7 @@ builder.Services.AddTransient<IClaimsTransformation, RoleAliasClaimsTransformati
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
 builder.Services.AddScoped<MatterAccessService>();
+builder.Services.AddScoped<MatterClientLinkService>();
 builder.Services.AddSingleton<OutcomeFeePlannerTriggerQueue>();
 builder.Services.AddHostedService<OutcomeFeePlannerTriggerHostedService>();
 builder.Services.AddSingleton<BackupJobQueue>();

@@ -26,6 +26,7 @@ const CalendarView: React.FC = () => {
   const [newDescription, setNewDescription] = useState('');
   const [newLocation, setNewLocation] = useState('');
   const [newRecurrence, setNewRecurrence] = useState('none');
+  const [newMatterId, setNewMatterId] = useState('');
 
   type AppointmentItem = AppointmentRequest & {
     client?: { id: string; name: string; email?: string };
@@ -75,7 +76,8 @@ const CalendarView: React.FC = () => {
       reminderSent: false,
       description: newDescription || undefined,
       location: newLocation || undefined,
-      recurrencePattern: newRecurrence !== 'none' ? newRecurrence as any : undefined
+      recurrencePattern: newRecurrence !== 'none' ? newRecurrence as any : undefined,
+      matterId: newMatterId || undefined
     });
     // Reset form
     setShowModal(false);
@@ -85,10 +87,12 @@ const CalendarView: React.FC = () => {
     setNewDescription('');
     setNewLocation('');
     setNewRecurrence('none');
+    setNewMatterId('');
   };
 
   const openAddModal = (day: number) => {
     setSelectedDate(new Date(currentYear, currentMonth, day));
+    setNewMatterId('');
     setShowModal(true);
   };
 
@@ -558,7 +562,7 @@ const CalendarView: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl p-6 w-[480px] max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
             <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-2">
               <h3 className="font-bold text-lg text-slate-900">Add Event</h3>
-              <button onClick={() => setShowModal(false)}><X className="w-5 h-5 text-gray-400 hover:text-gray-600" /></button>
+              <button onClick={() => { setShowModal(false); setNewMatterId(''); }}><X className="w-5 h-5 text-gray-400 hover:text-gray-600" /></button>
             </div>
             <div className="mb-4 bg-blue-50 px-3 py-2 rounded text-blue-800 text-sm font-medium">
               Date: {selectedDate?.toLocaleDateString()}
@@ -597,6 +601,22 @@ const CalendarView: React.FC = () => {
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Location <span className="text-gray-400 font-normal">(optional)</span></label>
                 <input className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-slate-500 outline-none" placeholder="e.g. Conference Room A, Courthouse, Zoom link..." value={newLocation} onChange={e => setNewLocation(e.target.value)} />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Related Matter <span className="text-gray-400 font-normal">(optional)</span></label>
+                <select
+                  className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-slate-500 outline-none"
+                  value={newMatterId}
+                  onChange={(e) => setNewMatterId(e.target.value)}
+                >
+                  <option value="">No linked matter</option>
+                  {matters.map((matter) => (
+                    <option key={matter.id} value={matter.id}>
+                      {matter.caseNumber} - {matter.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Duration and Recurrence */}
@@ -653,7 +673,16 @@ const CalendarView: React.FC = () => {
 
               {/* Buttons */}
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg">Cancel</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowModal(false);
+                    setNewMatterId('');
+                  }}
+                  className="flex-1 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg"
+                >
+                  Cancel
+                </button>
                 <button type="submit" className="flex-1 py-2 bg-slate-900 text-white rounded-lg font-bold hover:bg-slate-800 shadow-lg">Save</button>
               </div>
             </form>

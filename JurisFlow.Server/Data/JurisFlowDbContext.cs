@@ -24,6 +24,8 @@ namespace JurisFlow.Server.Data
         public DbSet<User> Users { get; set; }
         public DbSet<Client> Clients { get; set; }
         public DbSet<Matter> Matters { get; set; }
+        public DbSet<MatterClientLink> MatterClientLinks { get; set; }
+        public DbSet<MatterNote> MatterNotes { get; set; }
         public DbSet<Employee> Employees { get; set; }
         public DbSet<JurisFlow.Server.Models.Task> Tasks { get; set; }
         public DbSet<Document> Documents { get; set; }
@@ -165,6 +167,15 @@ namespace JurisFlow.Server.Data
                 .IsUnique();
             modelBuilder.Entity<Client>()
                 .HasIndex("TenantId", nameof(Client.CreatedAt));
+            modelBuilder.Entity<MatterClientLink>()
+                .HasIndex("TenantId", nameof(MatterClientLink.MatterId), nameof(MatterClientLink.ClientId))
+                .IsUnique();
+            modelBuilder.Entity<MatterClientLink>()
+                .HasIndex("TenantId", nameof(MatterClientLink.ClientId), nameof(MatterClientLink.CreatedAt));
+            modelBuilder.Entity<MatterNote>()
+                .HasIndex("TenantId", nameof(MatterNote.MatterId), nameof(MatterNote.CreatedAt));
+            modelBuilder.Entity<MatterNote>()
+                .HasIndex("TenantId", nameof(MatterNote.MatterId), nameof(MatterNote.UpdatedAt));
 
             modelBuilder.Entity<Employee>()
                 .HasIndex("TenantId", nameof(Employee.Email))
@@ -907,6 +918,12 @@ namespace JurisFlow.Server.Data
             modelBuilder.Entity<Client>()
                 .Property(c => c.Notes)
                 .HasConversion(converter);
+            modelBuilder.Entity<MatterNote>()
+                .Property(n => n.Title)
+                .HasConversion(converter);
+            modelBuilder.Entity<MatterNote>()
+                .Property(n => n.Body)
+                .HasConversion(requiredConverter);
 
             modelBuilder.Entity<Employee>()
                 .Property(e => e.Phone)

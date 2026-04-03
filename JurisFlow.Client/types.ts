@@ -470,6 +470,8 @@ export interface Matter {
   name: string;
   clientId?: string;
   client?: Client;
+  relatedClientIds?: string[];
+  relatedClients?: Client[];
   createdByUserId?: string;
   shareWithFirm?: boolean;
   shareBillingWithFirm?: boolean;
@@ -490,6 +492,19 @@ export interface Matter {
   timeEntries?: TimeEntry[];
   expenses?: Expense[];
   events?: CalendarEvent[];
+}
+
+export interface MatterNote {
+  id: string;
+  matterId: string;
+  title?: string;
+  body: string;
+  createdByUserId?: string;
+  createdByName?: string;
+  updatedByUserId?: string;
+  updatedByName?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TimeEntry {

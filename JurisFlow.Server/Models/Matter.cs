@@ -63,6 +63,12 @@ namespace JurisFlow.Server.Models
         [JsonIgnore] // Prevent cycles
         public Client? Client { get; set; }
 
+        [NotMapped]
+        public List<string>? RelatedClientIds { get; set; }
+
+        [NotMapped]
+        public List<Client>? RelatedClients { get; set; }
+
         // Navigation Properties
         // public ICollection<Task> Tasks { get; set; }
         // public ICollection<Document> Documents { get; set; }

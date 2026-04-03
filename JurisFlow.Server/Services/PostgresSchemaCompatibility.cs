@@ -66,6 +66,29 @@ namespace JurisFlow.Server.Services
             """ALTER TABLE IF EXISTS "Matters" ADD COLUMN IF NOT EXISTS "ShareWithFirm" boolean NOT NULL DEFAULT FALSE;""",
             """ALTER TABLE IF EXISTS "Matters" ADD COLUMN IF NOT EXISTS "ShareBillingWithFirm" boolean NOT NULL DEFAULT FALSE;""",
             """ALTER TABLE IF EXISTS "Matters" ADD COLUMN IF NOT EXISTS "ShareNotesWithFirm" boolean NOT NULL DEFAULT FALSE;""",
+            """
+            CREATE TABLE IF NOT EXISTS "MatterClientLinks" (
+                "Id" text PRIMARY KEY,
+                "MatterId" text NOT NULL,
+                "ClientId" text NOT NULL,
+                "TenantId" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS "MatterNotes" (
+                "Id" text PRIMARY KEY,
+                "MatterId" text NOT NULL,
+                "Title" text NULL,
+                "Body" text NOT NULL,
+                "CreatedByUserId" text NULL,
+                "UpdatedByUserId" text NULL,
+                "TenantId" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NOT NULL
+            );
+            """,
             """ALTER TABLE IF EXISTS "AuthSessions" ADD COLUMN IF NOT EXISTS "ClientId" text NULL;""",
             """ALTER TABLE IF EXISTS "AuthSessions" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
             """ALTER TABLE IF EXISTS "AuthSessions" ADD COLUMN IF NOT EXISTS "SubjectType" text NOT NULL DEFAULT 'User';""",
@@ -88,6 +111,10 @@ namespace JurisFlow.Server.Services
             """CREATE INDEX IF NOT EXISTS "IX_Documents_TenantId_CreatedAt" ON "Documents" ("TenantId", "CreatedAt" DESC);""",
             """CREATE INDEX IF NOT EXISTS "IX_Clients_TenantId_CreatedAt" ON "Clients" ("TenantId", "CreatedAt" DESC);""",
             """CREATE INDEX IF NOT EXISTS "IX_Clients_TenantId_NormalizedEmail_lookup" ON "Clients" ("TenantId", "NormalizedEmail");""",
+            """CREATE UNIQUE INDEX IF NOT EXISTS "IX_MatterClientLinks_TenantId_MatterId_ClientId" ON "MatterClientLinks" ("TenantId", "MatterId", "ClientId");""",
+            """CREATE INDEX IF NOT EXISTS "IX_MatterClientLinks_TenantId_ClientId_CreatedAt" ON "MatterClientLinks" ("TenantId", "ClientId", "CreatedAt" DESC);""",
+            """CREATE INDEX IF NOT EXISTS "IX_MatterNotes_TenantId_MatterId_CreatedAt" ON "MatterNotes" ("TenantId", "MatterId", "CreatedAt" DESC);""",
+            """CREATE INDEX IF NOT EXISTS "IX_MatterNotes_TenantId_MatterId_UpdatedAt" ON "MatterNotes" ("TenantId", "MatterId", "UpdatedAt" DESC);""",
             """CREATE INDEX IF NOT EXISTS "IX_Matters_TenantId_CreatedByUserId" ON "Matters" ("TenantId", "CreatedByUserId");""",
             """CREATE INDEX IF NOT EXISTS "IX_Matters_TenantId_ShareWithFirm" ON "Matters" ("TenantId", "ShareWithFirm");""",
             """CREATE INDEX IF NOT EXISTS "IX_Invoices_TenantId_MatterId" ON "Invoices" ("TenantId", "MatterId");""",

@@ -27,6 +27,7 @@ namespace JurisFlow.Server.Controllers
         private readonly SignatureAuditTrailService _signatureAuditTrailService;
         private readonly TenantContext _tenantContext;
         private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterClientLinkService _matterClientLinks;
         private const long MaxClientDocumentUploadBodyBytes = 30L * 1024 * 1024;
         private static readonly IReadOnlyDictionary<string, string> AllowedClientDocumentMimeToExtension = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -58,7 +59,8 @@ namespace JurisFlow.Server.Controllers
             DocumentEncryptionService documentEncryptionService,
             SignatureAuditTrailService signatureAuditTrailService,
             TenantContext tenantContext,
-            ClientTransparencyService clientTransparencyService)
+            ClientTransparencyService clientTransparencyService,
+            MatterClientLinkService matterClientLinks)
         {
             _context = context;
             _fileStorage = fileStorage;
@@ -69,15 +71,17 @@ namespace JurisFlow.Server.Controllers
             _signatureAuditTrailService = signatureAuditTrailService;
             _tenantContext = tenantContext;
             _clientTransparencyService = clientTransparencyService;
+            _matterClientLinks = matterClientLinks;
         }
 
         [HttpGet("matters")]
         public async Task<IActionResult> GetMatters()
         {
             if (!TryGetClientId(out var clientId)) return Unauthorized();
+            var visibleMatterIdsQuery = _matterClientLinks.BuildVisibleMatterIdsForClientQuery(clientId);
 
             var matters = await TenantScope(_context.Matters)
-                .Where(m => m.ClientId == clientId)
+                .Where(m => visibleMatterIdsQuery.Contains(m.Id))
                 .OrderByDescending(m => m.OpenDate)
                 .ToListAsync();
 
@@ -127,8 +131,11 @@ namespace JurisFlow.Server.Controllers
             if (string.IsNullOrWhiteSpace(matterId)) return BadRequest(new { message = "MatterId is required." });
             var transparencyLanguage = NormalizeTransparencyLanguage(lang);
 
+            var canAccessMatter = await _matterClientLinks.ClientCanAccessMatterAsync(clientId, matterId, ct);
+            if (!canAccessMatter) return NotFound();
+
             var matter = await TenantScope(_context.Matters)
-                .FirstOrDefaultAsync(m => m.Id == matterId && m.ClientId == clientId, ct);
+                .FirstOrDefaultAsync(m => m.Id == matterId, ct);
             if (matter == null) return NotFound();
 
             ClientTransparencySnapshotDetailResult? detail;
@@ -279,10 +286,7 @@ namespace JurisFlow.Server.Controllers
         public async Task<IActionResult> GetDocuments()
         {
             if (!TryGetClientId(out var clientId)) return Unauthorized();
-            var matterIds = await TenantScope(_context.Matters)
-                .Where(m => m.ClientId == clientId)
-                .Select(m => m.Id)
-                .ToListAsync();
+            var matterIds = await _matterClientLinks.GetVisibleMatterIdSetForClientAsync(clientId);
 
             var activeShares = await TenantScope(_context.DocumentShares)
                 .Where(s => s.ClientId == clientId && (!s.ExpiresAt.HasValue || s.ExpiresAt > DateTime.UtcNow))
@@ -291,10 +295,10 @@ namespace JurisFlow.Server.Controllers
                 .GroupBy(s => s.DocumentId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(s => s.SharedAt).First());
             var shareDocIds = shareMap.Keys.ToList();
-            var matterIdSet = matterIds.ToHashSet();
+            var matterIdSet = matterIds;
 
             var documents = await TenantScope(_context.Documents)
-                .Where(d => (d.MatterId != null && matterIds.Contains(d.MatterId))
+                .Where(d => (d.MatterId != null && matterIdSet.Contains(d.MatterId))
                     || d.UploadedBy == clientId
                     || shareDocIds.Contains(d.Id))
                 .OrderByDescending(d => d.CreatedAt)
@@ -355,8 +359,8 @@ namespace JurisFlow.Server.Controllers
 
             if (!string.IsNullOrEmpty(matterId))
             {
-                var ownsMatter = await TenantScope(_context.Matters).AnyAsync(m => m.Id == matterId && m.ClientId == clientId);
-                if (!ownsMatter)
+                var canAccessMatter = await _matterClientLinks.ClientCanAccessMatterAsync(clientId, matterId, HttpContext.RequestAborted);
+                if (!canAccessMatter)
                 {
                     return Forbid();
                 }
@@ -478,10 +482,7 @@ namespace JurisFlow.Server.Controllers
         {
             if (!TryGetClientId(out var clientId)) return Unauthorized();
 
-            var matterIds = await TenantScope(_context.Matters)
-                .Where(m => m.ClientId == clientId)
-                .Select(m => m.Id)
-                .ToListAsync();
+            var matterIds = await _matterClientLinks.GetVisibleMatterIdSetForClientAsync(clientId);
 
             var document = await TenantScope(_context.Documents).FirstOrDefaultAsync(d => d.Id == id);
 
@@ -492,7 +493,7 @@ namespace JurisFlow.Server.Controllers
 
             var share = await TenantScope(_context.DocumentShares)
                 .FirstOrDefaultAsync(s => s.DocumentId == id && s.ClientId == clientId && (!s.ExpiresAt.HasValue || s.ExpiresAt > DateTime.UtcNow));
-            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds.ToHashSet(), share);
+            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds, share);
             if (!permissions.CanView || !permissions.CanDownload)
             {
                 return Forbid();
@@ -514,13 +515,10 @@ namespace JurisFlow.Server.Controllers
             var document = await TenantScope(_context.Documents).FirstOrDefaultAsync(d => d.Id == id);
             if (document == null) return NotFound(new { message = "Document not found" });
 
-            var matterIds = await TenantScope(_context.Matters)
-                .Where(m => m.ClientId == clientId)
-                .Select(m => m.Id)
-                .ToListAsync();
+            var matterIds = await _matterClientLinks.GetVisibleMatterIdSetForClientAsync(clientId);
             var share = await TenantScope(_context.DocumentShares)
                 .FirstOrDefaultAsync(s => s.DocumentId == id && s.ClientId == clientId && (!s.ExpiresAt.HasValue || s.ExpiresAt > DateTime.UtcNow));
-            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds.ToHashSet(), share);
+            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds, share);
             if (!permissions.CanView) return Forbid();
 
             var comments = await TenantScope(_context.DocumentComments)
@@ -573,13 +571,10 @@ namespace JurisFlow.Server.Controllers
             var document = await TenantScope(_context.Documents).FirstOrDefaultAsync(d => d.Id == id);
             if (document == null) return NotFound(new { message = "Document not found" });
 
-            var matterIds = await TenantScope(_context.Matters)
-                .Where(m => m.ClientId == clientId)
-                .Select(m => m.Id)
-                .ToListAsync();
+            var matterIds = await _matterClientLinks.GetVisibleMatterIdSetForClientAsync(clientId);
             var share = await TenantScope(_context.DocumentShares)
                 .FirstOrDefaultAsync(s => s.DocumentId == id && s.ClientId == clientId && (!s.ExpiresAt.HasValue || s.ExpiresAt > DateTime.UtcNow));
-            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds.ToHashSet(), share);
+            var permissions = ResolveClientDocumentPermissions(document, clientId, matterIds, share);
             if (!permissions.CanComment) return Forbid();
 
             var comment = new DocumentComment
@@ -1001,8 +996,8 @@ namespace JurisFlow.Server.Controllers
 
             if (!string.IsNullOrEmpty(dto.MatterId))
             {
-                var ownsMatter = await TenantScope(_context.Matters).AnyAsync(m => m.Id == dto.MatterId && m.ClientId == clientId);
-                if (!ownsMatter)
+                var canAccessMatter = await _matterClientLinks.ClientCanAccessMatterAsync(clientId, dto.MatterId, HttpContext.RequestAborted);
+                if (!canAccessMatter)
                 {
                     return Forbid();
                 }

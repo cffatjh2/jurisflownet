@@ -25,6 +25,7 @@ namespace JurisFlow.Server.Controllers
         private readonly OutcomeFeePlannerService _outcomeFeePlanner;
         private readonly ClientTransparencyService _clientTransparencyService;
         private readonly MatterAccessService _matterAccess;
+        private readonly MatterClientLinkService _matterClientLinks;
         private readonly ILogger<MattersController> _logger;
         private readonly Dictionary<string, bool> _schemaPresenceCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -35,6 +36,7 @@ namespace JurisFlow.Server.Controllers
             OutcomeFeePlannerService outcomeFeePlanner,
             ClientTransparencyService clientTransparencyService,
             MatterAccessService matterAccess,
+            MatterClientLinkService matterClientLinks,
             ILogger<MattersController> logger)
         {
             _context = context;
@@ -43,6 +45,7 @@ namespace JurisFlow.Server.Controllers
             _outcomeFeePlanner = outcomeFeePlanner;
             _clientTransparencyService = clientTransparencyService;
             _matterAccess = matterAccess;
+            _matterClientLinks = matterClientLinks;
             _logger = logger;
         }
 
@@ -77,7 +80,12 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(m => m.OfficeId == officeId);
             }
 
-            return await query.OrderByDescending(m => m.OpenDate).ToListAsync();
+            var matters = await query
+                .OrderByDescending(m => m.OpenDate)
+                .ToListAsync(HttpContext.RequestAborted);
+
+            await _matterClientLinks.PopulateRelatedClientsAsync(matters, HttpContext.RequestAborted);
+            return matters;
         }
 
         // GET: api/Matters/5
@@ -92,6 +100,7 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
+            await _matterClientLinks.PopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
             return matter;
         }
 
@@ -116,6 +125,15 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Selected client was not found." });
             }
 
+            var relatedClientResolution = await _matterClientLinks.ResolveRelatedClientIdsAsync(
+                resolvedClientId,
+                matter.RelatedClientIds,
+                HttpContext.RequestAborted);
+            if (relatedClientResolution.InvalidClientIds.Count > 0)
+            {
+                return BadRequest(new { message = "One or more additional clients were not found." });
+            }
+
             matter.Id = Guid.NewGuid().ToString();
             matter.OpenDate = DateTime.UtcNow;
             matter.ClientId = resolvedClientId;
@@ -125,9 +143,15 @@ namespace JurisFlow.Server.Controllers
             var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
             matter.EntityId = resolved.entityId;
             matter.OfficeId = resolved.officeId;
-            
+
+            await using var tx = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
             _context.Matters.Add(matter);
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            await _matterClientLinks.SyncRelatedClientsAsync(matter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            await tx.CommitAsync(HttpContext.RequestAborted);
+
+            await _matterClientLinks.PopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
 
             await _auditLogger.LogAsync(HttpContext, "matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
 
@@ -161,6 +185,19 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Selected client was not found." });
             }
 
+            MatterRelatedClientResolution? relatedClientResolution = null;
+            if (matter.RelatedClientIds != null)
+            {
+                relatedClientResolution = await _matterClientLinks.ResolveRelatedClientIdsAsync(
+                    resolvedClientId,
+                    matter.RelatedClientIds,
+                    HttpContext.RequestAborted);
+                if (relatedClientResolution.InvalidClientIds.Count > 0)
+                {
+                    return BadRequest(new { message = "One or more additional clients were not found." });
+                }
+            }
+
             var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
 
             existingMatter.CaseNumber = matter.CaseNumber;
@@ -186,7 +223,19 @@ namespace JurisFlow.Server.Controllers
             existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
             NormalizeSharingSettings(existingMatter);
 
-            await _context.SaveChangesAsync();
+            await using var tx = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            if (relatedClientResolution != null)
+            {
+                await _matterClientLinks.SyncRelatedClientsAsync(existingMatter.Id, relatedClientResolution.ClientIds, HttpContext.RequestAborted);
+            }
+            else
+            {
+                await _matterClientLinks.RemovePrimaryClientDuplicatesAsync(existingMatter.Id, resolvedClientId, HttpContext.RequestAborted);
+            }
+
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            await tx.CommitAsync(HttpContext.RequestAborted);
 
             await _auditLogger.LogAsync(HttpContext, "matter.update", "Matter", existingMatter.Id, $"Status={existingMatter.Status}");
             await TryTriggerOutcomeFeePlannerAsync(existingMatter.Id, "matter_update");
@@ -243,6 +292,8 @@ namespace JurisFlow.Server.Controllers
 
                 // Required direct dependents.
                 await SafeDeleteByMatterAsync("OpposingParties", _context.OpposingParties.IgnoreQueryFilters().Where(p => p.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("MatterClientLinks", _context.MatterClientLinks.IgnoreQueryFilters().Where(link => link.MatterId == id), ct);
+                await SafeDeleteByMatterAsync("MatterNotes", _context.MatterNotes.IgnoreQueryFilters().Where(note => note.MatterId == id), ct);
                 await SafeDeleteByMatterAsync("Deadlines", _context.Deadlines.IgnoreQueryFilters().Where(d => d.MatterId == id), ct);
                 await SafeDeleteByMatterAsync("CasePredictions", _context.CasePredictions.IgnoreQueryFilters().Where(p => p.MatterId == id), ct);
                 await SafeDeleteByMatterAsync("MatterBillingPolicies", _context.MatterBillingPolicies.IgnoreQueryFilters().Where(p => p.MatterId == id), ct);
