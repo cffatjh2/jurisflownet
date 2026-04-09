@@ -492,10 +492,10 @@ using (var scope = app.Services.CreateScope())
             }
 
             var normalizedAdminEmail = EmailAddressNormalizer.Normalize(adminEmail);
-            var passwordHash = PasswordHashingHelper.HashPassword(adminPassword, builder.Configuration);
             var adminUser = context.Users.FirstOrDefault(u => u.NormalizedEmail == normalizedAdminEmail);
             if (adminUser == null)
             {
+                var passwordHash = PasswordHashingHelper.HashPassword(adminPassword, builder.Configuration);
                 context.Users.Add(new JurisFlow.Server.Models.User
                 {
                     Email = adminEmail,
@@ -514,7 +514,7 @@ using (var scope = app.Services.CreateScope())
 
                 if (resetSeedPasswords || string.IsNullOrWhiteSpace(adminUser.PasswordHash))
                 {
-                    adminUser.PasswordHash = passwordHash;
+                    adminUser.PasswordHash = PasswordHashingHelper.HashPassword(adminPassword, builder.Configuration);
                 }
             }
 
@@ -536,6 +536,7 @@ using (var scope = app.Services.CreateScope())
                 var demoClient = context.Clients.FirstOrDefault(c => c.NormalizedEmail == normalizedDemoClientEmail);
                 if (demoClient == null)
                 {
+                    var demoClientPasswordHash = PasswordHashingHelper.HashPassword(demoClientPassword, builder.Configuration);
                     demoClient = new Client
                     {
                         Name = "Demo Client",
@@ -546,7 +547,7 @@ using (var scope = app.Services.CreateScope())
                         Status = "Active",
                         ClientNumber = "CLT-1001",
                         PortalEnabled = true,
-                        PasswordHash = PasswordHashingHelper.HashPassword(demoClientPassword, builder.Configuration),
+                        PasswordHash = demoClientPasswordHash,
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     };

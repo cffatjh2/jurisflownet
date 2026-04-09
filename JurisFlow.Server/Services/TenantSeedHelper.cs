@@ -17,11 +17,12 @@ namespace JurisFlow.Server.Services
 
         public static async Task BackfillTenantIdsAsync(JurisFlowDbContext context, string tenantId)
         {
-            var entityTypes = context.Model.GetEntityTypes()
+            var backfillableTargets = context.Model.GetEntityTypes()
                 .Where(e => e.ClrType != typeof(Tenant) && !e.IsOwned())
                 .Where(e => e.FindProperty("TenantId") != null);
 
-            foreach (var entityType in entityTypes)
+            var updateTargets = new List<(string TableName, string? Schema, string ColumnName)>();
+            foreach (var entityType in backfillableTargets)
             {
                 var tenantIdProperty = entityType.FindProperty("TenantId");
                 var tableName = entityType.GetTableName();
@@ -38,11 +39,34 @@ namespace JurisFlow.Server.Services
                     continue;
                 }
 
-                var quotedTable = QuoteIdentifier(tableName, schema);
-                var quotedColumn = QuoteIdentifier(columnName);
+                updateTargets.Add((tableName, schema, columnName));
+            }
+
+            if (updateTargets.Count == 0)
+            {
+                return;
+            }
+
+            var signature = StartupTaskStateStore.ComputeStableHash(updateTargets
+                .Select(target => $"{target.Schema ?? "dbo"}.{target.TableName}:{target.ColumnName}:{tenantId}")
+                .OrderBy(value => value, StringComparer.Ordinal));
+
+            var taskKey = $"tenant-id-backfill:{tenantId}";
+            var appliedSignature = await StartupTaskStateStore.GetValueAsync(context, taskKey);
+            if (string.Equals(appliedSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            foreach (var target in updateTargets)
+            {
+                var quotedTable = QuoteIdentifier(target.TableName, target.Schema);
+                var quotedColumn = QuoteIdentifier(target.ColumnName);
                 var sql = $"UPDATE {quotedTable} SET {quotedColumn} = {{0}} WHERE {quotedColumn} IS NULL";
                 await context.Database.ExecuteSqlRawAsync(sql, tenantId);
             }
+
+            await StartupTaskStateStore.SetValueAsync(context, taskKey, signature);
         }
 
         private static string QuoteIdentifier(string identifier)

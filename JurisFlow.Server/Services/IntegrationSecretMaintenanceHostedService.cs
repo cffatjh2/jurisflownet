@@ -8,20 +8,32 @@ namespace JurisFlow.Server.Services
     {
         private readonly IConfiguration _configuration;
         private readonly ILogger<IntegrationSecretMaintenanceHostedService> _logger;
+        private readonly IHostEnvironment _environment;
         private readonly TenantJobRunner _tenantJobs;
 
         public IntegrationSecretMaintenanceHostedService(
             IConfiguration configuration,
             ILogger<IntegrationSecretMaintenanceHostedService> logger,
+            IHostEnvironment environment,
             TenantJobRunner tenantJobs)
         {
             _configuration = configuration;
             _logger = logger;
+            _environment = environment;
             _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            await HostedServiceStartupDelay.WaitAsync(
+                _configuration,
+                _environment,
+                _logger,
+                configurationKey: "Security:IntegrationSecrets:InitialDelaySeconds",
+                productionDefaultSeconds: 120,
+                serviceName: nameof(IntegrationSecretMaintenanceHostedService),
+                cancellationToken: stoppingToken);
+
             var backfillOnStartup = _configuration.GetValue("Security:IntegrationSecrets:BackfillOnStartup", true);
             if (backfillOnStartup)
             {

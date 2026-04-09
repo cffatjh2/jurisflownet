@@ -8,18 +8,34 @@ namespace JurisFlow.Server.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly IConfiguration _configuration;
         private readonly ILogger<OperationsJobHostedService> _logger;
+        private readonly IHostEnvironment _environment;
         private readonly TenantJobRunner _tenantJobs;
 
-        public OperationsJobHostedService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<OperationsJobHostedService> logger, TenantJobRunner tenantJobs)
+        public OperationsJobHostedService(
+            IServiceProvider serviceProvider,
+            IConfiguration configuration,
+            ILogger<OperationsJobHostedService> logger,
+            IHostEnvironment environment,
+            TenantJobRunner tenantJobs)
         {
             _serviceProvider = serviceProvider;
             _configuration = configuration;
             _logger = logger;
+            _environment = environment;
             _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            await HostedServiceStartupDelay.WaitAsync(
+                _configuration,
+                _environment,
+                _logger,
+                configurationKey: "Operations:InitialDelaySeconds",
+                productionDefaultSeconds: 45,
+                serviceName: nameof(OperationsJobHostedService),
+                cancellationToken: stoppingToken);
+
             var intervalMinutes = _configuration.GetValue("Operations:JobIntervalMinutes", 5);
 
             while (!stoppingToken.IsCancellationRequested)

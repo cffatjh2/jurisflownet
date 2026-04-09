@@ -29,11 +29,29 @@ namespace JurisFlow.Server.Services
             var jurisdictions = new List<string> { "US-Federal" };
             jurisdictions.AddRange(StateCodes.Select(code => $"US-{code}"));
 
+            var existingTargets = await context.Holidays
+                .AsNoTracking()
+                .Where(h => h.Jurisdiction != null && targetYears.Contains(h.Date.Year) && jurisdictions.Contains(h.Jurisdiction))
+                .Select(h => new
+                {
+                    Jurisdiction = h.Jurisdiction!,
+                    Year = h.Date.Year
+                })
+                .Distinct()
+                .ToListAsync();
+
+            var existingTargetSet = existingTargets
+                .Select(item => BuildTargetKey(item.Jurisdiction, item.Year))
+                .ToHashSet(StringComparer.Ordinal);
+
+            var holidaysToSeed = new List<Holiday>();
+            var seededTargets = new List<string>();
             foreach (var year in targetYears)
             {
                 foreach (var jurisdiction in jurisdictions)
                 {
-                    if (await context.Holidays.AnyAsync(h => h.Jurisdiction == jurisdiction && h.Date.Year == year))
+                    var targetKey = BuildTargetKey(jurisdiction, year);
+                    if (existingTargetSet.Contains(targetKey))
                     {
                         continue;
                     }
@@ -44,11 +62,23 @@ namespace JurisFlow.Server.Services
                         continue;
                     }
 
-                    context.Holidays.AddRange(holidays);
-                    await context.SaveChangesAsync();
-                    _logger.LogInformation("Seeded {Count} holidays for {Jurisdiction} {Year}.", holidays.Count, jurisdiction, year);
+                    holidaysToSeed.AddRange(holidays);
+                    existingTargetSet.Add(targetKey);
+                    seededTargets.Add(targetKey);
                 }
             }
+
+            if (holidaysToSeed.Count == 0)
+            {
+                return;
+            }
+
+            context.Holidays.AddRange(holidaysToSeed);
+            await context.SaveChangesAsync();
+            _logger.LogInformation(
+                "Seeded {HolidayCount} holidays across {TargetCount} jurisdiction-year targets.",
+                holidaysToSeed.Count,
+                seededTargets.Count);
         }
 
         private static List<Holiday> BuildHolidays(int year, string jurisdiction)
@@ -151,6 +181,11 @@ namespace JurisFlow.Server.Services
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
+        }
+
+        private static string BuildTargetKey(string jurisdiction, int year)
+        {
+            return $"{jurisdiction}:{year}";
         }
 
         private static DateTime ObserveWeekend(DateTime date)

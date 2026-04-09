@@ -6,17 +6,35 @@ namespace JurisFlow.Server.Services
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<RetentionHostedService> _logger;
+        private readonly IConfiguration _configuration;
+        private readonly IHostEnvironment _environment;
         private readonly TenantJobRunner _tenantJobs;
 
-        public RetentionHostedService(IServiceProvider serviceProvider, ILogger<RetentionHostedService> logger, TenantJobRunner tenantJobs)
+        public RetentionHostedService(
+            IServiceProvider serviceProvider,
+            ILogger<RetentionHostedService> logger,
+            IConfiguration configuration,
+            IHostEnvironment environment,
+            TenantJobRunner tenantJobs)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
+            _configuration = configuration;
+            _environment = environment;
             _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            await HostedServiceStartupDelay.WaitAsync(
+                _configuration,
+                _environment,
+                _logger,
+                configurationKey: "Retention:InitialDelaySeconds",
+                productionDefaultSeconds: 120,
+                serviceName: nameof(RetentionHostedService),
+                cancellationToken: stoppingToken);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try

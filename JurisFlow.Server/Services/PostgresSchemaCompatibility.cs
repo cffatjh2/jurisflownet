@@ -260,12 +260,30 @@ namespace JurisFlow.Server.Services
                 return;
             }
 
+            var commandsHash = StartupTaskStateStore.ComputeStableHash(Commands);
+            var appliedHash = await StartupTaskStateStore.GetValueAsync(
+                context,
+                taskKey: "postgres-schema-compatibility",
+                cancellationToken);
+
+            if (string.Equals(appliedHash, commandsHash, StringComparison.Ordinal))
+            {
+                logger.LogDebug("Skipping PostgreSQL schema compatibility checks because the current command set is already applied.");
+                return;
+            }
+
             logger.LogInformation("Applying PostgreSQL schema compatibility checks for legacy deployments.");
 
             foreach (var command in Commands)
             {
                 await context.Database.ExecuteSqlRawAsync(command, cancellationToken);
             }
+
+            await StartupTaskStateStore.SetValueAsync(
+                context,
+                taskKey: "postgres-schema-compatibility",
+                value: commandsHash,
+                cancellationToken);
         }
     }
 }

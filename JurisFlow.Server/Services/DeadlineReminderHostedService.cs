@@ -7,22 +7,34 @@ namespace JurisFlow.Server.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<DeadlineReminderHostedService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IHostEnvironment _environment;
         private readonly TenantJobRunner _tenantJobs;
 
         public DeadlineReminderHostedService(
             IServiceProvider serviceProvider,
             ILogger<DeadlineReminderHostedService> logger,
             IConfiguration configuration,
+            IHostEnvironment environment,
             TenantJobRunner tenantJobs)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
             _configuration = configuration;
+            _environment = environment;
             _tenantJobs = tenantJobs;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            await HostedServiceStartupDelay.WaitAsync(
+                _configuration,
+                _environment,
+                _logger,
+                configurationKey: "Deadlines:InitialDelaySeconds",
+                productionDefaultSeconds: 30,
+                serviceName: nameof(DeadlineReminderHostedService),
+                cancellationToken: stoppingToken);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 var enabled = _configuration.GetValue("Deadlines:RemindersEnabled", true);
