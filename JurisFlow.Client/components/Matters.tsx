@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Matter, CaseStatus, PracticeArea, FeeStructure, Client, DocumentFile, CourtType, OutcomeFeePlanDetailResult, OutcomeFeePlanVersionCompareResult, OutcomeFeePlanPortfolioMetricsResult, OutcomeFeeCalibrationEffectiveResult } from '../types';
 import { Search, ChevronRight, Filter, Plus, X, Clock, FileText, Mail, Calendar, Trash, Users } from './Icons';
 import { Can } from './common/Can';
@@ -203,6 +203,28 @@ const buildInitialMatterForm = () => ({
   opposingCounselEmail: ''
 });
 
+type MatterFormState = ReturnType<typeof buildInitialMatterForm>;
+
+const buildInitialNewClientData = () => ({
+  name: '',
+  email: '',
+  phone: '',
+  mobile: '',
+  company: '',
+  type: 'Individual' as 'Individual' | 'Corporate',
+  status: 'Active' as 'Active' | 'Inactive',
+  address: '',
+  city: '',
+  state: '',
+  zipCode: '',
+  country: '',
+  taxId: '',
+  notes: '',
+  password: ''
+});
+
+type NewMatterClientFormState = ReturnType<typeof buildInitialNewClientData>;
+
 type MatterAnalysisSectionProps = {
   title: string;
   subtitle?: string;
@@ -268,7 +290,10 @@ const Matters: React.FC = () => {
   const [entityFilter, setEntityFilter] = useState('');
   const [officeFilter, setOfficeFilter] = useState('');
   const [matterSubmitting, setMatterSubmitting] = useState(false);
+  const [inlineClientSubmitting, setInlineClientSubmitting] = useState(false);
+  const [showOutcomePlannerPreview, setShowOutcomePlannerPreview] = useState(true);
   const [outcomePlannerDraft, setOutcomePlannerDraft] = useState<OutcomePlannerDraft>(defaultOutcomePlannerDraft);
+  const latestCreatedClientRef = useRef<Client | null>(null);
   const [selectedMatterPlanner, setSelectedMatterPlanner] = useState<OutcomeFeePlanDetailResult | null>(null);
   const [selectedMatterPlannerCompare, setSelectedMatterPlannerCompare] = useState<OutcomeFeePlanVersionCompareResult | null>(null);
   const [selectedMatterPlannerLoading, setSelectedMatterPlannerLoading] = useState(false);
@@ -308,23 +333,7 @@ const Matters: React.FC = () => {
     assignedTo: ''
   });
   const [selectedMatterTransparencyDelayReasonEdits, setSelectedMatterTransparencyDelayReasonEdits] = useState<Record<string, string>>({});
-  const [newClientData, setNewClientData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    mobile: '',
-    company: '',
-    type: 'Individual' as 'Individual' | 'Corporate',
-    status: 'Active' as 'Active' | 'Inactive',
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-    country: '',
-    taxId: '',
-    notes: '',
-    password: ''
-  });
+  const [newClientData, setNewClientData] = useState<NewMatterClientFormState>(buildInitialNewClientData);
 
   const clientsById = useMemo(() => {
     const safeClients = clients.filter((client): client is Client => !!client && typeof client.id === 'string');
@@ -522,7 +531,7 @@ const Matters: React.FC = () => {
   }, [selectedMatter?.id]);
 
   // Form State
-  const [formData, setFormData] = useState(buildInitialMatterForm);
+  const [formData, setFormData] = useState<MatterFormState>(buildInitialMatterForm);
 
   // US Court Types from enum
   const courtOptions = Object.values(CourtType);
@@ -551,7 +560,7 @@ const Matters: React.FC = () => {
     const nextIds = checked
       ? Array.from(new Set([...currentIds, clientId]))
       : currentIds.filter((id) => id !== clientId);
-    setFormData({ ...formData, relatedClientIds: nextIds });
+    setFormData(prev => ({ ...prev, relatedClientIds: nextIds }));
   };
 
   const outcomePlannerPreview = useMemo(() => {
@@ -571,8 +580,31 @@ const Matters: React.FC = () => {
     });
   }, [outcomePlannerDraft, editData, formData.courtType, formData.feeStructure, formData.practiceArea]);
 
+  const resetMatterDraft = () => {
+    setFormData(buildInitialMatterForm());
+    setSelectedPartyName('');
+    latestCreatedClientRef.current = null;
+  };
+
+  const resetInlineClientForm = () => {
+    setNewClientData(buildInitialNewClientData());
+  };
+
+  const closeNewClientModal = () => {
+    setShowNewClientModal(false);
+    resetInlineClientForm();
+  };
+
   const resetOutcomePlannerState = () => {
     setOutcomePlannerDraft(defaultOutcomePlannerDraft());
+    setShowOutcomePlannerPreview(true);
+  };
+
+  const closeMatterModal = () => {
+    setShowModal(false);
+    setEditData(null);
+    resetOutcomePlannerState();
+    resetMatterDraft();
   };
 
   const persistOutcomePlannerForMatter = async (createdMatter: any, plannerDraft: OutcomePlannerDraft = outcomePlannerDraft) => {
@@ -960,8 +992,11 @@ const Matters: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const recentInlineClient = latestCreatedClientRef.current?.id === formData.partyId
+      ? latestCreatedClientRef.current
+      : null;
     const selectedClient = formData.partyType === 'client'
-      ? clients.find((c) => c.id === formData.partyId)
+      ? clients.find((c) => c.id === formData.partyId) ?? recentInlineClient ?? undefined
       : undefined;
     const selectedLead = formData.partyType === 'lead'
       ? leads.find((l) => l.id === formData.partyId)
@@ -1053,14 +1088,59 @@ const Matters: React.FC = () => {
         }
       }
 
+      latestCreatedClientRef.current = null;
       setShowModal(false);
-      setFormData(buildInitialMatterForm());
+      resetMatterDraft();
       resetOutcomePlannerState();
     } catch (error) {
       console.error('Failed to create matter', error);
       toast.error('Failed to create matter.');
     } finally {
       setMatterSubmitting(false);
+    }
+  };
+
+  const handleInlineClientCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inlineClientSubmitting) return;
+
+    setInlineClientSubmitting(true);
+    try {
+      const trimmedPassword = newClientData.password.trim();
+      if (trimmedPassword) {
+        const passwordResult = validatePassword(trimmedPassword, {
+          email: newClientData.email,
+          name: newClientData.name
+        });
+        if (!passwordResult.isValid) {
+          toast.error(passwordResult.message);
+          return;
+        }
+      }
+
+      const payload = trimmedPassword
+        ? { ...newClientData, password: trimmedPassword }
+        : (() => {
+            const { password, ...rest } = newClientData;
+            return rest;
+          })();
+
+      const newClient = await addClient(payload);
+      latestCreatedClientRef.current = newClient;
+      setSelectedPartyName(newClient.name);
+      setFormData(prev => ({
+        ...prev,
+        partyId: newClient.id,
+        partyType: 'client',
+        relatedClientIds: prev.relatedClientIds.filter((id) => id !== newClient.id)
+      }));
+      closeNewClientModal();
+      toast.success('Client created and selected.');
+    } catch (error: any) {
+      const message = error?.message || 'Error creating client.';
+      toast.error(message);
+    } finally {
+      setInlineClientSubmitting(false);
     }
   };
 
@@ -1259,7 +1339,7 @@ const Matters: React.FC = () => {
         </div>
         <Can perform="matter.create">
           <button
-            onClick={() => { resetOutcomePlannerState(); setEditData(null); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); setShowModal(true); }}
+            onClick={() => { resetOutcomePlannerState(); setEditData(null); resetMatterDraft(); setShowModal(true); }}
             className="bg-slate-800 text-white px-5 py-2.5 rounded-lg shadow-lg hover:bg-slate-700 transition-colors text-sm font-medium flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
@@ -2342,7 +2422,7 @@ const Matters: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800">{editData ? 'Edit Matter' : t('create_matter_modal')}</h3>
-              <button onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button type="button" onClick={closeMatterModal} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={editData ? (e) => {
               e.preventDefault();
@@ -2432,7 +2512,7 @@ const Matters: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowNewClientModal(true)}
+                    onClick={() => { resetInlineClientForm(); setShowNewClientModal(true); }}
                     className="mt-2 text-xs text-primary-600 hover:underline font-medium"
                   >
                     + Add New Client
@@ -2618,58 +2698,76 @@ const Matters: React.FC = () => {
 
                       {outcomePlannerPreview && (
                         <div className="space-y-3">
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            {outcomePlannerPreview.scenarios.map((scenario) => (
-                              <div key={scenario.key} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                <div className="flex items-center justify-between mb-2">
-                                  <p className="text-sm font-bold text-slate-800">{scenario.name}</p>
-                                  <span className="text-[10px] font-bold text-gray-500 uppercase">{Math.round(scenario.probability * 100)}%</span>
-                                </div>
-                                <div className="space-y-1 text-xs">
-                                  <div className="flex justify-between"><span className="text-gray-500">Budget</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.budgetTotal)}</span></div>
-                                  <div className="flex justify-between"><span className="text-gray-500">Collected</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.expectedCollected)}</span></div>
-                                  <div className="flex justify-between"><span className="text-gray-500">Margin</span><span className={`font-semibold ${scenario.expectedMargin >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(scenario.expectedMargin)}</span></div>
-                                  <div className="flex justify-between"><span className="text-gray-500">Confidence</span><span className="font-semibold text-slate-800">{Math.round(scenario.confidenceScore * 100)}% ({scenario.confidenceBand})</span></div>
-                                  <div className="flex justify-between"><span className="text-gray-500">Coverage</span><span className="font-semibold text-slate-800">{Math.round(scenario.dataCoverageScore * 100)}%</span></div>
-                                </div>
-                                <p className="text-[11px] text-gray-500 mt-2">{scenario.driverSummary}</p>
-                                <div className="mt-2 space-y-1">
-                                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Outcome Mix</p>
-                                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-gray-600">
-                                    <span>Settle {Math.round(scenario.outcomeProbabilities.settle * 100)}%</span>
-                                    <span>Dismiss {Math.round(scenario.outcomeProbabilities.dismiss * 100)}%</span>
-                                    <span>Trial {Math.round(scenario.outcomeProbabilities.trial * 100)}%</span>
-                                    <span>Adverse {Math.round(scenario.outcomeProbabilities.adverse * 100)}%</span>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide">Planner Preview</p>
+                            <button
+                              type="button"
+                              onClick={() => setShowOutcomePlannerPreview(prev => !prev)}
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              {showOutcomePlannerPreview ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          {showOutcomePlannerPreview ? (
+                            <>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                {outcomePlannerPreview.scenarios.map((scenario) => (
+                                  <div key={scenario.key} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <p className="text-sm font-bold text-slate-800">{scenario.name}</p>
+                                      <span className="text-[10px] font-bold text-gray-500 uppercase">{Math.round(scenario.probability * 100)}%</span>
+                                    </div>
+                                    <div className="space-y-1 text-xs">
+                                      <div className="flex justify-between"><span className="text-gray-500">Budget</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.budgetTotal)}</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-500">Collected</span><span className="font-semibold text-slate-800">{formatCurrency(scenario.expectedCollected)}</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-500">Margin</span><span className={`font-semibold ${scenario.expectedMargin >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(scenario.expectedMargin)}</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-500">Confidence</span><span className="font-semibold text-slate-800">{Math.round(scenario.confidenceScore * 100)}% ({scenario.confidenceBand})</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-500">Coverage</span><span className="font-semibold text-slate-800">{Math.round(scenario.dataCoverageScore * 100)}%</span></div>
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 mt-2">{scenario.driverSummary}</p>
+                                    <div className="mt-2 space-y-1">
+                                      <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Outcome Mix</p>
+                                      <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-gray-600">
+                                        <span>Settle {Math.round(scenario.outcomeProbabilities.settle * 100)}%</span>
+                                        <span>Dismiss {Math.round(scenario.outcomeProbabilities.dismiss * 100)}%</span>
+                                        <span>Trial {Math.round(scenario.outcomeProbabilities.trial * 100)}%</span>
+                                        <span>Adverse {Math.round(scenario.outcomeProbabilities.adverse * 100)}%</span>
+                                      </div>
+                                    </div>
+                                    {scenario.riskFlags.length > 0 && (
+                                      <div className="mt-2 flex flex-wrap gap-1">
+                                        {scenario.riskFlags.slice(0, 3).map(flag => (
+                                          <span key={flag} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
+                                            {flag}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <p className="text-[10px] text-gray-500 mt-2">Sensitivity: {scenario.inputSensitivitySummary}</p>
                                   </div>
-                                </div>
-                                {scenario.riskFlags.length > 0 && (
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {scenario.riskFlags.slice(0, 3).map(flag => (
-                                      <span key={flag} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">
-                                        {flag}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                                <p className="text-[10px] text-gray-500 mt-2">Sensitivity: {scenario.inputSensitivitySummary}</p>
+                                ))}
                               </div>
-                            ))}
-                          </div>
 
-                          <div className="rounded-lg border border-gray-200 bg-white p-3">
-                            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Assumptions</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
-                              {outcomePlannerPreview.assumptions.map((assumption) => (
-                                <div key={assumption.key} className="flex justify-between gap-3 text-xs">
-                                  <span className="text-gray-500">{assumption.key}</span>
-                                  <span className="font-medium text-slate-700 text-right">{assumption.value}</span>
+                              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                                <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Assumptions</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+                                  {outcomePlannerPreview.assumptions.map((assumption) => (
+                                    <div key={assumption.key} className="flex justify-between gap-3 text-xs">
+                                      <span className="text-gray-500">{assumption.key}</span>
+                                      <span className="font-medium text-slate-700 text-right">{assumption.value}</span>
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
+                                <p className="text-[11px] text-gray-500 mt-2">
+                                  Preview uses deterministic planner assumptions. If enabled, a version is persisted immediately after matter creation.
+                                </p>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-xs text-gray-500">
+                              Planner preview is hidden. Use Show to inspect the scenario cards and assumptions again.
                             </div>
-                            <p className="text-[11px] text-gray-500 mt-2">
-                              Preview uses deterministic planner assumptions. If enabled, a version is persisted immediately after matter creation.
-                            </p>
-                          </div>
+                          )}
                         </div>
                       )}
                     </>
@@ -2912,7 +3010,7 @@ const Matters: React.FC = () => {
               )}
 
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => { setShowModal(false); setEditData(null); resetOutcomePlannerState(); setFormData(buildInitialMatterForm()); setSelectedPartyName(''); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
+                <button type="button" onClick={closeMatterModal} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
                 <button type="submit" disabled={matterSubmitting} className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
                   {matterSubmitting ? t('saving') : t('save')}
                 </button>
@@ -3023,119 +3121,83 @@ const Matters: React.FC = () => {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 sticky top-0">
               <h3 className="font-bold text-lg text-slate-800">Add New Client</h3>
-              <button onClick={() => { setShowNewClientModal(false); setNewClientData({ name: '', email: '', phone: '', mobile: '', company: '', type: 'Individual', status: 'Active', address: '', city: '', state: '', zipCode: '', country: '', taxId: '', notes: '', password: '' }); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+              <button type="button" onClick={closeNewClientModal} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                const trimmedPassword = newClientData.password.trim();
-                if (trimmedPassword) {
-                  const passwordResult = validatePassword(trimmedPassword, {
-                    email: newClientData.email,
-                    name: newClientData.name
-                  });
-                  if (!passwordResult.isValid) {
-                    toast.error(passwordResult.message);
-                    return;
-                  }
-                }
-
-                const payload = trimmedPassword
-                  ? { ...newClientData, password: trimmedPassword }
-                  : (() => {
-                      const { password, ...rest } = newClientData;
-                      return rest;
-                    })();
-
-                const newClient = await addClient(payload);
-                setFormData({
-                  ...formData,
-                  partyId: newClient.id,
-                  partyType: 'client',
-                  relatedClientIds: formData.relatedClientIds.filter((id) => id !== newClient.id)
-                });
-                setShowNewClientModal(false);
-                setNewClientData({ name: '', email: '', phone: '', mobile: '', company: '', type: 'Individual', status: 'Active', address: '', city: '', state: '', zipCode: '', country: '', taxId: '', notes: '', password: '' });
-              } catch (error: any) {
-                const message = error?.message || 'Error creating client.';
-                toast.error(message);
-                return;
-              }
-            }} className="p-6 space-y-4">
+            <form onSubmit={handleInlineClientCreate} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Full Name / Company Name *</label>
-                  <input required type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.name} onChange={e => setNewClientData({ ...newClientData, name: e.target.value })} />
+                  <input required type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.name} onChange={e => setNewClientData(prev => ({ ...prev, name: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                  <input required type="email" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.email} onChange={e => setNewClientData({ ...newClientData, email: e.target.value })} />
+                  <input required type="email" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.email} onChange={e => setNewClientData(prev => ({ ...prev, email: e.target.value }))} />
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Portal Password</label>
-                <input type="password" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData({ ...newClientData, password: e.target.value })} />
+                <input type="password" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData(prev => ({ ...prev, password: e.target.value }))} />
                 <p className="mt-1 text-xs text-gray-500">Optional. If you set one, {passwordRequirementsText.toLowerCase()}</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-                  <input type="tel" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.phone} onChange={e => setNewClientData({ ...newClientData, phone: e.target.value })} />
+                  <input type="tel" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.phone} onChange={e => setNewClientData(prev => ({ ...prev, phone: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
-                  <input type="tel" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.mobile} onChange={e => setNewClientData({ ...newClientData, mobile: e.target.value })} />
+                  <input type="tel" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.mobile} onChange={e => setNewClientData(prev => ({ ...prev, mobile: e.target.value }))} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                  <select className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.type} onChange={e => setNewClientData({ ...newClientData, type: e.target.value as 'Individual' | 'Corporate' })}>
+                  <select className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.type} onChange={e => setNewClientData(prev => ({ ...prev, type: e.target.value as 'Individual' | 'Corporate' }))}>
                     <option value="Individual">Individual</option>
                     <option value="Corporate">Corporate</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Company (if Corporate)</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.company} onChange={e => setNewClientData({ ...newClientData, company: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.company} onChange={e => setNewClientData(prev => ({ ...prev, company: e.target.value }))} />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
-                <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.address} onChange={e => setNewClientData({ ...newClientData, address: e.target.value })} />
+                <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.address} onChange={e => setNewClientData(prev => ({ ...prev, address: e.target.value }))} />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.city} onChange={e => setNewClientData({ ...newClientData, city: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.city} onChange={e => setNewClientData(prev => ({ ...prev, city: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.state} onChange={e => setNewClientData({ ...newClientData, state: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.state} onChange={e => setNewClientData(prev => ({ ...prev, state: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">ZIP Code</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.zipCode} onChange={e => setNewClientData({ ...newClientData, zipCode: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.zipCode} onChange={e => setNewClientData(prev => ({ ...prev, zipCode: e.target.value }))} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Country</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.country} onChange={e => setNewClientData({ ...newClientData, country: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.country} onChange={e => setNewClientData(prev => ({ ...prev, country: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tax ID / SSN</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.taxId} onChange={e => setNewClientData({ ...newClientData, taxId: e.target.value })} />
+                  <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.taxId} onChange={e => setNewClientData(prev => ({ ...prev, taxId: e.target.value }))} />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea rows={3} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.notes} onChange={e => setNewClientData({ ...newClientData, notes: e.target.value })} />
+                <textarea rows={3} className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.notes} onChange={e => setNewClientData(prev => ({ ...prev, notes: e.target.value }))} />
               </div>
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => { setShowNewClientModal(false); setNewClientData({ name: '', email: '', phone: '', mobile: '', company: '', type: 'Individual', status: 'Active', address: '', city: '', state: '', zipCode: '', country: '', taxId: '', notes: '', password: '' }); }} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg">Save</button>
+                <button type="button" onClick={closeNewClientModal} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg" disabled={inlineClientSubmitting}>Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" disabled={inlineClientSubmitting}>{inlineClientSubmitting ? 'Saving...' : 'Save'}</button>
               </div>
             </form>
           </div>
@@ -3149,12 +3211,15 @@ const Matters: React.FC = () => {
         clients={clients}
         leads={leads}
         onSelect={(type, id, name) => {
-          setFormData({
-            ...formData,
+          latestCreatedClientRef.current = type === 'client'
+            ? clients.find((client) => client.id === id) ?? null
+            : null;
+          setFormData(prev => ({
+            ...prev,
             partyId: id,
             partyType: type,
-            relatedClientIds: formData.relatedClientIds.filter((clientId) => clientId !== id)
-          });
+            relatedClientIds: prev.relatedClientIds.filter((clientId) => clientId !== id)
+          }));
           setSelectedPartyName(name);
           setShowClientSelector(false);
         }}

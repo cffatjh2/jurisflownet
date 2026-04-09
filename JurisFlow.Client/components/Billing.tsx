@@ -3,7 +3,7 @@ import { CreditCard, Plus, X, Search, Filter, Download, Edit, Trash2, CheckCircl
 import { Can } from './common/Can';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
-import { Invoice, InvoiceStatus, BillingSettings } from '../types';
+import { Invoice, InvoicePayment, InvoiceStatus, BillingSettings } from '../types';
 import { toast } from './Toast';
 import PaymentHistory from './PaymentHistory';
 import { useConfirm } from './ConfirmDialog';
@@ -18,44 +18,57 @@ const isDraft = (status: any) => normalizeStatus(status) === 'draft';
 const isApproved = (status: any) => normalizeStatus(status) === 'approved';
 const isEntryApproved = (status?: string) => !status || status.toLowerCase() === 'approved';
 
-// Extended Invoice type with additional fields
-interface ExtendedInvoice {
-    id: string;
-    number?: string;
-    client: any;
-    clientId?: string;
-    matterId?: string;
-    amount: number;
-    issueDate?: string;
-    dueDate: string;
-    status: any; // Can be string or InvoiceStatus enum
-    lineItems?: {
-        id: string;
-        description: string;
-        date?: string;
-        quantity: number;
-        rate: number;
-        amount: number;
-        type: 'time' | 'expense' | 'fixed' | string;
-        activityCode?: string;
-        taskCode?: string;
-        expenseCode?: string;
-    }[];
-    payments?: {
-        id: string;
-        date: string;
-        amount: number;
-        method: string;
-        reference?: string;
-    }[];
-    notes?: string;
-    terms?: string;
+type ExtendedInvoicePayment = Omit<InvoicePayment, 'method' | 'paidAt'> & {
+    method: string;
+    paidAt?: string;
+    date: string;
+};
+
+interface ExtendedInvoice extends Omit<Invoice, 'payments'> {
+    payments?: ExtendedInvoicePayment[];
     tax?: number;
-    discount?: number;
-    subtotal?: number;
-    entityId?: string;
-    officeId?: string;
 }
+
+const normalizeInvoicePayment = (payment: Partial<InvoicePayment> & { date?: string; method?: string }): ExtendedInvoicePayment => ({
+    id: String(payment?.id ?? `pay-${Date.now()}`),
+    invoiceId: typeof payment?.invoiceId === 'string' ? payment.invoiceId : '',
+    amount: Number(payment?.amount ?? 0),
+    method: String(payment?.method ?? 'Unknown'),
+    reference: payment?.reference,
+    stripePaymentId: payment?.stripePaymentId,
+    isRefund: typeof payment?.isRefund === 'boolean' ? payment.isRefund : false,
+    refundReason: payment?.refundReason,
+    notes: payment?.notes,
+    paidAt: payment?.paidAt ?? payment?.date,
+    date: payment?.date ?? payment?.paidAt ?? new Date().toISOString()
+});
+
+const normalizeExtendedInvoice = (invoice: Record<string, any>): ExtendedInvoice => {
+    const payments = Array.isArray(invoice?.payments)
+        ? invoice.payments.map((payment: Partial<InvoicePayment> & { date?: string; method?: string }) => normalizeInvoicePayment(payment))
+        : undefined;
+    const amount = Number(invoice?.amount ?? invoice?.total ?? 0);
+    const amountPaid = Number(invoice?.amountPaid ?? payments?.reduce((sum, payment) => sum + payment.amount, 0) ?? 0);
+
+    return {
+        ...(invoice as ExtendedInvoice),
+        number: String(invoice?.number ?? invoice?.id ?? ''),
+        client: invoice?.client as any,
+        clientId: String(invoice?.clientId ?? invoice?.client?.id ?? ''),
+        subtotal: Number(invoice?.subtotal ?? 0),
+        taxAmount: Number(invoice?.taxAmount ?? invoice?.tax ?? 0),
+        discount: Number(invoice?.discount ?? 0),
+        amount,
+        amountPaid,
+        balance: Number(invoice?.balance ?? Math.max(0, amount - amountPaid)),
+        issueDate: invoice?.issueDate ?? invoice?.createdAt ?? new Date().toISOString(),
+        dueDate: invoice?.dueDate ?? invoice?.issueDate ?? invoice?.createdAt ?? new Date().toISOString(),
+        status: (invoice?.status as InvoiceStatus | undefined) ?? InvoiceStatus.DRAFT,
+        lineItems: Array.isArray(invoice?.lineItems) ? invoice.lineItems : undefined,
+        payments,
+        tax: Number(invoice?.tax ?? invoice?.taxAmount ?? 0)
+    };
+};
 
 const Billing: React.FC = () => {
     const { t, formatCurrency, formatDate } = useTranslation();
@@ -174,21 +187,12 @@ const Billing: React.FC = () => {
             try {
                 const data = await api.getInvoice(selectedInvoice.id);
                 if (data && isMounted) {
-                    const amount = Number((data as any).amount ?? (data as any).total ?? selectedInvoice.amount ?? 0);
-                    const amountPaid = Number((data as any).amountPaid ?? selectedInvoice.payments?.reduce((sum, p) => sum + p.amount, 0) ?? 0);
-                    const normalizedDetails = {
-                        ...(data as Partial<ExtendedInvoice>),
-                        amount,
-                        subtotal: Number((data as any).subtotal ?? selectedInvoice.subtotal ?? 0),
-                        tax: Number((data as any).tax ?? (data as any).taxAmount ?? selectedInvoice.tax ?? 0),
-                        discount: Number((data as any).discount ?? selectedInvoice.discount ?? 0),
-                        amountPaid,
-                        balance: Number((data as any).balance ?? Math.max(0, amount - amountPaid)),
-                        lineItems: Array.isArray((data as any).lineItems) ? (data as any).lineItems : selectedInvoice.lineItems,
-                        payments: Array.isArray((data as any).payments) ? (data as any).payments : selectedInvoice.payments
-                    };
+                    const normalizedDetails = normalizeExtendedInvoice({
+                        ...selectedInvoice,
+                        ...(data as Record<string, any>)
+                    });
                     setSelectedInvoice(prev => prev && prev.id === selectedInvoice.id
-                        ? { ...prev, ...normalizedDetails }
+                        ? normalizedDetails
                         : prev);
                 }
             } catch (error) {
@@ -385,16 +389,19 @@ const Billing: React.FC = () => {
             client: resolvedClient,
             clientId: resolvedClientId,
             matterId: selectedMatterId,
+            subtotal: invoicePreview.subtotal,
+            taxAmount: invoicePreview.taxAmount,
+            discount: discountAmount,
             amount: invoicePreview.total,
+            amountPaid: 0,
+            balance: invoicePreview.total,
             issueDate: new Date().toISOString(),
             dueDate: new Date(Date.now() + (billingSettings?.defaultPaymentTerms ?? 14) * 24 * 60 * 60 * 1000).toISOString(),
-            status: 'DRAFT',
-            lineItems: invoicePreview.lineItems,
+            status: InvoiceStatus.DRAFT,
+            lineItems: invoicePreview.lineItems as any,
             notes: invoiceNotes,
             terms: invoiceTerms,
             tax: invoicePreview.taxAmount,
-            discount: discountAmount,
-            subtotal: invoicePreview.subtotal,
             entityId: resolvedEntityId || undefined,
             officeId: resolvedOfficeId || undefined
         };
@@ -473,17 +480,20 @@ const Billing: React.FC = () => {
             return;
         }
 
-        const newPayment = {
+        const newPayment: ExtendedInvoicePayment = {
             id: `pay${Date.now()}`,
+            invoiceId: selectedInvoice.id,
             date: paymentDate,
+            paidAt: paymentDate,
             amount,
             method: paymentMethod,
             reference: paymentReference || undefined,
+            isRefund: false
         };
 
         const updatedPayments = [...(selectedInvoice.payments || []), newPayment];
         const totalPaid = updatedPayments.reduce((sum, p) => sum + p.amount, 0);
-        const newStatus: any = totalPaid >= selectedInvoice.amount ? 'PAID' : 'PARTIALLY_PAID';
+        const newStatus = totalPaid >= selectedInvoice.amount ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
 
         updateInvoice(selectedInvoice.id, {
             payments: updatedPayments,
@@ -499,7 +509,7 @@ const Billing: React.FC = () => {
 
         // Refresh selected invoice
         setSelectedInvoice(prev => prev ? {
-            ...prev,
+            ...normalizeExtendedInvoice(prev),
             payments: updatedPayments,
             status: newStatus,
         } : null);
@@ -518,7 +528,9 @@ const Billing: React.FC = () => {
         try {
             const updatedInvoice = await sendInvoice(invoice.id);
             if (updatedInvoice) {
-                setSelectedInvoice(prev => prev && prev.id === invoice.id ? { ...prev, ...updatedInvoice } : prev);
+                setSelectedInvoice(prev => prev && prev.id === invoice.id
+                    ? normalizeExtendedInvoice({ ...prev, ...updatedInvoice })
+                    : prev);
             }
             toast.success('Invoice sent to client!');
         } catch (error: any) {
@@ -843,7 +855,7 @@ const Billing: React.FC = () => {
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {filteredInvoices.map(inv => {
-                                        const extInv = inv as unknown as ExtendedInvoice;
+                                        const extInv = normalizeExtendedInvoice(inv as unknown as Record<string, any>);
                                         const totalPaid = extInv.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
                                         const displayStatus = isOverdue(inv) && !isPaid(inv.status) ? 'Overdue' : inv.status;
 
@@ -1149,8 +1161,8 @@ const Billing: React.FC = () => {
                                 <p className="text-sm text-gray-500">{selectedInvoice.client?.name}</p>
                             </div>
                             <div className="flex items-center gap-2">
-                                <span className={`px-3 py-1 rounded-full text-sm font-bold ${getStatusBadge(isOverdue(selectedInvoice) && selectedInvoice.status !== 'Paid' ? 'Overdue' : selectedInvoice.status)}`}>
-                                    {isOverdue(selectedInvoice) && selectedInvoice.status !== 'Paid' ? 'Overdue' : selectedInvoice.status}
+                                <span className={`px-3 py-1 rounded-full text-sm font-bold ${getStatusBadge(isOverdue(selectedInvoice) && !isPaid(selectedInvoice.status) ? 'Overdue' : selectedInvoice.status)}`}>
+                                    {isOverdue(selectedInvoice) && !isPaid(selectedInvoice.status) ? 'Overdue' : selectedInvoice.status}
                                 </span>
                                 <button onClick={() => setShowDetailModal(false)}>
                                     <X className="w-5 h-5 text-gray-400 hover:text-gray-600" />
@@ -1332,7 +1344,9 @@ const Billing: React.FC = () => {
                                                 try {
                                                     const updatedInvoice = await approveInvoice(selectedInvoice.id);
                                                     toast.success('Invoice approved.');
-                                                    setSelectedInvoice(prev => prev ? { ...prev, ...(updatedInvoice || { status: 'APPROVED' as any }) } : null);
+                                                    setSelectedInvoice(prev => prev
+                                                        ? normalizeExtendedInvoice({ ...prev, ...(updatedInvoice || { status: InvoiceStatus.APPROVED }) })
+                                                        : null);
                                                 } catch (error: any) {
                                                     console.error('Failed to approve invoice', error);
                                                     toast.error(error?.message || 'Failed to approve invoice.');

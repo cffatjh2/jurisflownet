@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
-import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
+import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, InvoiceStatus, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
 
@@ -302,8 +302,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return items.filter(hasStringId);
   };
 
-  const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
-    sanitizeIdentifiableItems<Client>(items);
+const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
+  sanitizeIdentifiableItems<Client>(items);
 
   const sanitizeMatters = (items: Matter[] | null | undefined): Matter[] =>
     sanitizeIdentifiableItems<Matter>(items);
@@ -411,16 +411,40 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     } as Matter;
   };
 
-  const hydrateMattersWithClients = (matterItems: Matter[], clientItems: Client[]): Matter[] => {
-    const safeMatterItems = sanitizeMatters(matterItems);
-    if (safeMatterItems.length === 0) return [];
+const hydrateMattersWithClients = (matterItems: Matter[], clientItems: Client[]): Matter[] => {
+  const safeMatterItems = sanitizeMatters(matterItems);
+  if (safeMatterItems.length === 0) return [];
 
     const safeClientItems = sanitizeClients(clientItems);
     if (safeClientItems.length === 0) return safeMatterItems;
 
     const clientById = new Map(safeClientItems.map((client) => [client.id, client]));
-    return safeMatterItems.map((matter) => hydrateMatterClient(matter, clientById));
-  };
+  return safeMatterItems.map((matter) => hydrateMatterClient(matter, clientById));
+};
+
+const normalizeEmail = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error ?? '');
+
+const isRecoverableCreateError = (error: unknown) => {
+  const message = getErrorMessage(error).toLowerCase();
+  if (!message) return false;
+
+  return (
+    message.includes('failed to fetch') ||
+    message.includes('empty response') ||
+    message.includes('unexpected non-json') ||
+    message.includes('expected json') ||
+    message.includes('internal server error') ||
+    message.includes('bad gateway') ||
+    message.includes('gateway timeout') ||
+    message.includes('service unavailable')
+  );
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const getInvoiceClientId = (invoice: Partial<Invoice>): string | undefined => {
     const fromInvoice = typeof invoice.clientId === 'string' ? invoice.clientId.trim() : '';
@@ -863,12 +887,12 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     };
     const optimisticMatter = { ...matterData, id: tempId, client: optimisticClient };
     setMatters(prev => [optimisticMatter, ...prev]);
+    const payload = { ...matterData };
+    delete payload.client;
+    delete payload.relatedClients;
+    delete payload.relatedClientIds;
 
     try {
-      const payload = { ...matterData };
-      delete payload.client;
-      delete payload.relatedClients;
-      delete payload.relatedClientIds;
       if (!payload.clientId) {
         throw new Error('Client is required to create a matter.');
       }
@@ -877,7 +901,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         throw new Error('Matter could not be created.');
       }
       // Replace temp with real
-      const clientById = new Map(clients.map((client) => [client.id, client]));
+      const clientById = new Map(clientsRef.current.map((client) => [client.id, client]));
       const hydratedMatter = hydrateMatterClient(
         {
           ...newMatter,
@@ -900,6 +924,33 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         });
       return hydratedMatter;
     } catch (e) {
+      if (isRecoverableCreateError(e) && payload.clientId && payload.caseNumber && payload.name) {
+        try {
+          const refreshedMatters = sanitizeMatters(await api.getMatters());
+          const matchedMatter = refreshedMatters.find((matter) => {
+            const matchedClientId = getMatterClientId(matter as MatterWithClientId);
+            return matchedClientId === payload.clientId
+              && String(matter.caseNumber || '') === String(payload.caseNumber || '')
+              && String(matter.name || '') === String(payload.name || '');
+          });
+
+          if (matchedMatter) {
+            const recoveredMatter = hydrateMatterClient(
+              {
+                ...matchedMatter,
+                client: matchedMatter.client || optimisticClient,
+                clientId: getMatterClientId(matchedMatter as MatterWithClientId) || payload.clientId
+              } as Matter,
+              new Map(clientsRef.current.map((client) => [client.id, client]))
+            );
+            setMatters(prev => [recoveredMatter, ...prev.filter(m => m.id !== tempId && m.id !== recoveredMatter.id)]);
+            return recoveredMatter;
+          }
+        } catch (recoveryError) {
+          console.warn('Matter create recovery failed', recoveryError);
+        }
+      }
+
       console.error("API Error (addMatter) - operating offline", e);
       setMatters(prev => prev.filter(m => m.id !== tempId));
       throw e;
@@ -1127,8 +1178,45 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const addClient = async (clientData: any): Promise<Client> => {
     const temp = { ...clientData, id: `c-${Date.now()}` };
     setClients(prev => [temp, ...sanitizeClients(prev)]);
+    const normalizedEmail = normalizeEmail(clientData?.email);
     try {
-      const newClient = await api.createClient(clientData);
+      let newClient: any;
+      try {
+        newClient = await api.createClient(clientData);
+        if (!hasStringId(newClient)) {
+          throw new Error('Client API returned an empty response.');
+        }
+      } catch (error) {
+        if (!isRecoverableCreateError(error)) {
+          throw error;
+        }
+
+        await sleep(350);
+
+        try {
+          newClient = await api.createClient(clientData);
+          if (!hasStringId(newClient)) {
+            throw new Error('Client API returned an empty response.');
+          }
+        } catch (retryError) {
+          if (normalizedEmail) {
+            try {
+              const refreshedClients = sanitizeClients(await api.getClients());
+              const recoveredClient = refreshedClients.find((client) => normalizeEmail(client.email) === normalizedEmail);
+              if (recoveredClient) {
+                newClient = recoveredClient;
+              }
+            } catch (recoveryError) {
+              console.warn('Client create recovery failed', recoveryError);
+            }
+          }
+
+          if (!hasStringId(newClient)) {
+            throw retryError;
+          }
+        }
+      }
+
       if (!hasStringId(newClient)) {
         throw new Error('Client API returned an empty response.');
       }
@@ -1290,7 +1378,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const approveInvoice = async (id: string): Promise<Invoice | null> => {
     const prev = invoices;
-    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: 'APPROVED' } : inv));
+    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: InvoiceStatus.APPROVED } : inv));
     try {
       const updated = await api.approveInvoice(id);
       if (updated) {
@@ -1308,7 +1396,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   const sendInvoice = async (id: string): Promise<Invoice | null> => {
     const prev = invoices;
-    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: 'SENT' } : inv));
+    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: InvoiceStatus.SENT } : inv));
     try {
       const updated = await api.sendInvoice(id);
       if (updated) {
