@@ -70,9 +70,17 @@ const normalizeExtendedInvoice = (invoice: Record<string, any>): ExtendedInvoice
     };
 };
 
+const getRecordedPaidAmount = (invoice: ExtendedInvoice | Invoice) => {
+    const paymentsTotal = Array.isArray((invoice as ExtendedInvoice).payments)
+        ? (invoice as ExtendedInvoice).payments!.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+        : 0;
+    const amountPaid = Number((invoice as ExtendedInvoice).amountPaid ?? 0);
+    return Math.max(amountPaid, paymentsTotal);
+};
+
 const Billing: React.FC = () => {
     const { t, formatCurrency, formatDate } = useTranslation();
-    const { invoices, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, matters, timeEntries, expenses, markAsBilled, clients } = useData();
+    const { invoices, addInvoice, deleteInvoice, approveInvoice, sendInvoice, recordInvoicePayment, matters, timeEntries, expenses, markAsBilled, clients } = useData();
     const { confirm } = useConfirm();
 
     // Modal states
@@ -473,7 +481,8 @@ const Billing: React.FC = () => {
             return;
         }
 
-        const remainingBalance = selectedInvoice.amount - (selectedInvoice.payments?.reduce((sum, p) => sum + p.amount, 0) || 0);
+        const currentPaid = getRecordedPaidAmount(selectedInvoice);
+        const remainingBalance = Math.max(0, Number(selectedInvoice.amount || 0) - currentPaid);
 
         if (amount > remainingBalance) {
             toast.error(`Payment amount cannot exceed remaining balance: ${formatCurrency(remainingBalance)}`);
@@ -492,27 +501,43 @@ const Billing: React.FC = () => {
         };
 
         const updatedPayments = [...(selectedInvoice.payments || []), newPayment];
-        const totalPaid = updatedPayments.reduce((sum, p) => sum + p.amount, 0);
+        const totalPaid = currentPaid + amount;
         const newStatus = totalPaid >= selectedInvoice.amount ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
+        try {
+            const updatedInvoice = await recordInvoicePayment(selectedInvoice.id, {
+                amount,
+                reference: paymentReference || undefined
+            }, {
+                id: selectedInvoice.id,
+                number: selectedInvoice.number,
+                clientId: selectedInvoice.clientId,
+                client: selectedInvoice.client,
+                matterId: selectedInvoice.matterId,
+                amount: selectedInvoice.amount,
+                amountPaid: selectedInvoice.amountPaid,
+                balance: selectedInvoice.balance,
+                issueDate: selectedInvoice.issueDate,
+                dueDate: selectedInvoice.dueDate,
+                status: selectedInvoice.status
+            });
 
-        updateInvoice(selectedInvoice.id, {
-            payments: updatedPayments,
-            status: newStatus,
-        });
+            setShowPaymentModal(false);
+            setPaymentAmount('');
+            setPaymentMethod('Bank Transfer');
+            setPaymentReference('');
+            toast.success('Payment recorded successfully!');
 
-        // Reset form
-        setShowPaymentModal(false);
-        setPaymentAmount('');
-        setPaymentMethod('Bank Transfer');
-        setPaymentReference('');
-        toast.success('Payment recorded successfully!');
-
-        // Refresh selected invoice
-        setSelectedInvoice(prev => prev ? {
-            ...normalizeExtendedInvoice(prev),
-            payments: updatedPayments,
-            status: newStatus,
-        } : null);
+            setSelectedInvoice(prev => prev ? {
+                ...normalizeExtendedInvoice({ ...prev, ...(updatedInvoice || {}) }),
+                payments: updatedPayments,
+                amountPaid: updatedInvoice?.amountPaid ?? totalPaid,
+                balance: updatedInvoice?.balance ?? Math.max(0, selectedInvoice.amount - totalPaid),
+                status: updatedInvoice?.status ?? newStatus,
+            } : null);
+        } catch (error: any) {
+            console.error('Failed to record payment', error);
+            toast.error(error?.message || 'Failed to record payment.');
+        }
     };
 
     // Send Invoice
@@ -865,7 +890,7 @@ const Billing: React.FC = () => {
                                 <tbody className="divide-y divide-gray-100">
                                     {filteredInvoices.map(inv => {
                                         const extInv = normalizeExtendedInvoice(inv as unknown as Record<string, any>);
-                                        const totalPaid = extInv.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
+                                        const totalPaid = getRecordedPaidAmount(extInv);
                                         const displayStatus = isOverdue(inv) && !isPaid(inv.status) ? 'Overdue' : inv.status;
 
                                         return (
@@ -1189,13 +1214,13 @@ const Billing: React.FC = () => {
                                 <div className="bg-gray-50 p-4 rounded-lg">
                                     <div className="text-xs font-bold text-gray-500 uppercase">Paid</div>
                                     <div className="text-2xl font-bold text-emerald-600 mt-1">
-                                        {formatCurrency(selectedInvoice.payments?.reduce((sum, p) => sum + p.amount, 0) || 0)}
+                                        {formatCurrency(getRecordedPaidAmount(selectedInvoice))}
                                     </div>
                                 </div>
                                 <div className="bg-gray-50 p-4 rounded-lg">
                                     <div className="text-xs font-bold text-gray-500 uppercase">Balance Due</div>
                                     <div className="text-2xl font-bold text-red-600 mt-1">
-                                        {formatCurrency(selectedInvoice.amount - (selectedInvoice.payments?.reduce((sum, p) => sum + p.amount, 0) || 0))}
+                                        {formatCurrency(Math.max(0, Number(selectedInvoice.balance ?? (selectedInvoice.amount - getRecordedPaidAmount(selectedInvoice)))))}
                                     </div>
                                 </div>
                             </div>

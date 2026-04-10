@@ -830,7 +830,7 @@ export const api = {
     deleteInvoiceLineItem: (invoiceId: string, itemId: string) => fetchJson(`/invoices/${invoiceId}/line-items/${itemId}`, { method: 'DELETE' }),
 
     // Invoice Payments
-    recordPayment: (invoiceId: string, data: any) => fetchJson(`/invoices/${invoiceId}/payments`, { method: 'POST', body: JSON.stringify(data) }),
+    recordPayment: (invoiceId: string, data: any) => fetchJson(`/invoices/${invoiceId}/pay`, { method: 'POST', body: JSON.stringify(data) }),
     refundPayment: (invoiceId: string, paymentId: string, data: any) => fetchJson(`/invoices/${invoiceId}/payments/${paymentId}/refund`, { method: 'POST', body: JSON.stringify(data) }),
 
     // Notifications

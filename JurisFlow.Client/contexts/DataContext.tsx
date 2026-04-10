@@ -47,6 +47,7 @@ interface DataContextType {
   deleteInvoice: (id: string) => Promise<void>;
   approveInvoice: (id: string) => Promise<Invoice | null>;
   sendInvoice: (id: string, invoiceHint?: Partial<Invoice>) => Promise<Invoice | null>;
+  recordInvoicePayment: (id: string, data: { amount: number; reference?: string }, invoiceHint?: Partial<Invoice>) => Promise<Invoice | null>;
   addClient: (item: any) => Promise<Client>;
   updateClient: (id: string, data: Partial<Client> & { statusChangeNote?: string }) => Promise<void>;
   addLead: (item: any) => Promise<void>;
@@ -626,6 +627,31 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     return null;
+  };
+
+  const resolveInvoiceMutationTarget = async (id: string, invoiceHint?: Partial<Invoice>) => {
+    const localInvoice = invoices.find((invoice) => invoice.id === id) || invoiceHint || null;
+    if (!localInvoice || !isTemporaryInvoiceId(id)) {
+      return {
+        resolvedId: id,
+        localInvoice
+      };
+    }
+
+    const recoveredInvoice = await recoverCreatedInvoice(localInvoice);
+    if (!recoveredInvoice) {
+      throw new Error('Invoice is still being saved. Please wait a moment and try again.');
+    }
+
+    setInvoices(items => [
+      recoveredInvoice,
+      ...items.filter(inv => inv.id !== id && inv.id !== recoveredInvoice.id)
+    ]);
+
+    return {
+      resolvedId: recoveredInvoice.id,
+      localInvoice: recoveredInvoice
+    };
   };
 
   const hydrateInvoiceClient = (invoice: Invoice, clientById: Map<string, Client>): Invoice => {
@@ -1586,22 +1612,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const sendInvoice = async (id: string, invoiceHint?: Partial<Invoice>): Promise<Invoice | null> => {
     const prev = invoices;
-    const localInvoice = invoices.find((invoice) => invoice.id === id) || invoiceHint;
-    let resolvedId = id;
 
     try {
-      if (localInvoice && isTemporaryInvoiceId(id)) {
-        const recoveredInvoice = await recoverCreatedInvoice(localInvoice);
-        if (!recoveredInvoice) {
-          throw new Error('Invoice is still being saved. Please wait a moment and try again.');
-        }
-
-        resolvedId = recoveredInvoice.id;
-        setInvoices(items => [
-          recoveredInvoice,
-          ...items.filter(inv => inv.id !== id && inv.id !== recoveredInvoice.id)
-        ]);
-      }
+      const { resolvedId } = await resolveInvoiceMutationTarget(id, invoiceHint);
 
       setInvoices(items => items.map(inv => {
         if (inv.id === resolvedId) {
@@ -1619,6 +1632,50 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       return null;
     } catch (e) {
       console.error("API Error (sendInvoice)", e);
+      setInvoices(prev);
+      throw e;
+    }
+  };
+
+  const recordInvoicePayment = async (
+    id: string,
+    data: { amount: number; reference?: string },
+    invoiceHint?: Partial<Invoice>
+  ): Promise<Invoice | null> => {
+    const prev = invoices;
+
+    try {
+      const { resolvedId, localInvoice } = await resolveInvoiceMutationTarget(id, invoiceHint);
+      const nextAmountPaid = Number(localInvoice?.amountPaid ?? 0) + Number(data.amount ?? 0);
+      const invoiceAmount = Number(localInvoice?.amount ?? 0);
+      const nextBalance = Math.max(0, invoiceAmount - nextAmountPaid);
+      const nextStatus = nextBalance === 0
+        ? InvoiceStatus.PAID
+        : InvoiceStatus.PARTIALLY_PAID;
+
+      setInvoices(items => items.map(inv => {
+        if (inv.id !== resolvedId) return inv;
+        return {
+          ...inv,
+          amountPaid: nextAmountPaid,
+          balance: nextBalance,
+          status: nextStatus
+        };
+      }));
+
+      const updated = await api.recordPayment(resolvedId, {
+        amount: data.amount,
+        reference: data.reference
+      });
+      if (updated) {
+        const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(updated), new Map(clientsRef.current.map((client) => [client.id, client])));
+        setInvoices(items => items.map(inv => inv.id === resolvedId ? { ...inv, ...hydratedInvoice } : inv));
+        return hydratedInvoice;
+      }
+
+      return null;
+    } catch (e) {
+      console.error("API Error (recordInvoicePayment)", e);
       setInvoices(prev);
       throw e;
     }
@@ -1835,7 +1892,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       matters, clients, timeEntries, expenses, messages, events, documents, invoices, leads, tasks, taskTemplates, notifications,
       activeTimer, startTimer, stopTimer, updateTimer, pauseTimer, resumeTimer,
       addMatter, updateMatter, deleteMatter,
-      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, addClient, addLead, updateLead, deleteLead, addTask,
+      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, recordInvoicePayment, addClient, addLead, updateLead, deleteLead, addTask,
       updateTaskStatus, updateTask, deleteTask, archiveTask, createTasksFromTemplate, markAsBilled, markNotificationRead, markNotificationUnread, markAllNotificationsRead, updateUserProfile, updateClient,
       bulkAssignDocuments
     }}>
