@@ -446,6 +446,125 @@ const isRecoverableCreateError = (error: unknown) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  const preserveMatterAssociations = (incomingMatterItems: Matter[], existingMatterItems: Matter[] = mattersRef.current): Matter[] => {
+    const safeIncomingMatterItems = sanitizeMatters(incomingMatterItems);
+    if (safeIncomingMatterItems.length === 0) return [];
+
+    const existingById = new Map(
+      sanitizeMatters(existingMatterItems).map((matter) => [matter.id, matter])
+    );
+
+    return safeIncomingMatterItems.map((matter) => {
+      const existingMatter = existingById.get(matter.id);
+      if (!existingMatter) {
+        return matter;
+      }
+
+      const incomingMatter = matter as MatterWithClientId;
+      const existingMatterWithClientId = existingMatter as MatterWithClientId;
+      const incomingClientId = getMatterClientId(incomingMatter);
+      const existingClientId = getMatterClientId(existingMatterWithClientId);
+      const incomingRelatedClientIds = getMatterRelatedClientIds(incomingMatter);
+      const existingRelatedClientIds = getMatterRelatedClientIds(existingMatterWithClientId);
+
+      return {
+        ...matter,
+        ...(!incomingClientId && existingClientId ? { clientId: existingClientId } : {}),
+        ...(!incomingMatter.client && existingMatter.client && (!incomingClientId || !existingClientId || incomingClientId === existingClientId)
+          ? { client: existingMatter.client }
+          : {}),
+        ...(incomingRelatedClientIds.length === 0 && existingRelatedClientIds.length > 0
+          ? {
+              relatedClientIds: existingRelatedClientIds,
+              relatedClients: existingMatterWithClientId.relatedClients
+            }
+          : {})
+      } as Matter;
+    });
+  };
+
+  const findCreatedMatter = (matterItems: Matter[], payload: { clientId?: string; caseNumber?: string; name?: string }) => {
+    return matterItems.find((matter) => {
+      const matchedClientId = getMatterClientId(matter as MatterWithClientId);
+      return matchedClientId === payload.clientId
+        && String(matter.caseNumber || '') === String(payload.caseNumber || '')
+        && String(matter.name || '') === String(payload.name || '');
+    });
+  };
+
+  const recoverClientByEmail = async (email: string): Promise<{ client: Client; freshClients: Client[] } | null> => {
+    const normalizedTargetEmail = normalizeEmail(email);
+    if (!normalizedTargetEmail) {
+      return null;
+    }
+
+    for (const delayMs of [0, 150, 350]) {
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+
+      const refreshedClients = sanitizeClients(await api.getClients().catch(() => null));
+      const recoveredClient = refreshedClients.find((client) => normalizeEmail(client.email) === normalizedTargetEmail);
+      if (recoveredClient) {
+        return {
+          client: recoveredClient,
+          freshClients: refreshedClients
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const recoverCreatedMatter = async (
+    payload: { clientId?: string; caseNumber?: string; name?: string },
+    optimisticClient: Client
+  ): Promise<{ matter: Matter; freshClients: Client[] | null } | null> => {
+    if (!payload.clientId || !payload.caseNumber || !payload.name) {
+      return null;
+    }
+
+    for (const delayMs of [0, 200, 450, 900]) {
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+
+      const [refreshedMatterPayload, refreshedClientPayload] = await Promise.all([
+        api.getMatters().catch(() => null),
+        api.getClients().catch(() => null)
+      ]);
+
+      const refreshedMatters = Array.isArray(refreshedMatterPayload)
+        ? preserveMatterAssociations(sanitizeMatters(refreshedMatterPayload), mattersRef.current)
+        : [];
+      const matchedMatter = findCreatedMatter(refreshedMatters, payload);
+      if (!matchedMatter) {
+        continue;
+      }
+
+      const safeClients = Array.isArray(refreshedClientPayload)
+        ? sanitizeClients(refreshedClientPayload)
+        : null;
+      const clientPool = safeClients ?? clientsRef.current;
+      const clientById = new Map(clientPool.map((client) => [client.id, client]));
+      const fallbackClient = clientById.get(payload.clientId) || optimisticClient;
+
+      return {
+        matter: hydrateMatterClient(
+          {
+            ...matchedMatter,
+            client: matchedMatter.client || fallbackClient,
+            clientId: getMatterClientId(matchedMatter as MatterWithClientId) || payload.clientId
+          } as Matter,
+          clientById
+        ),
+        freshClients: safeClients
+      };
+    }
+
+    return null;
+  };
+
   const getInvoiceClientId = (invoice: Partial<Invoice>): string | undefined => {
     const fromInvoice = typeof invoice.clientId === 'string' ? invoice.clientId.trim() : '';
     if (fromInvoice) return fromInvoice;
@@ -531,12 +650,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const applyBootstrapPayload = (payload: any) => {
     if (!payload || typeof payload !== 'object') return;
     const incomingClients = Array.isArray(payload.clients) ? sanitizeClients(payload.clients as Client[]) : null;
+    const normalizedMatters = Array.isArray(payload.matters)
+      ? preserveMatterAssociations(sanitizeMatters(payload.matters), mattersRef.current)
+      : null;
     const hasMatterSource = Array.isArray(payload.matters) || mattersRef.current.length > 0;
-    const nextMatters = Array.isArray(payload.matters)
+    const nextMatters = Array.isArray(normalizedMatters)
       ? filterVisibleMatters(
         incomingClients
-          ? hydrateMattersWithClients(sanitizeMatters(payload.matters), incomingClients)
-          : hydrateMattersWithClients(sanitizeMatters(payload.matters), clientsRef.current)
+          ? hydrateMattersWithClients(normalizedMatters, incomingClients)
+          : hydrateMattersWithClients(normalizedMatters, clientsRef.current)
       )
       : mattersRef.current;
 
@@ -585,7 +707,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       if (disposed) return;
 
       const visibleMatters = Array.isArray(m)
-        ? filterVisibleMatters(hydrateMattersWithClients(m, clients))
+        ? filterVisibleMatters(hydrateMattersWithClients(preserveMatterAssociations(m, mattersRef.current), clientsRef.current))
         : mattersRef.current;
 
       if (Array.isArray(m)) setMatters(visibleMatters);
@@ -924,27 +1046,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         });
       return hydratedMatter;
     } catch (e) {
-      if (isRecoverableCreateError(e) && payload.clientId && payload.caseNumber && payload.name) {
+      if (isRecoverableCreateError(e)) {
         try {
-          const refreshedMatters = sanitizeMatters(await api.getMatters());
-          const matchedMatter = refreshedMatters.find((matter) => {
-            const matchedClientId = getMatterClientId(matter as MatterWithClientId);
-            return matchedClientId === payload.clientId
-              && String(matter.caseNumber || '') === String(payload.caseNumber || '')
-              && String(matter.name || '') === String(payload.name || '');
-          });
-
-          if (matchedMatter) {
-            const recoveredMatter = hydrateMatterClient(
-              {
-                ...matchedMatter,
-                client: matchedMatter.client || optimisticClient,
-                clientId: getMatterClientId(matchedMatter as MatterWithClientId) || payload.clientId
-              } as Matter,
-              new Map(clientsRef.current.map((client) => [client.id, client]))
-            );
-            setMatters(prev => [recoveredMatter, ...prev.filter(m => m.id !== tempId && m.id !== recoveredMatter.id)]);
-            return recoveredMatter;
+          const recovered = await recoverCreatedMatter(payload, optimisticClient);
+          if (recovered) {
+            if (Array.isArray(recovered.freshClients)) {
+              setClients(recovered.freshClients);
+            }
+            setMatters(prev => [recovered.matter, ...prev.filter(m => m.id !== tempId && m.id !== recovered.matter.id)]);
+            if (Array.isArray(recovered.freshClients)) {
+              setMatters(prev => hydrateMattersWithClients(prev, recovered.freshClients || clientsRef.current));
+            }
+            return recovered.matter;
           }
         } catch (recoveryError) {
           console.warn('Matter create recovery failed', recoveryError);
@@ -1191,28 +1304,38 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
           throw error;
         }
 
-        await sleep(350);
-
-        try {
-          newClient = await api.createClient(clientData);
-          if (!hasStringId(newClient)) {
-            throw new Error('Client API returned an empty response.');
+        if (normalizedEmail) {
+          const recoveredClientResult = await recoverClientByEmail(normalizedEmail);
+          if (recoveredClientResult) {
+            newClient = recoveredClientResult.client;
+            setClients(recoveredClientResult.freshClients);
           }
-        } catch (retryError) {
-          if (normalizedEmail) {
-            try {
-              const refreshedClients = sanitizeClients(await api.getClients());
-              const recoveredClient = refreshedClients.find((client) => normalizeEmail(client.email) === normalizedEmail);
-              if (recoveredClient) {
-                newClient = recoveredClient;
-              }
-            } catch (recoveryError) {
-              console.warn('Client create recovery failed', recoveryError);
+        }
+
+        if (!hasStringId(newClient)) {
+          await sleep(200);
+
+          try {
+            newClient = await api.createClient(clientData);
+            if (!hasStringId(newClient)) {
+              throw new Error('Client API returned an empty response.');
             }
-          }
+          } catch (retryError) {
+            if (normalizedEmail) {
+              try {
+                const recoveredClientResult = await recoverClientByEmail(normalizedEmail);
+                if (recoveredClientResult) {
+                  newClient = recoveredClientResult.client;
+                  setClients(recoveredClientResult.freshClients);
+                }
+              } catch (recoveryError) {
+                console.warn('Client create recovery failed', recoveryError);
+              }
+            }
 
-          if (!hasStringId(newClient)) {
-            throw retryError;
+            if (!hasStringId(newClient)) {
+              throw retryError;
+            }
           }
         }
       }

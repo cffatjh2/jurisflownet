@@ -6,6 +6,7 @@ import { microsoftTeamsService } from '../services/microsoftTeamsService';
 import { zoomService } from '../services/zoomService';
 import { toast } from './Toast';
 import { clearOAuthTokens, getOAuthAccessToken, refreshGoogleOAuthAccessToken } from '../services/oauthSecurity';
+import { getCurrentAppReturnPath } from '../services/returnPath';
 
 interface VideoCallRoom {
   id: string;
@@ -58,7 +59,7 @@ const VideoCall: React.FC = () => {
       window.location.pathname.startsWith('/client/') ||
       window.location.hash === '#/client';
 
-    return isClientPortal ? '/client' : '/#videocall';
+    return getCurrentAppReturnPath(isClientPortal ? '/client' : '/#videocall');
   };
 
   const handleConnect = async (type: 'google-meet' | 'microsoft-teams' | 'zoom') => {

@@ -1242,6 +1242,8 @@ export const api = {
 
     // AI Innovation Suite
     ai: {
+        chat: (data: { history?: Array<{ role: 'user' | 'model'; parts: { text: string }[] }>; message: string; contextData?: string; enableSearch?: boolean }) =>
+            fetchJson('/ai/chat', { method: 'POST', body: JSON.stringify(data) }) as Promise<{ text: string; sources?: { title: string; uri: string }[] } | null>,
         // Legal Research
         research: {
             start: (data: { query: string; title?: string; matterId?: string; jurisdiction?: string; practiceArea?: string }) =>

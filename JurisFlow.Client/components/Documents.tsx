@@ -10,6 +10,7 @@ import { toast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { getGoogleClientId } from '../services/googleConfig';
 import { clearOAuthTokens, getOAuthAccessToken, requestOAuthState } from '../services/oauthSecurity';
+import { getCurrentAppReturnPath } from '../services/returnPath';
 import SignatureRequestModal from './SignatureRequestModal';
 import SignatureStatus from './SignatureStatus';
 
@@ -87,7 +88,7 @@ const Documents: React.FC = () => {
     if (!clientId) return;
 
     try {
-      const state = await requestOAuthState('google', 'google-docs', '/#documents');
+      const state = await requestOAuthState('google', 'google-docs', getCurrentAppReturnPath('/#documents'));
       const redirectUri = `${window.location.origin}/auth/google/callback`;
       const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;

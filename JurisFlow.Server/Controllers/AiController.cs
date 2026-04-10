@@ -45,6 +45,93 @@ namespace JurisFlow.Server.Controllers
             _tenantContext = tenantContext;
         }
 
+        [HttpPost("chat")]
+        public async Task<ActionResult<object>> Chat([FromBody] AiChatRequestDto dto, CancellationToken cancellationToken)
+        {
+            if (dto == null)
+            {
+                return BadRequest(new { message = "Request body is required." });
+            }
+
+            var aiPolicy = ResolveAiPromptPolicy();
+            var aiPolicyError = ValidateAiOperationPolicy(aiPolicy, "chat");
+            if (aiPolicyError != null)
+            {
+                return aiPolicyError;
+            }
+
+            var sanitizedMessage = SanitizeForAi(dto.Message, aiPolicy, aiPolicy.ResearchQueryMaxChars);
+            if (string.IsNullOrWhiteSpace(sanitizedMessage))
+            {
+                return BadRequest(new { message = "Message is required." });
+            }
+
+            var contextLimit = Math.Max(aiPolicy.ContractContentMaxChars, 6000);
+            var sanitizedContext = SanitizeForAi(dto.ContextData, aiPolicy, contextLimit);
+            var historyEntries = (dto.History ?? new List<AiChatMessageDto>())
+                .Where(entry => entry != null)
+                .Select(entry => new
+                {
+                    Role = string.Equals(entry.Role, "model", StringComparison.OrdinalIgnoreCase) ? "Assistant" : "User",
+                    Text = SanitizeForAi(
+                        string.Join(
+                            "\n",
+                            (entry.Parts ?? new List<AiChatPartDto>())
+                                .Select(part => part?.Text?.Trim())
+                                .Where(text => !string.IsNullOrWhiteSpace(text))
+                        ),
+                        aiPolicy,
+                        1200)
+                })
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Text))
+                .TakeLast(12)
+                .ToList();
+
+            var prompt = new StringBuilder();
+            prompt.AppendLine("You are Juris, an AI legal associate for a US law firm.");
+            prompt.AppendLine("Respond professionally, precisely, and concisely.");
+            prompt.AppendLine("Do not invent citations, facts, filings, or procedural history.");
+            if (dto.EnableSearch)
+            {
+                prompt.AppendLine("If live research is requested but unavailable, say so plainly instead of fabricating sources.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(sanitizedContext))
+            {
+                prompt.AppendLine();
+                prompt.AppendLine("Document context:");
+                prompt.AppendLine(sanitizedContext);
+            }
+
+            if (historyEntries.Count > 0)
+            {
+                prompt.AppendLine();
+                prompt.AppendLine("Conversation so far:");
+                foreach (var entry in historyEntries)
+                {
+                    prompt.Append(entry.Role);
+                    prompt.Append(": ");
+                    prompt.AppendLine(entry.Text);
+                }
+            }
+
+            prompt.AppendLine();
+            prompt.AppendLine("Latest user message:");
+            prompt.AppendLine(sanitizedMessage);
+
+            var generated = await GenerateGeminiTextAsync(prompt.ToString(), cancellationToken);
+            if (string.IsNullOrWhiteSpace(generated))
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Gemini is not configured or unavailable." });
+            }
+
+            return Ok(new
+            {
+                text = generated,
+                sources = Array.Empty<object>()
+            });
+        }
+
         // ========== LEGAL RESEARCH ==========
 
         // POST: api/ai/research
@@ -811,13 +898,17 @@ namespace JurisFlow.Server.Controllers
             bool requestJson = false,
             GeminiFunctionSpec? functionSpec = null)
         {
-            var apiKey = _configuration["Integrations:Gemini:ApiKey"] ?? _configuration["Gemini:ApiKey"];
+            var apiKey = _configuration["Integrations:Gemini:ApiKey"]
+                ?? _configuration["Gemini:ApiKey"]
+                ?? _configuration["GEMINI_API_KEY"];
             if (string.IsNullOrWhiteSpace(apiKey))
             {
                 return null;
             }
 
-            var model = _configuration["Integrations:Gemini:Model"] ?? "gemini-1.5-flash";
+            var model = _configuration["Integrations:Gemini:Model"]
+                ?? _configuration["Gemini:Model"]
+                ?? "gemini-1.5-flash";
             var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
             var payload = new
             {
@@ -2175,6 +2266,25 @@ Based on established legal precedent and current statutory framework, the follow
         public string? MatterId { get; set; }
         public string? Jurisdiction { get; set; }
         public string? PracticeArea { get; set; }
+    }
+
+    public class AiChatRequestDto
+    {
+        public List<AiChatMessageDto>? History { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public string? ContextData { get; set; }
+        public bool EnableSearch { get; set; }
+    }
+
+    public class AiChatMessageDto
+    {
+        public string Role { get; set; } = string.Empty;
+        public List<AiChatPartDto>? Parts { get; set; }
+    }
+
+    public class AiChatPartDto
+    {
+        public string? Text { get; set; }
     }
 
     public class ContractAnalysisDto

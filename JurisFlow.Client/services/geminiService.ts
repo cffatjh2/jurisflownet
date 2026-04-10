@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { AIRequest } from "../types";
+import { api } from "./api";
 
 const apiKey = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) || process.env.API_KEY || '';
 
@@ -9,7 +10,12 @@ const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 // Legacy function for direct drafting (kept for backward compatibility if needed, though UI is changing)
 export const generateLegalDraft = async (request: AIRequest): Promise<string> => {
   if (!ai) {
-    return "AI service is not available. Please configure the GEMINI_API_KEY.";
+    const fallback = await api.ai.chat({
+      message: request.prompt,
+      contextData: request.context || '',
+      enableSearch: false
+    }).catch(() => null);
+    return fallback?.text || "AI service is not available right now.";
   }
   try {
     const model = "gemini-2.5-flash";
@@ -43,7 +49,13 @@ export const createLegalChatSession = async (
   enableSearch: boolean = false
 ): Promise<{ text: string, sources?: any[] }> => {
   if (!ai) {
-    return { text: "AI service is not available. Please configure the GEMINI_API_KEY." };
+    const fallback = await api.ai.chat({
+      history,
+      message: lastMessage,
+      contextData,
+      enableSearch
+    }).catch(() => null);
+    return fallback || { text: "AI service is not available right now." };
   }
   try {
     // 1. Configure Tools (Google Search for research)

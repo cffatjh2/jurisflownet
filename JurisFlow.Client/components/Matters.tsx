@@ -3123,21 +3123,25 @@ const Matters: React.FC = () => {
               <h3 className="font-bold text-lg text-slate-800">Add New Client</h3>
               <button type="button" onClick={closeNewClientModal} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleInlineClientCreate} className="p-6 space-y-4">
+            <form onSubmit={handleInlineClientCreate} className="p-6 space-y-4" autoComplete="off" data-lpignore="true">
+              <div className="absolute opacity-0 pointer-events-none h-0 w-0 overflow-hidden" aria-hidden="true">
+                <input type="text" name="username" autoComplete="username" tabIndex={-1} />
+                <input type="password" name="current-password" autoComplete="current-password" tabIndex={-1} />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Full Name / Company Name *</label>
-                  <input required type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.name} onChange={e => setNewClientData(prev => ({ ...prev, name: e.target.value }))} />
+                  <input required type="text" name="client-full-name" autoComplete="off" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.name} onChange={e => setNewClientData(prev => ({ ...prev, name: e.target.value }))} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                  <input required type="email" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.email} onChange={e => setNewClientData(prev => ({ ...prev, email: e.target.value }))} />
+                  <input required type="email" name="client-contact-email" autoComplete="off" data-lpignore="true" data-1p-ignore="true" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" value={newClientData.email} onChange={e => setNewClientData(prev => ({ ...prev, email: e.target.value }))} />
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Portal Password</label>
-                <input type="password" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData(prev => ({ ...prev, password: e.target.value }))} />
+                <input type="password" name="client-portal-password" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData(prev => ({ ...prev, password: e.target.value }))} />
                 <p className="mt-1 text-xs text-gray-500">Optional. If you set one, {passwordRequirementsText.toLowerCase()}</p>
               </div>
               <div className="grid grid-cols-2 gap-4">

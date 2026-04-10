@@ -8,6 +8,7 @@ import { getGoogleClientId } from '../../services/googleConfig';
 import { useClientAuth } from '../../contexts/ClientAuthContext';
 import { clientApi } from '../../services/clientApi';
 import { clearOAuthTokens, getOAuthAccessToken, requestOAuthState } from '../../services/oauthSecurity';
+import { getCurrentAppReturnPath } from '../../services/returnPath';
 
 const ClientDocuments: React.FC = () => {
   const { client } = useClientAuth();
@@ -184,7 +185,7 @@ const ClientDocuments: React.FC = () => {
     if (!clientId) return;
 
     try {
-      const state = await requestOAuthState('google', 'google-docs', '/client');
+      const state = await requestOAuthState('google', 'google-docs', getCurrentAppReturnPath('/client'));
       const redirectUri = `${window.location.origin}/auth/google/callback`;
       const scope = 'https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/drive.readonly';
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;

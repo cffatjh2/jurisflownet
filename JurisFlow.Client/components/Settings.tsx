@@ -19,6 +19,7 @@ import {
   isIntegrationOAuthProviderKey,
   startIntegrationOAuth
 } from '../services/integrationOAuthService';
+import { getCurrentAppReturnPath } from '../services/returnPath';
 
 const SETTINGS_TR_TEXT_MAP: Record<string, string> = {
   'Settings': 'Ayarlar',
@@ -843,7 +844,7 @@ const Settings: React.FC = () => {
     }
 
     try {
-      startIntegrationOAuth(providerKey, '/#settings-integrations');
+      startIntegrationOAuth(providerKey, getCurrentAppReturnPath('/#settings-integrations'));
     } catch (error: any) {
       console.error('Failed to start OAuth flow', error);
       toast.error(error?.message || 'Failed to start OAuth flow.');

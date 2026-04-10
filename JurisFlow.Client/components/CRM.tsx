@@ -640,12 +640,18 @@ const CRM: React.FC = () => {
                         <X className="w-5 h-5" />
                      </button>
                   </div>
-                  <form onSubmit={handleCreateClient}>
+                  <form onSubmit={handleCreateClient} autoComplete="off" data-lpignore="true">
+                     <div className="absolute opacity-0 pointer-events-none h-0 w-0 overflow-hidden" aria-hidden="true">
+                        <input type="text" name="username" autoComplete="username" tabIndex={-1} />
+                        <input type="password" name="current-password" autoComplete="current-password" tabIndex={-1} />
+                     </div>
                      <div className="p-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                            <div>
                               <label className="text-xs font-semibold text-gray-500">Name</label>
                               <input
+                                 name="client-full-name"
+                                 autoComplete="off"
                                  className="mt-1 w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900"
                                  value={newClientForm.name}
                                  onChange={e => setNewClientForm(prev => ({ ...prev, name: e.target.value }))}
@@ -657,6 +663,10 @@ const CRM: React.FC = () => {
                               <label className="text-xs font-semibold text-gray-500">Email</label>
                               <input
                                  type="email"
+                                 name="client-contact-email"
+                                 autoComplete="off"
+                                 data-lpignore="true"
+                                 data-1p-ignore="true"
                                  className="mt-1 w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900"
                                  value={newClientForm.email}
                                  onChange={e => setNewClientForm(prev => ({ ...prev, email: e.target.value }))}
@@ -735,7 +745,11 @@ const CRM: React.FC = () => {
                                  <label className="text-xs font-semibold text-gray-500">Temporary Password</label>
                                  <div className="mt-1 flex gap-2">
                                     <input
-                                       type="text"
+                                       type="password"
+                                       name="client-portal-password"
+                                       autoComplete="new-password"
+                                       data-lpignore="true"
+                                       data-1p-ignore="true"
                                        className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900"
                                        value={newClientForm.password}
                                        onChange={e => setNewClientForm(prev => ({ ...prev, password: e.target.value }))}

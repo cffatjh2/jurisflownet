@@ -9,6 +9,7 @@ import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useRef } from 'react';
 import { clearOAuthTokens, getOAuthAccessToken } from '../services/oauthSecurity';
+import { getCurrentAppReturnPath } from '../services/returnPath';
 
 const Communications: React.FC = () => {
   const { t } = useTranslation();
@@ -138,7 +139,7 @@ const Communications: React.FC = () => {
     try {
       const authUrl = await gmailService.getAuthUrl({
         target: 'gmail',
-        returnPath: '/#communications'
+        returnPath: getCurrentAppReturnPath('/#communications')
       });
       if (!authUrl) {
         toast.error('Google OAuth is not configured.');

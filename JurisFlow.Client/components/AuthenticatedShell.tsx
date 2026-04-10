@@ -65,6 +65,25 @@ const TAB_ORDER: ActiveTab[] = [
 const isActiveTab = (value: unknown): value is ActiveTab =>
   typeof value === 'string' && TAB_ORDER.includes(value as ActiveTab);
 
+const resolveInitialTabFromLocation = (): ActiveTab => {
+  if (typeof window === 'undefined') {
+    return 'dashboard';
+  }
+
+  const rawHash = window.location.hash.trim().toLowerCase();
+  const normalizedHash = rawHash.replace(/^#\/?/, '');
+
+  if (!normalizedHash) {
+    return 'dashboard';
+  }
+
+  if (normalizedHash === 'settings-integrations' || normalizedHash === 'settings-app-directory') {
+    return 'settings';
+  }
+
+  return isActiveTab(normalizedHash) ? normalizedHash : 'dashboard';
+};
+
 const loadDashboard = () => import('./Dashboard');
 const loadMatters = () => import('./Matters');
 const loadAIDrafter = () => import('./AIDrafter');
@@ -170,8 +189,8 @@ const ComponentSwitcher = ({ activeTab }: { activeTab: ActiveTab }) => {
 
 const MainLayout = () => {
   const staffTabEnabled = false;
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
-  const [mountedTabs, setMountedTabs] = useState<ActiveTab[]>(['dashboard']);
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => resolveInitialTabFromLocation());
+  const [mountedTabs, setMountedTabs] = useState<ActiveTab[]>(() => [resolveInitialTabFromLocation()]);
   const { t } = useTranslation();
   const { user, logout } = useAuth();
 
@@ -204,6 +223,33 @@ const MainLayout = () => {
     window.addEventListener('jf:navigate', handler as any);
     return () => window.removeEventListener('jf:navigate', handler as any);
   }, []);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const nextTab = resolveInitialTabFromLocation();
+      activateTab(nextTab);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const currentHash = window.location.hash.trim().toLowerCase();
+    if (activeTab === 'settings' && currentHash.startsWith('#settings')) {
+      return;
+    }
+
+    const nextHash = `#${activeTab}`;
+    if (currentHash === nextHash.toLowerCase()) {
+      return;
+    }
+
+    const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }, [activeTab]);
 
   useEffect(() => {
     const connection = (navigator as any)?.connection;

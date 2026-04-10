@@ -4,6 +4,7 @@ import { gmailService, GmailMessage } from '../../services/gmailService';
 import { toast } from '../Toast';
 import { clientApi } from '../../services/clientApi';
 import { clearOAuthTokens, getOAuthAccessToken } from '../../services/oauthSecurity';
+import { getCurrentAppReturnPath } from '../../services/returnPath';
 
 interface ClientMessage {
   id: string;
@@ -146,7 +147,7 @@ const ClientMessages: React.FC = () => {
     try {
       const authUrl = await gmailService.getAuthUrl({
         target: 'gmail',
-        returnPath: '/client'
+        returnPath: getCurrentAppReturnPath('/client')
       });
       if (!authUrl) {
         toast.error('Google OAuth is not configured.');
