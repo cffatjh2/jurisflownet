@@ -526,7 +526,16 @@ const Billing: React.FC = () => {
         if (!ok) return;
 
         try {
-            const updatedInvoice = await sendInvoice(invoice.id);
+            const updatedInvoice = await sendInvoice(invoice.id, {
+                id: invoice.id,
+                number: invoice.number,
+                clientId: invoice.clientId,
+                client: invoice.client,
+                matterId: invoice.matterId,
+                amount: invoice.amount,
+                issueDate: invoice.issueDate,
+                dueDate: invoice.dueDate,
+            });
             if (updatedInvoice) {
                 setSelectedInvoice(prev => prev && prev.id === invoice.id
                     ? normalizeExtendedInvoice({ ...prev, ...updatedInvoice })

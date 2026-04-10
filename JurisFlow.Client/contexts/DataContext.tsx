@@ -46,7 +46,7 @@ interface DataContextType {
   updateInvoice: (id: string, data: any) => Promise<Invoice | null>;
   deleteInvoice: (id: string) => Promise<void>;
   approveInvoice: (id: string) => Promise<Invoice | null>;
-  sendInvoice: (id: string) => Promise<Invoice | null>;
+  sendInvoice: (id: string, invoiceHint?: Partial<Invoice>) => Promise<Invoice | null>;
   addClient: (item: any) => Promise<Client>;
   updateClient: (id: string, data: Partial<Client> & { statusChangeNote?: string }) => Promise<void>;
   addLead: (item: any) => Promise<void>;
@@ -571,6 +571,61 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     const fromClient = typeof invoice.client?.id === 'string' ? invoice.client.id.trim() : '';
     return fromClient || undefined;
+  };
+
+  const isTemporaryInvoiceId = (id: unknown): id is string =>
+    typeof id === 'string' && /^inv-\d+$/.test(id);
+
+  const matchesInvoiceCandidate = (invoice: Partial<Invoice>, candidate: Partial<Invoice>) => {
+    const candidateNumber = typeof candidate.number === 'string' ? candidate.number.trim() : '';
+    const invoiceNumber = typeof invoice.number === 'string' ? invoice.number.trim() : '';
+    const candidateClientId = getInvoiceClientId(candidate);
+    const invoiceClientId = getInvoiceClientId(invoice);
+    const candidateMatterId = typeof candidate.matterId === 'string' ? candidate.matterId.trim() : '';
+    const invoiceMatterId = typeof invoice.matterId === 'string' ? invoice.matterId.trim() : '';
+    const candidateAmount = Number(candidate.amount ?? 0);
+    const invoiceAmount = Number(invoice.amount ?? 0);
+
+    if (candidateNumber && invoiceNumber && candidateNumber === invoiceNumber) {
+      if (candidateClientId && invoiceClientId && candidateClientId !== invoiceClientId) return false;
+      if (candidateMatterId && invoiceMatterId && candidateMatterId !== invoiceMatterId) return false;
+      return Math.abs(candidateAmount - invoiceAmount) < 0.01 || candidateAmount === 0 || invoiceAmount === 0;
+    }
+
+    return !!candidateClientId
+      && !!invoiceClientId
+      && candidateClientId === invoiceClientId
+      && !!candidateMatterId
+      && !!invoiceMatterId
+      && candidateMatterId === invoiceMatterId
+      && Math.abs(candidateAmount - invoiceAmount) < 0.01;
+  };
+
+  const recoverCreatedInvoice = async (invoiceData: Partial<Invoice>): Promise<Invoice | null> => {
+    for (const delayMs of [0, 200, 500, 1000, 1800]) {
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+
+      const refreshedInvoicesPayload = await api.getInvoices().catch(() => null);
+      if (!Array.isArray(refreshedInvoicesPayload)) {
+        continue;
+      }
+
+      const refreshedInvoices = sanitizeInvoices(refreshedInvoicesPayload)
+        .map((invoice) => normalizeInvoice(invoice));
+      const matchedInvoice = refreshedInvoices.find((invoice) => matchesInvoiceCandidate(invoice, invoiceData));
+      if (!matchedInvoice) {
+        continue;
+      }
+
+      return hydrateInvoiceClient(
+        normalizeInvoice(matchedInvoice),
+        new Map(clientsRef.current.map((client) => [client.id, client]))
+      );
+    }
+
+    return null;
   };
 
   const hydrateInvoiceClient = (invoice: Invoice, clientById: Map<string, Client>): Invoice => {
@@ -1463,6 +1518,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       setInvoices(prev => [hydratedInvoice, ...prev.filter(i => i.id !== temp.id)]);
       return hydratedInvoice;
     } catch (e) {
+      if (isRecoverableCreateError(e)) {
+        try {
+          const recoveredInvoice = await recoverCreatedInvoice(invoiceData);
+          if (recoveredInvoice) {
+            setInvoices(prev => [recoveredInvoice, ...prev.filter(i => i.id !== temp.id && i.id !== recoveredInvoice.id)]);
+            return recoveredInvoice;
+          }
+        } catch (recoveryError) {
+          console.warn("Invoice create recovery failed", recoveryError);
+        }
+      }
+
       console.error("API Error (addInvoice)", e);
       setInvoices(prev => prev.filter(i => i.id !== temp.id));
       throw e;
@@ -1517,14 +1584,36 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     }
   };
 
-  const sendInvoice = async (id: string): Promise<Invoice | null> => {
+  const sendInvoice = async (id: string, invoiceHint?: Partial<Invoice>): Promise<Invoice | null> => {
     const prev = invoices;
-    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, status: InvoiceStatus.SENT } : inv));
+    const localInvoice = invoices.find((invoice) => invoice.id === id) || invoiceHint;
+    let resolvedId = id;
+
     try {
-      const updated = await api.sendInvoice(id);
+      if (localInvoice && isTemporaryInvoiceId(id)) {
+        const recoveredInvoice = await recoverCreatedInvoice(localInvoice);
+        if (!recoveredInvoice) {
+          throw new Error('Invoice is still being saved. Please wait a moment and try again.');
+        }
+
+        resolvedId = recoveredInvoice.id;
+        setInvoices(items => [
+          recoveredInvoice,
+          ...items.filter(inv => inv.id !== id && inv.id !== recoveredInvoice.id)
+        ]);
+      }
+
+      setInvoices(items => items.map(inv => {
+        if (inv.id === resolvedId) {
+          return { ...inv, status: InvoiceStatus.SENT };
+        }
+        return inv;
+      }));
+
+      const updated = await api.sendInvoice(resolvedId);
       if (updated) {
         const hydratedInvoice = hydrateInvoiceClient(normalizeInvoice(updated), new Map(clientsRef.current.map((client) => [client.id, client])));
-        setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...hydratedInvoice } : inv));
+        setInvoices(items => items.map(inv => inv.id === resolvedId ? { ...inv, ...hydratedInvoice } : inv));
         return hydratedInvoice;
       }
       return null;
