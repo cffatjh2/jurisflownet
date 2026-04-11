@@ -1,7 +1,7 @@
 // Service Worker for JurisFlow PWA
 // Handles push notifications and offline caching
 
-const CACHE_NAME = 'jurisflow-v1';
+const CACHE_NAME = 'jurisflow-shell-v2';
 const OFFLINE_URL = '/offline.html';
 
 // Assets to cache for offline use
@@ -13,6 +13,8 @@ const STATIC_ASSETS = [
     '/icons/icon-512.png',
     '/icons/badge-72.png'
 ];
+
+const STATIC_ASSET_PATHS = new Set(STATIC_ASSETS);
 
 // Install event - cache static assets
 self.addEventListener('install', (event) => {
@@ -47,32 +49,33 @@ self.addEventListener('fetch', (event) => {
     // Skip API requests - always go to network
     if (event.request.url.includes('/api/')) return;
 
-    event.respondWith(
-        fetch(event.request)
-            .then((response) => {
-                // Cache successful responses
-                if (response.status === 200) {
-                    const responseClone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => {
-                        cache.put(event.request, responseClone);
-                    });
+    const requestUrl = new URL(event.request.url);
+    const isNavigation = event.request.mode === 'navigate';
+    const isStaticAssetRequest =
+        requestUrl.origin === self.location.origin &&
+        STATIC_ASSET_PATHS.has(requestUrl.pathname);
+
+    if (isNavigation) {
+        event.respondWith(
+            fetch(event.request).catch(async () => {
+                const offlinePage = await caches.match(OFFLINE_URL);
+                return offlinePage || new Response('Offline', { status: 503 });
+            })
+        );
+        return;
+    }
+
+    if (isStaticAssetRequest) {
+        event.respondWith(
+            caches.match(event.request).then((cachedResponse) => {
+                if (cachedResponse) {
+                    return cachedResponse;
                 }
-                return response;
+
+                return fetch(event.request);
             })
-            .catch(() => {
-                // Return cached version if available
-                return caches.match(event.request).then((cachedResponse) => {
-                    if (cachedResponse) {
-                        return cachedResponse;
-                    }
-                    // Return offline page for navigation requests
-                    if (event.request.mode === 'navigate') {
-                        return caches.match(OFFLINE_URL);
-                    }
-                    return new Response('Offline', { status: 503 });
-                });
-            })
-    );
+        );
+    }
 });
 
 // Push event - handle incoming push notifications
