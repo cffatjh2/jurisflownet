@@ -10,7 +10,7 @@ interface LanguageContextType {
   setCurrency: (curr: Currency) => void;
   t: (key: keyof typeof translations['en']) => string;
   formatCurrency: (amount: number) => string;
-  formatDate: (dateString: string) => string;
+  formatDate: (dateString?: string | null) => string;
 }
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -41,8 +41,16 @@ export const LanguageProvider = ({ children }: { children: ReactNode }) => {
     }).format(amount);
   };
 
-  const formatDate = (dateString: string): string => {
+  const formatDate = (dateString?: string | null): string => {
+    if (!dateString) {
+      return 'Unknown date';
+    }
+
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return 'Unknown date';
+    }
+
     // Use the language for date formatting (e.g. TR uses DD.MM.YYYY)
     return new Intl.DateTimeFormat(language, {
         year: 'numeric',

@@ -74,6 +74,15 @@ const Documents: React.FC = () => {
     setIsGoogleDocsConnected(!!googleDocsAccessToken);
   }, [googleDocsAccessToken]);
 
+  const getNormalizedDocumentDate = (dateString?: string | null) => {
+    if (!dateString) {
+      return new Date().toISOString();
+    }
+
+    const date = new Date(dateString);
+    return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+  };
+
   const selectAll = () => {
     if (selectedIds.length === filteredDocs.length) {
       setSelectedIds([]);
@@ -105,13 +114,14 @@ const Documents: React.FC = () => {
     try {
       const docs = await googleDocsService.getDocuments(googleDocsAccessToken);
       docs.forEach(doc => {
+        const updatedAt = getNormalizedDocumentDate(doc.modifiedTime || doc.createdTime);
         addDocument({
           id: doc.id,
           name: doc.name,
           type: 'docx',
           size: 'Google Doc',
-          updatedAt: doc.modifiedTime,
-          content: doc.webViewLink
+          updatedAt,
+          content: doc.webViewLink || ''
         });
       });
       toast.success('Google Docs synced successfully!');
@@ -222,6 +232,11 @@ const Documents: React.FC = () => {
   };
 
   const handleOpen = async (doc: DocumentFile) => {
+    if (doc.content && doc.content.startsWith('http')) {
+      window.open(doc.content, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
     setViewingDoc(doc);
     setLoadingContent(true);
     setDocContent('');

@@ -45,6 +45,27 @@ const ClientDocuments: React.FC = () => {
     return `${value.toFixed(value >= 10 || i === 0 ? 0 : 2)} ${sizes[i]}`;
   };
 
+  const getSafeTimestamp = (dateString?: string | null) => {
+    if (!dateString) return 0;
+    const timestamp = new Date(dateString).getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  };
+
+  const getNormalizedDocumentDate = (dateString?: string | null) => {
+    const timestamp = getSafeTimestamp(dateString);
+    return timestamp > 0 ? new Date(timestamp).toISOString() : new Date().toISOString();
+  };
+
+  const formatDocumentDate = (dateString?: string | null) => {
+    const timestamp = getSafeTimestamp(dateString);
+    return timestamp > 0 ? new Date(timestamp).toLocaleDateString() : 'Unknown date';
+  };
+
+  const formatDateTime = (dateString?: string | null) => {
+    const timestamp = getSafeTimestamp(dateString);
+    return timestamp > 0 ? new Date(timestamp).toLocaleString() : 'Unknown date';
+  };
+
   const inferDocType = (name: string, mime?: string): DocumentFile['type'] => {
     const ext = name.split('.').pop()?.toLowerCase();
     if (ext === 'pdf' || mime?.includes('pdf')) return 'pdf';
@@ -80,7 +101,7 @@ const ClientDocuments: React.FC = () => {
     type: inferDocType(doc.fileName || doc.name || '', doc.mimeType),
     size: formatFileSize(doc.fileSize),
     fileSize: doc.fileSize,
-    updatedAt: doc.updatedAt || doc.createdAt,
+    updatedAt: getNormalizedDocumentDate(doc.updatedAt || doc.createdAt),
     matterId: doc.matterId,
     description: doc.description,
     tags: parseTags(doc.tags),
@@ -206,9 +227,9 @@ const ClientDocuments: React.FC = () => {
         name: doc.name,
         type: 'docx' as const,
         size: 'Google Doc',
-        updatedAt: doc.modifiedTime,
+        updatedAt: getNormalizedDocumentDate(doc.modifiedTime || doc.createdTime),
         matterId: undefined,
-        content: doc.webViewLink,
+        content: doc.webViewLink || '',
         uploadedBy: client?.id
       }));
 
@@ -243,6 +264,7 @@ const ClientDocuments: React.FC = () => {
         const mappedLocalDocs = Array.isArray(localDocs)
           ? localDocs.map((doc: any) => ({
             ...doc,
+            updatedAt: getNormalizedDocumentDate(doc.updatedAt || doc.createdAt),
             tags: parseTags(doc.tags),
             uploadedBy: doc.uploadedBy || client?.id,
             filePath: doc.filePath ? normalizeFilePath(doc.filePath) : doc.filePath
@@ -273,7 +295,7 @@ const ClientDocuments: React.FC = () => {
     if (sortBy === 'name') {
       return a.name.localeCompare(b.name);
     }
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    return getSafeTimestamp(b.updatedAt) - getSafeTimestamp(a.updatedAt);
   });
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -599,7 +621,7 @@ const ClientDocuments: React.FC = () => {
                       <p className="text-xs text-gray-500 mt-1 line-clamp-2">{doc.description}</p>
                     )}
                     <div className="text-xs text-gray-500 mt-2">
-                      {doc.size || 'Unknown size'} - {new Date(doc.updatedAt).toLocaleDateString()}
+                      {doc.size || 'Unknown size'} - {formatDocumentDate(doc.updatedAt)}
                     </div>
                     <div className="mt-2 text-[11px] text-gray-400 truncate">
                       {getMatterLabel(doc.matterId)}
@@ -686,7 +708,7 @@ const ClientDocuments: React.FC = () => {
               <div>
                 <h3 className="font-bold text-lg text-slate-800">{viewingDoc.name}</h3>
                 <p className="text-xs text-gray-500 mt-1">
-                  {viewingDoc.size} - {new Date(viewingDoc.updatedAt).toLocaleDateString()} - {getMatterLabel(viewingDoc.matterId)}
+                  {viewingDoc.size} - {formatDocumentDate(viewingDoc.updatedAt)} - {getMatterLabel(viewingDoc.matterId)}
                 </p>
               </div>
               <button
@@ -744,7 +766,7 @@ const ClientDocuments: React.FC = () => {
                           <span className="font-semibold text-slate-700">
                             {comment.author?.name || 'Unknown'}
                           </span>
-                          <span>{new Date(comment.createdAt).toLocaleString()}</span>
+                          <span>{formatDateTime(comment.createdAt)}</span>
                         </div>
                         <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.body}</p>
                       </div>

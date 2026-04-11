@@ -17,16 +17,27 @@ export interface GoogleDoc {
 export const googleDocsService = {
   // Get documents list
   getDocuments: async (accessToken: string): Promise<GoogleDoc[]> => {
-    const response = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.document'&orderBy=modifiedTime desc&pageSize=50`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        }
+    const params = new URLSearchParams({
+      q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+      orderBy: 'modifiedTime desc',
+      pageSize: '50',
+      includeItemsFromAllDrives: 'true',
+      supportsAllDrives: 'true',
+      fields: 'files(id,name,mimeType,createdTime,modifiedTime,webViewLink)'
+    });
+
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
       }
-    );
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Docs listing failed with status ${response.status}`);
+    }
+
     const data = await response.json();
-    return data.files || [];
+    return Array.isArray(data.files) ? data.files : [];
   },
 
   // Get document content
