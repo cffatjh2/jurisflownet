@@ -83,6 +83,7 @@ type CachedBootstrapState = {
   tasks: Task[];
   taskTemplates: TaskTemplate[];
   notifications: AppNotification[];
+  documents: DocumentFile[];
 };
 
 const getBootstrapCacheKey = (userId?: string | null) => {
@@ -149,6 +150,25 @@ const runWhenBrowserIdle = (callback: () => void, timeout = 800) => {
 
   const timerId = window.setTimeout(callback, timeout);
   return () => window.clearTimeout(timerId);
+};
+
+const DEFERRED_BOOTSTRAP_PRIORITY_TABS = new Set([
+  'dashboard',
+  'billing',
+  'documents',
+  'crm',
+  'reports'
+]);
+
+const shouldPrioritizeDeferredBootstrap = () => {
+  if (typeof window === 'undefined') return false;
+
+  const normalizedHash = window.location.hash
+    .trim()
+    .toLowerCase()
+    .replace(/^#\/?/, '');
+
+  return DEFERRED_BOOTSTRAP_PRIORITY_TABS.has(normalizedHash || 'dashboard');
 };
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
@@ -818,11 +838,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         const safeClients = sanitizeClients(c);
         setClients(safeClients);
         setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
+        setInvoices((prev) => hydrateInvoicesWithClients(prev, safeClients));
       }
       if (Array.isArray(l)) setLeads(sanitizeLeads(l));
       if (Array.isArray(i)) {
         const normalizedInvoices = sanitizeInvoices(i).map((invoice) => normalizeInvoice(invoice));
-        setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(normalizedInvoices, visibleMatters), clientsRef.current));
+        const clientPool = Array.isArray(c) ? sanitizeClients(c) : clientsRef.current;
+        setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(normalizedInvoices, visibleMatters), clientPool));
       }
       if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
@@ -847,6 +869,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         }
 
         console.log('Fetching initial data from API...');
+        const connection = typeof navigator !== 'undefined' ? (navigator as any).connection : null;
+        const effectiveType = String(connection?.effectiveType || '').toLowerCase();
+        const saveData = Boolean(connection?.saveData);
+        const constrainedNetwork =
+          saveData ||
+          effectiveType === 'slow-2g' ||
+          effectiveType === '2g' ||
+          effectiveType === '3g';
+        const shouldLoadDeferredImmediately =
+          shouldPrioritizeDeferredBootstrap() || !constrainedNetwork;
 
         const loadInitial = async () => {
           let initialLoaded = false;
@@ -886,11 +918,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
         await loadInitial();
         if (disposed) return;
-        cancelDeferredLoad = runWhenBrowserIdle(() => {
-          if (!disposed) {
-            void loadDeferred();
-          }
-        }, 1000);
+
+        if (shouldLoadDeferredImmediately) {
+          void loadDeferred();
+        } else {
+          cancelDeferredLoad = runWhenBrowserIdle(() => {
+            if (!disposed) {
+              void loadDeferred();
+            }
+          }, 250);
+        }
       } catch (error) {
         console.warn('Failed to load data from backend.', error);
         if ((!isAuthenticated || !token) && !disposed) {
@@ -928,7 +965,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       invoices.length > 0 ||
       leads.length > 0 ||
       notifications.length > 0 ||
-      taskTemplates.length > 0;
+      taskTemplates.length > 0 ||
+      documents.length > 0;
 
     if (!hasCacheableData) {
       sessionStorage.removeItem(cacheKey);
@@ -945,11 +983,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       leads,
       tasks,
       taskTemplates,
-      notifications
+      notifications,
+      documents
     };
 
     return runWhenBrowserIdle(() => writeBootstrapCache(cacheKey, cachePayload), 900);
-  }, [isAuthenticated, user?.id, matters, clients, timeEntries, expenses, events, invoices, leads, tasks, taskTemplates, notifications]);
+  }, [isAuthenticated, user?.id, matters, clients, timeEntries, expenses, events, invoices, leads, tasks, taskTemplates, notifications, documents]);
 
   useEffect(() => {
     setTasks((prev) => filterByVisibleMatter(prev, matters));
