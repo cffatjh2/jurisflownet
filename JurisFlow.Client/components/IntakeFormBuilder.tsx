@@ -7,6 +7,7 @@ import {
     CheckSquare,
     ChevronDown,
     Copy,
+    Download,
     Edit,
     Eye,
     ExternalLink,
@@ -38,6 +39,8 @@ import {
     serializeConditionalLogic,
     supportsConditionalSourceField
 } from '../utils/intakeConditionalLogic';
+import { downloadIntakeFormPdf } from '../utils/intakeFormPdf';
+import { useConfirm } from './ConfirmDialog';
 
 interface IntakeForm {
     id: string;
@@ -287,6 +290,7 @@ const buildPreviewDefaults = (items: IntakeFormField[]) =>
     Object.fromEntries(items.map(field => [field.name, getFieldDefaultValue(field)]));
 
 export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFormBuilderProps) {
+    const { confirm } = useConfirm();
     const [form, setForm] = useState<Partial<IntakeForm>>({
         name: '',
         description: '',
@@ -548,15 +552,34 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         }
     };
 
+    const handleDownloadPdf = async () => {
+        try {
+            await downloadIntakeFormPdf({
+                ...form,
+                fields,
+                shareUrl
+            });
+            toast.success('Form PDF downloaded.');
+        } catch (error) {
+            console.error('Failed to download intake form PDF:', error);
+            toast.error('Failed to download intake form PDF.');
+        }
+    };
+
     const resetPreviewToDefaults = () => {
         setPreviewValues(buildPreviewDefaults(fields));
         toast.success('Preview reset to default answers.');
     };
 
-    const applyTemplatePreset = (preset: TemplatePresetDefinition) => {
+    const applyTemplatePreset = async (preset: TemplatePresetDefinition) => {
         const hasExistingContent = fields.length > 0 || Boolean(form.name?.trim()) || Boolean(form.description?.trim());
-        if (hasExistingContent && typeof window !== 'undefined') {
-            const confirmed = window.confirm(`Apply "${preset.name}"? This will replace the current form layout.`);
+        if (hasExistingContent) {
+            const confirmed = await confirm({
+                title: 'Apply template preset?',
+                message: `Apply "${preset.name}"? This will replace the current form layout.`,
+                confirmText: 'Apply Preset',
+                cancelText: 'Keep Current Form'
+            });
             if (!confirmed) {
                 return;
             }
@@ -847,7 +870,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     const previewViewportLabel = previewViewport === 'mobile' ? 'Mobile' : 'Desktop';
 
     return (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-blue-50 to-cyan-50 px-6 py-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex items-center gap-3">
@@ -864,25 +887,50 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-                        <span className="rounded-full bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">
-                            {fields.length} fields
-                        </span>
-                        <span className="rounded-full bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">
-                            {requiredFieldCount} required
-                        </span>
-                        <span className={`rounded-full px-3 py-1.5 ring-1 ${form.isPublic ? 'bg-blue-50 text-blue-700 ring-blue-200' : 'bg-slate-100 text-slate-600 ring-slate-200'}`}>
-                            {form.isPublic ? 'Public' : 'Private'}
-                        </span>
-                        <span className={`rounded-full px-3 py-1.5 ring-1 ${form.isActive ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-600 ring-slate-200'}`}>
-                            {form.isActive ? 'Active' : 'Draft'}
-                        </span>
+                    <div className="flex flex-col gap-3 xl:items-end">
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                            <span className="rounded-full bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">
+                                {fields.length} fields
+                            </span>
+                            <span className="rounded-full bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">
+                                {requiredFieldCount} required
+                            </span>
+                            <span className={`rounded-full px-3 py-1.5 ring-1 ${form.isPublic ? 'bg-blue-50 text-blue-700 ring-blue-200' : 'bg-slate-100 text-slate-600 ring-slate-200'}`}>
+                                {form.isPublic ? 'Public' : 'Private'}
+                            </span>
+                            <span className={`rounded-full px-3 py-1.5 ring-1 ${form.isActive ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-600 ring-slate-200'}`}>
+                                {form.isActive ? 'Active' : 'Draft'}
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={handleDownloadPdf}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                            >
+                                <Download className="h-4 w-4" />
+                                Download PDF
+                            </button>
+                            <a
+                                href={shareUrl || undefined}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${
+                                    form.slug
+                                        ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                        : 'pointer-events-none border border-slate-200 bg-white text-slate-400'
+                                }`}
+                            >
+                                <ExternalLink className="h-4 w-4" />
+                                Open Live
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div className="bg-slate-50/80 p-6">
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_390px]">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/80 p-6">
+                <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.55fr)_420px]">
                     <div className="space-y-6">
                         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                             <div className="mb-5">
@@ -930,14 +978,14 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     </select>
                                 </div>
 
-                                <div className="md:col-span-2 grid gap-4 lg:grid-cols-2">
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <div className="md:col-span-2 grid gap-4 lg:grid-cols-2 lg:items-stretch">
+                                    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Visibility</p>
                                         <div className="mt-3 grid grid-cols-2 gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => setForm({ ...form, isPublic: true })}
-                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                className={`inline-flex min-h-[48px] items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
                                                     form.isPublic
                                                         ? 'bg-blue-600 text-white shadow-sm'
                                                         : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
@@ -948,7 +996,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                             <button
                                                 type="button"
                                                 onClick={() => setForm({ ...form, isPublic: false })}
-                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                className={`inline-flex min-h-[48px] items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
                                                     !form.isPublic
                                                         ? 'bg-slate-900 text-white shadow-sm'
                                                         : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
@@ -957,20 +1005,20 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 Private
                                             </button>
                                         </div>
-                                        <p className="mt-3 text-xs leading-5 text-slate-500">
+                                        <p className="mt-4 flex-1 text-sm leading-6 text-slate-600">
                                             {form.isPublic
                                                 ? 'Public forms can accept client submissions from the share link.'
                                                 : 'Private forms stay hidden until you are ready to expose them.'}
                                         </p>
                                     </div>
 
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status</p>
                                         <div className="mt-3 grid grid-cols-2 gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => setForm({ ...form, isActive: true })}
-                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                className={`inline-flex min-h-[48px] items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
                                                     form.isActive
                                                         ? 'bg-emerald-600 text-white shadow-sm'
                                                         : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
@@ -981,7 +1029,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                             <button
                                                 type="button"
                                                 onClick={() => setForm({ ...form, isActive: false })}
-                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                className={`inline-flex min-h-[48px] items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
                                                     !form.isActive
                                                         ? 'bg-slate-900 text-white shadow-sm'
                                                         : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
@@ -990,7 +1038,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 Draft
                                             </button>
                                         </div>
-                                        <p className="mt-3 text-xs leading-5 text-slate-500">
+                                        <p className="mt-4 flex-1 text-sm leading-6 text-slate-600">
                                             {form.isActive
                                                 ? 'Active forms can be reached by visitors once they are public.'
                                                 : 'Draft forms remain unavailable to public traffic even if a link exists.'}
@@ -1046,7 +1094,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                     Copy the hosted link, open the live form, or grab an iframe snippet for your website.
                                                 </p>
                                             </div>
-                                            <div className="flex flex-wrap gap-2">
+                                            <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto">
                                                 <button
                                                     type="button"
                                                     onClick={handleCopyLink}
@@ -1064,6 +1112,14 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 >
                                                     <LayoutGrid className="w-4 h-4" />
                                                     Copy Embed
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleDownloadPdf}
+                                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15"
+                                                >
+                                                    <Download className="w-4 h-4" />
+                                                    Download PDF
                                                 </button>
                                                 <a
                                                     href={shareUrl || undefined}
@@ -1132,7 +1188,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                 </p>
                             </div>
 
-                            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+                            <div className="mt-5 grid gap-4 lg:grid-cols-2">
                                 {templatePresets.map(preset => {
                                     const Icon = preset.icon;
 
@@ -1140,8 +1196,8 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                         <button
                                             key={preset.id}
                                             type="button"
-                                            onClick={() => applyTemplatePreset(preset)}
-                                            className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                                            onClick={() => void applyTemplatePreset(preset)}
+                                            className="group flex h-full flex-col rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
                                         >
                                             <div className={`rounded-2xl bg-gradient-to-br ${preset.accentClass} p-4`}>
                                                 <div className="flex items-start justify-between gap-3">
@@ -1155,15 +1211,17 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 <p className="mt-4 text-base font-semibold text-slate-900">{preset.name}</p>
                                                 <p className="mt-2 text-sm leading-6 text-slate-700">{preset.description}</p>
                                             </div>
-                                            <div className="mt-4 flex items-center justify-between gap-3">
-                                                <div>
+                                            <div className="mt-4 flex flex-1 flex-col justify-between gap-4">
+                                                <div className="min-w-0">
                                                     <p className="text-sm font-medium text-slate-900">{preset.formName}</p>
                                                     <p className="mt-1 text-xs text-slate-500">{preset.practiceArea}</p>
                                                 </div>
-                                                <span className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition group-hover:bg-slate-800">
-                                                    <Sparkles className="h-4 w-4" />
-                                                    Apply
-                                                </span>
+                                                <div className="flex items-center justify-start">
+                                                    <span className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition group-hover:bg-slate-800">
+                                                        <Sparkles className="h-4 w-4" />
+                                                        Apply
+                                                    </span>
+                                                </div>
                                             </div>
                                         </button>
                                     );
@@ -1242,7 +1300,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                             <div className="mt-6 space-y-3">
                                 {fields.length === 0 ? (
                                     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-blue-50">
-                                        <div className="grid gap-6 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
+                                        <div className="grid gap-6 px-6 py-10 xl:grid-cols-[minmax(0,1fr)_280px] xl:items-center">
                                             <div>
                                                 <div className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
                                                     <Sparkles className="h-4 w-4" />
@@ -1255,7 +1313,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 <div className="mt-5 flex flex-wrap gap-3">
                                                     <button
                                                         type="button"
-                                                        onClick={() => applyTemplatePreset(templatePresets[0])}
+                                                        onClick={() => void applyTemplatePreset(templatePresets[0])}
                                                         className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
                                                     >
                                                         <Sparkles className="h-4 w-4" />
@@ -1438,7 +1496,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                             </div>
                         </section>
                     </div>
-                    <aside className="self-start xl:sticky xl:top-6">
+                    <aside className="self-start 2xl:sticky 2xl:top-6">
                         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                             <div className="flex items-center justify-between border-b border-slate-200 bg-slate-950 px-5 py-4 text-white">
                                 <div>
@@ -1567,11 +1625,11 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                 </div>
                                             )}
                                         </div>
-                                        <p className="mt-3 text-center text-xs text-slate-500">
+                                        <p className="mt-3 text-left text-xs leading-5 text-slate-500">
                                             Preview mirrors field order, labels, required state, and conditional visibility as you edit.
                                         </p>
                                         {hiddenPreviewFieldCount > 0 && (
-                                            <p className="mt-2 text-center text-xs font-medium text-violet-700">
+                                            <p className="mt-2 text-left text-xs font-medium text-violet-700">
                                                 {hiddenPreviewFieldCount} field{hiddenPreviewFieldCount > 1 ? 's are' : ' is'} currently hidden by logic.
                                             </p>
                                         )}
@@ -1637,6 +1695,14 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                         >
                             <LayoutGrid className="h-4 w-4" />
                             Copy Embed
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleDownloadPdf}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                        >
+                            <Download className="h-4 w-4" />
+                            Download PDF
                         </button>
                         <button
                             type="button"

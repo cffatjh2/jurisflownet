@@ -15,6 +15,7 @@ const ForgotPassword = React.lazy(() => import('./components/ForgotPassword'));
 const ResetPassword = React.lazy(() => import('./components/ResetPassword'));
 const AttorneyRegister = React.lazy(() => import('./components/AttorneyRegister'));
 const ClientPortal = React.lazy(() => import('./components/client/ClientPortal'));
+const PublicIntakeForm = React.lazy(() => import('./components/PublicIntakeForm'));
 const AuthenticatedShell = React.lazy(() => import('./components/AuthenticatedShell'));
 
 const AppFallback = () => (
@@ -63,6 +64,13 @@ const AppContent = () => {
   }
   if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/integrations/') && window.location.pathname.includes('/callback')) {
     return renderLazy(IntegrationOAuthCallback);
+  }
+
+  const publicIntakeMatch = /^\/intake\/([^/]+)\/?$/.exec(window.location.pathname);
+  if (publicIntakeMatch) {
+    return renderLazy(PublicIntakeForm, {
+      slug: decodeURIComponent(publicIntakeMatch[1])
+    });
   }
 
   const isClientPortal =

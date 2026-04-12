@@ -910,9 +910,10 @@ export const api = {
             },
             body: formData
         });
+        const parsed = await parseResponseBody(res);
         if (res.status === 401) return null;
-        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-        return res.json();
+        if (!res.ok) throw new Error(parsed.data?.message || parsed.text || `API Error: ${res.status} ${res.statusText}`);
+        return parsed.data;
     },
     getDocuments: (params?: { matterId?: string; q?: string }) => {
         const qs = new URLSearchParams();
@@ -957,9 +958,10 @@ export const api = {
             },
             body: formData
         });
+        const parsed = await parseResponseBody(res);
         if (res.status === 401) return null;
-        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-        return res.json();
+        if (!res.ok) throw new Error(parsed.data?.message || parsed.text || `API Error: ${res.status} ${res.statusText}`);
+        return parsed.data;
     },
 
     // Password Reset

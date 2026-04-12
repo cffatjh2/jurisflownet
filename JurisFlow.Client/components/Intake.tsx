@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle,
   Copy,
+  Download,
   Edit,
   ExternalLink,
   FileText,
@@ -20,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { CaseStatus, FeeStructure, PracticeArea } from '../types';
 import IntakeFormBuilder from './IntakeFormBuilder';
 import { toast } from './Toast';
+import { downloadIntakeFormPdf, type IntakePdfField } from '../utils/intakeFormPdf';
 
 interface IntakeFormRecord {
   id: string;
@@ -33,6 +35,9 @@ interface IntakeFormRecord {
   submissionCount: number;
   createdAt: string;
   updatedAt?: string;
+  thankYouMessage?: string;
+  redirectUrl?: string;
+  notifyEmail?: string;
 }
 
 interface IntakeSubmissionRecord {
@@ -287,6 +292,35 @@ const Intake: React.FC = () => {
     return matters.find(matter => matter.caseNumber === caseNumber) || null;
   };
 
+  const parseFormFields = (raw?: string) => {
+    if (!raw) return [] as IntakePdfField[];
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [] as IntakePdfField[];
+
+      return parsed
+        .filter(field => field && typeof field === 'object')
+        .map((field, index) => ({
+          id: typeof field.id === 'string' ? field.id : undefined,
+          name: typeof field.name === 'string' ? field.name : '',
+          label: typeof field.label === 'string' ? field.label : '',
+          type: typeof field.type === 'string' ? field.type : 'text',
+          required: Boolean(field.required),
+          placeholder: typeof field.placeholder === 'string' ? field.placeholder : '',
+          helpText: typeof field.helpText === 'string' ? field.helpText : '',
+          options: typeof field.options === 'string' ? field.options : '',
+          defaultValue: typeof field.defaultValue === 'string' ? field.defaultValue : '',
+          validationPattern: typeof field.validationPattern === 'string' ? field.validationPattern : '',
+          validationMessage: typeof field.validationMessage === 'string' ? field.validationMessage : '',
+          conditionalLogic: typeof field.conditionalLogic === 'string' ? field.conditionalLogic : '',
+          order: typeof field.order === 'number' ? field.order : index
+        }));
+    } catch {
+      return [] as IntakePdfField[];
+    }
+  };
+
   const handleCopyLink = async (slug: string) => {
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
     const url = `${baseUrl}/intake/${slug}`;
@@ -296,6 +330,26 @@ const Intake: React.FC = () => {
     } catch (error) {
       console.error('Failed to copy intake link', error);
       toast.error('Failed to copy intake link.');
+    }
+  };
+
+  const handleDownloadFormPdf = async (form: IntakeFormRecord) => {
+    try {
+      const fullForm = await api.intake.forms.get(form.id);
+      const fields = parseFormFields(fullForm?.fieldsJson || form.fieldsJson);
+      const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+
+      await downloadIntakeFormPdf({
+        ...form,
+        ...fullForm,
+        shareUrl: form.slug ? `${baseUrl}/intake/${form.slug}` : '',
+        fields
+      });
+
+      toast.success('Form PDF downloaded.');
+    } catch (error) {
+      console.error('Failed to download intake form PDF', error);
+      toast.error('Failed to download intake form PDF.');
     }
   };
 
@@ -659,6 +713,8 @@ const Intake: React.FC = () => {
                             setEditingFormId(form.id);
                             setShowFormBuilder(true);
                           }}
+                          title="Edit form"
+                          aria-label="Edit form"
                           className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"
                         >
                           <Edit className="w-4 h-4" />
@@ -688,14 +744,26 @@ const Intake: React.FC = () => {
                         <span className="flex-1 truncate">/intake/{form.slug}</span>
                         <button
                           onClick={() => handleCopyLink(form.slug)}
+                          title="Copy public link"
+                          aria-label="Copy public link"
                           className="p-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200"
                         >
                           <Copy className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDownloadFormPdf(form)}
+                          title="Download form PDF"
+                          aria-label="Download form PDF"
+                          className="p-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200"
+                        >
+                          <Download className="w-4 h-4" />
                         </button>
                         <a
                           href={`/intake/${form.slug}`}
                           target="_blank"
                           rel="noreferrer"
+                          title="Open public form"
+                          aria-label="Open public form"
                           className="p-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200"
                         >
                           <ExternalLink className="w-4 h-4" />
@@ -724,6 +792,13 @@ const Intake: React.FC = () => {
                           className="px-3 py-1.5 text-xs font-semibold border border-gray-200 rounded-lg hover:bg-gray-50"
                         >
                           View Submissions
+                        </button>
+                        <button
+                          onClick={() => handleDownloadFormPdf(form)}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold border border-gray-200 rounded-lg hover:bg-gray-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Download PDF
                         </button>
                       </div>
                     </div>
@@ -1054,8 +1129,8 @@ const Intake: React.FC = () => {
 
       {showFormBuilder && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50">
+          <div className="flex h-[94vh] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-100 bg-gray-50 px-6 py-4">
               <div>
                 <p className="text-xs uppercase text-gray-500 font-semibold">Intake Form</p>
                 <h3 className="text-lg font-bold text-slate-800">{editingFormId ? 'Edit Form' : 'New Form'}</h3>
@@ -1070,7 +1145,7 @@ const Intake: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6">
+            <div className="min-h-0 flex-1 overflow-hidden p-4 md:p-6">
               <IntakeFormBuilder
                 formId={editingFormId}
                 onSave={(form) => {

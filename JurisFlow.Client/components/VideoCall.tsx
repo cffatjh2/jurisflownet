@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useTranslation } from '../contexts/LanguageContext';
-import { Video, Phone, X, Plus } from './Icons';
+import React, { useEffect, useState } from 'react';
+import { Calendar, Clock, Copy, ExternalLink, Link2, Plus, Trash2, Video, X } from './Icons';
 import { googleMeetService, isGoogleMeetAuthExpiredError } from '../services/googleMeetService';
 import { microsoftTeamsService } from '../services/microsoftTeamsService';
 import { zoomService } from '../services/zoomService';
@@ -17,20 +16,20 @@ interface VideoCallRoom {
   createdAt: string;
 }
 
+type VideoPlatform = VideoCallRoom['type'];
+
 const VideoCall: React.FC = () => {
-  const { t } = useTranslation();
   const [rooms, setRooms] = useState<VideoCallRoom[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newRoom, setNewRoom] = useState({
     title: '',
-    type: 'google-meet' as 'google-meet' | 'microsoft-teams' | 'zoom',
+    type: 'google-meet' as VideoPlatform,
     matterId: '',
-    startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16), // 1 hour from now
+    startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16),
     duration: 60
   });
 
-  // Check for access tokens
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(() => getOAuthAccessToken('google-meet'));
   const [microsoftAccessToken, setMicrosoftAccessToken] = useState<string | null>(() => getOAuthAccessToken('microsoft-teams'));
   const [zoomAccessToken, setZoomAccessToken] = useState<string | null>(() => getOAuthAccessToken('zoom'));
@@ -41,13 +40,18 @@ const VideoCall: React.FC = () => {
   };
 
   useEffect(() => {
-    // Load saved rooms from localStorage
     const savedRooms = localStorage.getItem(getRoomsStorageKey());
     if (savedRooms) {
-      setRooms(JSON.parse(savedRooms));
+      try {
+        const parsed = JSON.parse(savedRooms);
+        if (Array.isArray(parsed)) {
+          setRooms(parsed);
+        }
+      } catch (error) {
+        console.error('Failed to parse saved video rooms:', error);
+      }
     }
 
-    // Refresh OAuth token snapshots (migrates legacy localStorage tokens to sessionStorage).
     setGoogleAccessToken(getOAuthAccessToken('google-meet'));
     setMicrosoftAccessToken(getOAuthAccessToken('microsoft-teams'));
     setZoomAccessToken(getOAuthAccessToken('zoom'));
@@ -62,7 +66,7 @@ const VideoCall: React.FC = () => {
     return getCurrentAppReturnPath(isClientPortal ? '/client' : '/#videocall');
   };
 
-  const handleConnect = async (type: 'google-meet' | 'microsoft-teams' | 'zoom') => {
+  const handleConnect = async (type: VideoPlatform) => {
     try {
       const returnPath = resolveOAuthReturnPath();
       switch (type) {
@@ -204,21 +208,18 @@ const VideoCall: React.FC = () => {
   };
 
   const handleDeleteRoom = (id: string) => {
-    const updatedRooms = rooms.filter(r => r.id !== id);
+    const updatedRooms = rooms.filter(room => room.id !== id);
     setRooms(updatedRooms);
     localStorage.setItem(getRoomsStorageKey(), JSON.stringify(updatedRooms));
   };
 
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case 'google-meet':
-        return '🔵';
-      case 'microsoft-teams':
-        return '🔷';
-      case 'zoom':
-        return '📹';
-      default:
-        return '📞';
+  const handleCopyRoomLink = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success('Meeting link copied.');
+    } catch (error) {
+      console.error('Failed to copy meeting link:', error);
+      toast.error('Failed to copy meeting link.');
     }
   };
 
@@ -235,129 +236,219 @@ const VideoCall: React.FC = () => {
     }
   };
 
+  const getTypeTheme = (type: string) => {
+    switch (type) {
+      case 'google-meet':
+        return {
+          iconClass: 'bg-blue-100 text-blue-700',
+          badgeClass: 'border-blue-100 bg-blue-50 text-blue-700',
+          cardClass: 'from-blue-50 via-white to-cyan-50'
+        };
+      case 'microsoft-teams':
+        return {
+          iconClass: 'bg-indigo-100 text-indigo-700',
+          badgeClass: 'border-indigo-100 bg-indigo-50 text-indigo-700',
+          cardClass: 'from-indigo-50 via-white to-violet-50'
+        };
+      case 'zoom':
+        return {
+          iconClass: 'bg-sky-100 text-sky-700',
+          badgeClass: 'border-sky-100 bg-sky-50 text-sky-700',
+          cardClass: 'from-sky-50 via-white to-cyan-50'
+        };
+      default:
+        return {
+          iconClass: 'bg-slate-100 text-slate-700',
+          badgeClass: 'border-slate-200 bg-slate-50 text-slate-700',
+          cardClass: 'from-slate-50 via-white to-slate-100'
+        };
+    }
+  };
+
+  const formatRoomDate = (value: string) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric'
+    });
+  };
+
+  const getPlatformOptionLabel = (type: VideoPlatform) => {
+    const isConnected = type === 'google-meet'
+      ? Boolean(googleAccessToken)
+      : type === 'microsoft-teams'
+        ? Boolean(microsoftAccessToken)
+        : Boolean(zoomAccessToken);
+
+    return `${getTypeName(type)} ${isConnected ? '(Connected)' : '(Connect Required)'}`;
+  };
+
   return (
-    <div className="p-8 h-full overflow-y-auto bg-gray-50">
-      <div className="mb-6 flex justify-between items-center">
+    <div className="h-full overflow-y-auto bg-gray-50 p-8">
+      <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Video Calls</h2>
-          <p className="text-gray-600 mt-1">Create and join video meetings with clients</p>
+          <p className="mt-1 text-gray-600">Create and join video meetings with clients</p>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
+          className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
         >
-          <Plus className="w-4 h-4" /> Create Meeting
+          <Plus className="h-4 w-4" />
+          Create Meeting
         </button>
       </div>
 
       {rooms.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-          <Video className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-400 mb-2">No video calls scheduled</p>
+        <div className="rounded-2xl border border-gray-200 bg-white p-12 text-center shadow-sm">
+          <Video className="mx-auto mb-4 h-16 w-16 text-gray-300" />
+          <p className="mb-2 font-medium text-slate-700">No video calls scheduled</p>
           <p className="text-sm text-gray-500">Create a meeting to get started</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rooms.map(room => (
-            <div key={room.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center text-2xl">
-                    {getTypeIcon(room.type)}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2 2xl:grid-cols-3">
+          {rooms.map(room => {
+            const theme = getTypeTheme(room.type);
+
+            return (
+              <div
+                key={room.id}
+                className={`overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br ${theme.cardClass} p-6 shadow-sm transition-shadow hover:shadow-md`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${theme.iconClass}`}>
+                      <Video className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-semibold text-slate-900">{room.title}</h3>
+                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${theme.badgeClass}`}>
+                          {getTypeName(room.type)}
+                        </span>
+                      </div>
+                      {room.matterId && (
+                        <p className="mt-1 text-sm text-slate-500">Matter: {room.matterId}</p>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-slate-900">{room.title}</h3>
-                    <p className="text-xs text-gray-500">{getTypeName(room.type)}</p>
-                  </div>
+
+                  <button
+                    onClick={() => handleDeleteRoom(room.id)}
+                    className="rounded-xl border border-transparent p-2 text-slate-400 transition hover:border-red-100 hover:bg-red-50 hover:text-red-600"
+                    title="Delete meeting"
+                    aria-label="Delete meeting"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleDeleteRoom(room.id)}
-                  className="text-gray-400 hover:text-red-600 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              <div className="mb-4">
-                <p className="text-xs text-gray-500 mb-1">Meeting Link</p>
-                <p className="text-sm text-blue-600 truncate font-mono">{room.link}</p>
-              </div>
+                <div className="mt-5 rounded-2xl border border-gray-200 bg-white/85 p-4">
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <Link2 className="h-3.5 w-3.5" />
+                    Meeting Link
+                  </div>
+                  <a
+                    href={room.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 block truncate text-sm font-medium text-blue-700 hover:text-blue-800"
+                    title={room.link}
+                  >
+                    {room.link}
+                  </a>
+                </div>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleJoinRoom(room)}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-                >
-                  <Video className="w-4 h-4" /> Join Meeting
-                </button>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(room.link);
-                    toast.success('Link copied to clipboard!');
-                  }}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
-                  title="Copy Link"
-                >
-                  📋
-                </button>
-              </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5">
+                    <Calendar className="h-3.5 w-3.5" />
+                    Created {formatRoomDate(room.createdAt)}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5">
+                    <Clock className="h-3.5 w-3.5" />
+                    Ready to join
+                  </span>
+                </div>
 
-              <p className="text-xs text-gray-400 mt-3">
-                Created: {new Date(room.createdAt).toLocaleDateString()}
-              </p>
-            </div>
-          ))}
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleJoinRoom(room)}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                  >
+                    <Video className="h-4 w-4" />
+                    Join Meeting
+                  </button>
+                  <button
+                    onClick={() => handleCopyRoomLink(room.link)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-gray-50"
+                    title="Copy meeting link"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Link
+                  </button>
+                  <a
+                    href={room.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-3 text-slate-600 transition-colors hover:bg-gray-50"
+                    title="Open meeting in a new tab"
+                    aria-label="Open meeting in a new tab"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Create Meeting Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="font-bold text-lg text-slate-800">Create Video Meeting</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 className="text-lg font-bold text-slate-800">Create Video Meeting</h3>
               <button
                 onClick={() => setShowCreateModal(false)}
                 className="text-gray-400 hover:text-gray-600"
               >
-                <X className="w-5 h-5" />
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="space-y-4 p-6">
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Meeting Title</label>
+                <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Meeting Title</label>
                 <input
                   type="text"
                   placeholder="Client Consultation"
-                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   value={newRoom.title}
-                  onChange={e => setNewRoom({ ...newRoom, title: e.target.value })}
+                  onChange={event => setNewRoom({ ...newRoom, title: event.target.value })}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Platform</label>
+                <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Platform</label>
                 <select
-                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   value={newRoom.type}
-                  onChange={e => setNewRoom({ ...newRoom, type: e.target.value as any })}
+                  onChange={event => setNewRoom({ ...newRoom, type: event.target.value as VideoPlatform })}
                 >
-                  <option value="google-meet">
-                    Google Meet {googleAccessToken ? '✓' : '(Connect Required)'}
-                  </option>
-                  <option value="microsoft-teams">
-                    Microsoft Teams {microsoftAccessToken ? '✓' : '(Connect Required)'}
-                  </option>
-                  <option value="zoom">
-                    Zoom {zoomAccessToken ? '✓' : '(Connect Required)'}
-                  </option>
+                  <option value="google-meet">{getPlatformOptionLabel('google-meet')}</option>
+                  <option value="microsoft-teams">{getPlatformOptionLabel('microsoft-teams')}</option>
+                  <option value="zoom">{getPlatformOptionLabel('zoom')}</option>
                 </select>
                 {newRoom.type === 'google-meet' && !googleAccessToken && (
                   <button
                     type="button"
                     onClick={() => handleConnect('google-meet')}
-                    className="mt-2 w-full px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700"
+                    className="mt-2 w-full rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
                   >
                     Connect Google Account
                   </button>
@@ -366,7 +457,7 @@ const VideoCall: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleConnect('microsoft-teams')}
-                    className="mt-2 w-full px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700"
+                    className="mt-2 w-full rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
                   >
                     Connect Microsoft Account
                   </button>
@@ -375,7 +466,7 @@ const VideoCall: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleConnect('zoom')}
-                    className="mt-2 w-full px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700"
+                    className="mt-2 w-full rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
                   >
                     Connect Zoom Account
                   </button>
@@ -383,54 +474,55 @@ const VideoCall: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Start Time</label>
+                <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Start Time</label>
                 <input
                   type="datetime-local"
-                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   value={newRoom.startTime}
-                  onChange={e => setNewRoom({ ...newRoom, startTime: e.target.value })}
+                  onChange={event => setNewRoom({ ...newRoom, startTime: event.target.value })}
                   min={new Date().toISOString().slice(0, 16)}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Duration (minutes)</label>
+                <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Duration (minutes)</label>
                 <input
                   type="number"
                   min="15"
                   max="480"
                   step="15"
-                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   value={newRoom.duration}
-                  onChange={e => setNewRoom({ ...newRoom, duration: parseInt(e.target.value) || 60 })}
+                  onChange={event => setNewRoom({ ...newRoom, duration: parseInt(event.target.value, 10) || 60 })}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Related Case (Optional)</label>
+                <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Related Case (Optional)</label>
                 <input
                   type="text"
                   placeholder="Case number or name"
-                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   value={newRoom.matterId}
-                  onChange={e => setNewRoom({ ...newRoom, matterId: e.target.value })}
+                  onChange={event => setNewRoom({ ...newRoom, matterId: event.target.value })}
                 />
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg"
+                className="rounded-lg px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreateRoom}
                 disabled={creating}
-                className="px-6 py-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Video className="w-4 h-4" /> {creating ? 'Creating...' : 'Create Meeting'}
+                <Video className="h-4 w-4" />
+                {creating ? 'Creating...' : 'Create Meeting'}
               </button>
             </div>
           </div>
@@ -441,4 +533,3 @@ const VideoCall: React.FC = () => {
 };
 
 export default VideoCall;
-

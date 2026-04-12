@@ -141,6 +141,36 @@ const Documents: React.FC = () => {
     }
   };
 
+  const buildUploadedDocument = (uploadedDoc: any): DocumentFile => ({
+    id: uploadedDoc.id,
+    name: uploadedDoc.name,
+    type: uploadedDoc.mimeType?.includes('pdf') ? 'pdf' :
+      uploadedDoc.mimeType?.includes('word') ? 'docx' :
+        uploadedDoc.mimeType?.includes('text') ? 'txt' : 'img',
+    size: `${(uploadedDoc.fileSize / 1024 / 1024).toFixed(2)} MB`,
+    updatedAt: uploadedDoc.createdAt,
+    matterId: uploadedDoc.matterId || undefined,
+    filePath: uploadedDoc.filePath,
+    category: uploadedDoc.category || undefined,
+    status: uploadedDoc.status || undefined,
+    version: uploadedDoc.version || undefined,
+    legalHoldReason: uploadedDoc.legalHoldReason || undefined,
+    legalHoldPlacedAt: uploadedDoc.legalHoldPlacedAt || undefined,
+    legalHoldReleasedAt: uploadedDoc.legalHoldReleasedAt || undefined,
+    legalHoldPlacedBy: uploadedDoc.legalHoldPlacedBy || undefined
+  });
+
+  const finalizeUploadedDocument = (uploadedDoc: any) => {
+    const doc = buildUploadedDocument(uploadedDoc);
+    addDocument(doc);
+    setShowMatterModal(false);
+    setPendingFile(null);
+    setSelectedMatterForUpload('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleConfirmUpload = async () => {
     if (!pendingFile) return;
 
@@ -153,38 +183,27 @@ const Documents: React.FC = () => {
       );
 
       if (uploadedDoc) {
-        // Add to local state immediately
-        const doc: DocumentFile = {
-          id: uploadedDoc.id,
-          name: uploadedDoc.name,
-          type: uploadedDoc.mimeType?.includes('pdf') ? 'pdf' :
-            uploadedDoc.mimeType?.includes('word') ? 'docx' :
-              uploadedDoc.mimeType?.includes('text') ? 'txt' : 'img',
-          size: `${(uploadedDoc.fileSize / 1024 / 1024).toFixed(2)} MB`,
-          updatedAt: uploadedDoc.createdAt,
-          matterId: uploadedDoc.matterId || undefined,
-          filePath: uploadedDoc.filePath,
-          category: uploadedDoc.category || undefined,
-          status: uploadedDoc.status || undefined,
-          version: uploadedDoc.version || undefined,
-          legalHoldReason: uploadedDoc.legalHoldReason || undefined,
-          legalHoldPlacedAt: uploadedDoc.legalHoldPlacedAt || undefined,
-          legalHoldReleasedAt: uploadedDoc.legalHoldReleasedAt || undefined,
-          legalHoldPlacedBy: uploadedDoc.legalHoldPlacedBy || undefined
-        };
-
-        // Add to context state - this will persist
-        addDocument(doc);
-
-        // Close modal and reset
-        setShowMatterModal(false);
-        setPendingFile(null);
-        setSelectedMatterForUpload('');
+        finalizeUploadedDocument(uploadedDoc);
         toast.success('File uploaded successfully.');
       }
     } catch (error: any) {
       console.error('Upload error:', error);
-      toast.error('File upload failed: ' + (error.message || 'Unknown error'));
+      const errorMessage = error?.message || 'Unknown error';
+
+      if (selectedMatterForUpload && /matter not found/i.test(errorMessage)) {
+        try {
+          const uploadedWithoutMatter = await api.uploadDocument(pendingFile, undefined, undefined);
+          if (uploadedWithoutMatter) {
+            finalizeUploadedDocument(uploadedWithoutMatter);
+            toast.warning('Selected matter could not be linked. The file was uploaded as unassigned.');
+            return;
+          }
+        } catch (retryError: any) {
+          console.error('Upload retry without matter failed:', retryError);
+        }
+      }
+
+      toast.error('File upload failed: ' + errorMessage);
     }
   };
 
