@@ -38,6 +38,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
     const [submitted, setSubmitted] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [thankYouMessage, setThankYouMessage] = useState('');
+    const hasUnsupportedFileField = fields.some(field => field.type === 'file');
 
     useEffect(() => {
         loadForm();
@@ -47,12 +48,13 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
         setLoading(true);
         try {
             const data = await api.intake.public.get(slug);
+            const parsedFields = JSON.parse(data.fieldsJson || '[]') as IntakeFormField[];
             setForm(data);
-            setFields(JSON.parse(data.fieldsJson || '[]'));
+            setFields(parsedFields);
 
             // Set default values
             const defaults: Record<string, any> = {};
-            JSON.parse(data.fieldsJson || '[]').forEach((field: IntakeFormField) => {
+            parsedFields.forEach((field: IntakeFormField) => {
                 if (field.defaultValue) {
                     defaults[field.name] = field.defaultValue;
                 }
@@ -69,12 +71,33 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
         setFormData(prev => ({ ...prev, [fieldName]: value }));
     };
 
+    const extractErrorMessage = (err: unknown, fallback: string) => {
+        if (!(err instanceof Error) || !err.message) {
+            return fallback;
+        }
+
+        const detailMatch = err.message.match(/\((.*)\)$/);
+        return detailMatch?.[1] || err.message || fallback;
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
+        if (hasUnsupportedFileField) {
+            setError('This form includes a file upload field, but file uploads are not available yet. Please contact the firm directly or ask them to update the form.');
+            return;
+        }
+
         // Validate required fields
         for (const field of fields) {
-            if (field.required && !formData[field.name]) {
+            const rawValue = formData[field.name];
+            const hasValue = field.type === 'checkbox'
+                ? rawValue === true
+                : typeof rawValue === 'string'
+                    ? rawValue.trim().length > 0
+                    : rawValue !== undefined && rawValue !== null;
+
+            if (field.required && !hasValue) {
                 setError(`Please fill in the required field: ${field.label}`);
                 return;
             }
@@ -94,7 +117,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                 }, 3000);
             }
         } catch (err) {
-            setError('Failed to submit form. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to submit form. Please try again.'));
         } finally {
             setSubmitting(false);
         }
@@ -179,12 +202,9 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
 
             case 'file':
                 return (
-                    <input
-                        type="file"
-                        onChange={(e) => handleChange(field.name, e.target.files?.[0]?.name)}
-                        className={baseInputClass}
-                        required={field.required}
-                    />
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        File uploads are coming soon. Please contact the firm directly to share documents for now.
+                    </div>
                 );
 
             default:
@@ -256,6 +276,12 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
 
                 {/* Form */}
                 <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8">
+                    {hasUnsupportedFileField && (
+                        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 flex items-center gap-2">
+                            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                            This form includes a file upload field. File uploads are coming soon, so submissions are temporarily disabled.
+                        </div>
+                    )}
                     {error && (
                         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 flex items-center gap-2">
                             <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -280,7 +306,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
 
                     <button
                         type="submit"
-                        disabled={submitting}
+                        disabled={submitting || hasUnsupportedFileField}
                         className="w-full mt-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition flex items-center justify-center gap-2"
                     >
                         {submitting ? (
@@ -288,7 +314,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                         ) : (
                             <>
                                 <Send className="w-5 h-5" />
-                                Submit Form
+                                {hasUnsupportedFileField ? 'File Uploads Coming Soon' : 'Submit Form'}
                             </>
                         )}
                     </button>

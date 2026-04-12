@@ -1212,7 +1212,7 @@ export const api = {
         forms: {
             list: (activeOnly?: boolean) => fetchJson(`/intake/forms${activeOnly !== undefined ? `?activeOnly=${activeOnly}` : ''}`),
             get: (id: string) => fetchJson(`/intake/forms/${id}`),
-            create: (data: { name: string; description?: string; practiceArea?: string; fieldsJson?: string }) =>
+            create: (data: { name: string; description?: string; practiceArea?: string; fieldsJson?: string; isPublic?: boolean; isActive?: boolean }) =>
                 fetchJson('/intake/forms', { method: 'POST', body: JSON.stringify(data) }),
             update: (id: string, data: any) => fetchJson(`/intake/forms/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
             delete: (id: string) => fetchJson(`/intake/forms/${id}`, { method: 'DELETE' }),

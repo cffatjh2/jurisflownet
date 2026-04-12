@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using Task = System.Threading.Tasks.Task;
 
@@ -14,6 +15,25 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class IntakeController : ControllerBase
     {
+        private static readonly JsonSerializerOptions IntakeJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
+        private static readonly HashSet<string> SupportedPublicFieldTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "text",
+            "email",
+            "phone",
+            "textarea",
+            "select",
+            "checkbox",
+            "radio",
+            "date"
+        };
+
+        private static readonly EmailAddressAttribute EmailValidator = new();
+
         private readonly JurisFlowDbContext _context;
         private readonly OutboundEmailService _outboundEmailService;
         private readonly IConfiguration _configuration;
@@ -87,6 +107,7 @@ namespace JurisFlow.Server.Controllers
                 RedirectUrl = dto.RedirectUrl,
                 NotifyEmail = dto.NotifyEmail,
                 AssignToEmployeeId = dto.AssignToEmployeeId,
+                IsActive = dto.IsActive ?? true,
                 IsPublic = dto.IsPublic ?? true,
                 Slug = slug
             };
@@ -183,6 +204,11 @@ namespace JurisFlow.Server.Controllers
             if (form == null)
             {
                 return NotFound(new { message = "Form not found or inactive" });
+            }
+
+            if (!TryValidateSubmission(form, dto.DataJson, out var validationError))
+            {
+                return BadRequest(new { message = validationError });
             }
 
             var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -356,6 +382,274 @@ namespace JurisFlow.Server.Controllers
                 .Replace(",", "");
         }
 
+        private bool TryValidateSubmission(IntakeForm form, string dataJson, out string error)
+        {
+            error = string.Empty;
+
+            List<IntakeFormField>? fields;
+            try
+            {
+                fields = JsonSerializer.Deserialize<List<IntakeFormField>>(form.FieldsJson, IntakeJsonOptions) ?? new List<IntakeFormField>();
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Invalid intake field schema for form {FormId}", form.Id);
+                error = "This intake form is misconfigured. Please contact the firm.";
+                return false;
+            }
+
+            var fieldLookup = new Dictionary<string, IntakeFormField>(StringComparer.OrdinalIgnoreCase);
+            foreach (var field in fields.OrderBy(f => f.Order))
+            {
+                var fieldName = field.Name?.Trim();
+                if (string.IsNullOrWhiteSpace(fieldName))
+                {
+                    error = "This intake form is misconfigured. Please contact the firm.";
+                    return false;
+                }
+
+                var fieldType = (field.Type ?? "text").Trim();
+                if (fieldType.Equals("file", StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "This form contains a file upload field, but file uploads are not available yet. Please contact the firm.";
+                    return false;
+                }
+
+                if (!SupportedPublicFieldTypes.Contains(fieldType))
+                {
+                    error = "This intake form contains an unsupported field type. Please contact the firm.";
+                    return false;
+                }
+
+                field.Name = fieldName;
+                field.Type = fieldType;
+
+                if (!fieldLookup.TryAdd(fieldName, field))
+                {
+                    error = "This intake form is misconfigured. Please contact the firm.";
+                    return false;
+                }
+            }
+
+            Dictionary<string, JsonElement>? rawSubmission;
+            try
+            {
+                rawSubmission = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(dataJson, IntakeJsonOptions) ?? new Dictionary<string, JsonElement>();
+            }
+            catch (JsonException)
+            {
+                error = "Submitted form data is invalid.";
+                return false;
+            }
+
+            var submissionLookup = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in rawSubmission)
+            {
+                if (submissionLookup.ContainsKey(entry.Key))
+                {
+                    error = "Submitted form data contains duplicate fields.";
+                    return false;
+                }
+
+                submissionLookup[entry.Key] = entry.Value;
+            }
+
+            foreach (var key in submissionLookup.Keys)
+            {
+                if (!fieldLookup.ContainsKey(key))
+                {
+                    error = $"Submitted form data contains an unknown field: {key}.";
+                    return false;
+                }
+            }
+
+            foreach (var field in fieldLookup.Values.OrderBy(f => f.Order))
+            {
+                submissionLookup.TryGetValue(field.Name, out var value);
+                var isFieldPresent = submissionLookup.ContainsKey(field.Name)
+                    && value.ValueKind != JsonValueKind.Null
+                    && value.ValueKind != JsonValueKind.Undefined;
+                var hasRequiredValue = HasRequiredValue(field.Type, value);
+
+                if (field.Required && !hasRequiredValue)
+                {
+                    error = $"Please fill in the required field: {field.Label}.";
+                    return false;
+                }
+
+                if (!isFieldPresent)
+                {
+                    continue;
+                }
+
+                if (!TryValidateFieldValue(field, value, out error))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool HasRequiredValue(string fieldType, JsonElement value)
+        {
+            if (value.ValueKind == JsonValueKind.Null || value.ValueKind == JsonValueKind.Undefined)
+            {
+                return false;
+            }
+
+            if (fieldType.Equals("checkbox", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryGetBooleanValue(value, out var booleanValue) && booleanValue;
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                return !string.IsNullOrWhiteSpace(value.GetString());
+            }
+
+            return !string.IsNullOrWhiteSpace(value.ToString());
+        }
+
+        private static bool TryValidateFieldValue(IntakeFormField field, JsonElement value, out string error)
+        {
+            error = string.Empty;
+            var label = string.IsNullOrWhiteSpace(field.Label) ? field.Name : field.Label;
+            var fieldType = field.Type.Trim().ToLowerInvariant();
+
+            if (fieldType == "checkbox")
+            {
+                if (!TryGetBooleanValue(value, out _))
+                {
+                    error = $"The field '{label}' must be true or false.";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (value.ValueKind != JsonValueKind.String)
+            {
+                error = $"The field '{label}' has an invalid value.";
+                return false;
+            }
+
+            var text = value.GetString()?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(text))
+            {
+                return true;
+            }
+
+            switch (fieldType)
+            {
+                case "email":
+                    if (!EmailValidator.IsValid(text))
+                    {
+                        error = $"The field '{label}' must be a valid email address.";
+                        return false;
+                    }
+                    break;
+                case "phone":
+                    if (!LooksLikePhoneNumber(text))
+                    {
+                        error = $"The field '{label}' must be a valid phone number.";
+                        return false;
+                    }
+                    break;
+                case "date":
+                    if (!DateTime.TryParse(text, out _))
+                    {
+                        error = $"The field '{label}' must be a valid date.";
+                        return false;
+                    }
+                    break;
+                case "select":
+                case "radio":
+                    var allowedOptions = ParseFieldOptions(field.Options);
+                    if (allowedOptions.Count > 0 && !allowedOptions.Contains(text))
+                    {
+                        error = $"The field '{label}' contains an invalid option.";
+                        return false;
+                    }
+                    break;
+            }
+
+            return true;
+        }
+
+        private static HashSet<string> ParseFieldOptions(string? rawOptions)
+        {
+            var options = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(rawOptions))
+            {
+                return options;
+            }
+
+            var trimmed = rawOptions.Trim();
+            if (trimmed.StartsWith("[", StringComparison.Ordinal))
+            {
+                try
+                {
+                    var parsed = JsonSerializer.Deserialize<List<string>>(trimmed, IntakeJsonOptions) ?? new List<string>();
+                    foreach (var option in parsed)
+                    {
+                        if (!string.IsNullOrWhiteSpace(option))
+                        {
+                            options.Add(option.Trim());
+                        }
+                    }
+
+                    return options;
+                }
+                catch (JsonException)
+                {
+                    // Fall back to newline parsing for legacy data.
+                }
+            }
+
+            foreach (var option in trimmed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!string.IsNullOrWhiteSpace(option))
+                {
+                    options.Add(option);
+                }
+            }
+
+            return options;
+        }
+
+        private static bool TryGetBooleanValue(JsonElement value, out bool booleanValue)
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.True:
+                    booleanValue = true;
+                    return true;
+                case JsonValueKind.False:
+                    booleanValue = false;
+                    return true;
+                case JsonValueKind.String:
+                    return bool.TryParse(value.GetString(), out booleanValue);
+                default:
+                    booleanValue = false;
+                    return false;
+            }
+        }
+
+        private static bool LooksLikePhoneNumber(string value)
+        {
+            var digitCount = 0;
+            foreach (var character in value)
+            {
+                if (char.IsDigit(character))
+                {
+                    digitCount++;
+                }
+            }
+
+            return digitCount >= 7;
+        }
+
         private async Task QueueSubmissionNotificationAsync(IntakeForm form, IntakeSubmission submission, string? ipAddress, string? userAgent)
         {
             if (string.IsNullOrWhiteSpace(form.NotifyEmail))
@@ -500,6 +794,7 @@ Payload:
         public string? RedirectUrl { get; set; }
         public string? NotifyEmail { get; set; }
         public string? AssignToEmployeeId { get; set; }
+        public bool? IsActive { get; set; }
         public bool? IsPublic { get; set; }
     }
 

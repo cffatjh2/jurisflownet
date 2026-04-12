@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, Plus, Trash2, Edit, Copy, ChevronUp, ChevronDown } from './Icons';
 import { api } from '../services/api';
+import { toast } from './Toast';
 
 interface IntakeForm {
     id: string;
@@ -58,7 +59,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         { value: 'checkbox', label: 'Checkbox' },
         { value: 'radio', label: 'Radio Buttons' },
         { value: 'date', label: 'Date' },
-        { value: 'file', label: 'File Upload' }
+        { value: 'file', label: 'File Upload', disabled: true }
     ];
 
     const practiceAreas = [
@@ -105,7 +106,9 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                     name: form.name,
                     description: form.description,
                     practiceArea: form.practiceArea,
-                    fieldsJson
+                    fieldsJson,
+                    isPublic: form.isPublic,
+                    isActive: form.isActive
                 });
                 onSave?.(created);
             }
@@ -114,6 +117,30 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleCopyLink = async () => {
+        if (!form.slug) return;
+
+        const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+        const url = `${baseUrl}/intake/${form.slug}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            toast.success('Public intake link copied.');
+        } catch (error) {
+            console.error('Failed to copy intake link:', error);
+            toast.error('Failed to copy intake link.');
+        }
+    };
+
+    const handleFieldTypeSelect = (type: string) => {
+        const selectedType = fieldTypes.find(fieldType => fieldType.value === type);
+        if (selectedType?.disabled) {
+            toast.info('File uploads are coming soon. Use a text field to collect document instructions for now.');
+            return;
+        }
+
+        addField(type);
     };
 
     const addField = (type: string) => {
@@ -244,7 +271,10 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                 <code className="text-sm text-blue-600 flex-1 truncate">
                                     /intake/{form.slug}
                                 </code>
-                                <button className="p-1 hover:bg-slate-200 rounded">
+                                <button
+                                    onClick={handleCopyLink}
+                                    className="p-1 hover:bg-slate-200 rounded"
+                                >
                                     <Copy className="w-4 h-4" />
                                 </button>
                             </div>
@@ -260,7 +290,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                             {fieldTypes.slice(0, 4).map(type => (
                                 <button
                                     key={type.value}
-                                    onClick={() => addField(type.value)}
+                                    onClick={() => handleFieldTypeSelect(type.value)}
                                     className="px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-50"
                                 >
                                     + {type.label}
@@ -377,10 +407,17 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     className="w-full px-4 py-2 border border-slate-200 rounded-lg"
                                 >
                                     {fieldTypes.map(type => (
-                                        <option key={type.value} value={type.value}>{type.label}</option>
+                                        <option key={type.value} value={type.value} disabled={type.disabled}>
+                                            {type.disabled ? `${type.label} (Coming soon)` : type.label}
+                                        </option>
                                     ))}
                                 </select>
                             </div>
+                            {editingField.type === 'file' && (
+                                <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800">
+                                    File uploads are coming soon. Replace this field with a supported type before publishing the form.
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Placeholder</label>
                                 <input
