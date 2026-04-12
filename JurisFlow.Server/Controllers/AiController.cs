@@ -122,13 +122,19 @@ namespace JurisFlow.Server.Controllers
             var generated = await GenerateGeminiTextAsync(prompt.ToString(), cancellationToken);
             if (string.IsNullOrWhiteSpace(generated))
             {
-                return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Gemini is not configured or unavailable." });
+                return Ok(new
+                {
+                    text = GenerateDegradedChatResponse(sanitizedMessage, sanitizedContext, dto.EnableSearch),
+                    sources = Array.Empty<object>(),
+                    providerStatus = "degraded"
+                });
             }
 
             return Ok(new
             {
                 text = generated,
-                sources = Array.Empty<object>()
+                sources = Array.Empty<object>(),
+                providerStatus = "live"
             });
         }
 
@@ -1626,6 +1632,82 @@ Based on established legal precedent and current statutory framework, the follow
 - Document all relevant evidence supporting the legal position
 
 *Note: This research is AI-generated and should be verified by legal counsel.*";
+        }
+
+        private static string GenerateDegradedChatResponse(string message, string? contextData, bool enableSearch)
+        {
+            var trimmedMessage = (message ?? string.Empty).Trim();
+            var normalized = trimmedMessage.ToLowerInvariant();
+            var hasContext = !string.IsNullOrWhiteSpace(contextData);
+            var builder = new StringBuilder();
+
+            if (IsGreeting(normalized))
+            {
+                builder.AppendLine("Hello. Juris is available in limited mode right now.");
+                builder.AppendLine("The external AI provider is temporarily unavailable, but I can still help you structure the next step.");
+            }
+            else if (normalized.Contains("summar", StringComparison.Ordinal))
+            {
+                builder.AppendLine("Juris is in limited mode right now, so I cannot generate a full AI summary.");
+                builder.AppendLine("Attach the relevant document and tell me whether you want chronology, key admissions, obligations, damages, or action items.");
+            }
+            else if (normalized.Contains("draft", StringComparison.Ordinal) ||
+                     normalized.Contains("motion", StringComparison.Ordinal) ||
+                     normalized.Contains("letter", StringComparison.Ordinal) ||
+                     normalized.Contains("email", StringComparison.Ordinal))
+            {
+                builder.AppendLine("Juris is in limited mode right now, so I cannot generate a polished draft from the provider.");
+                builder.AppendLine("Send the document type, audience, jurisdiction, tone, and the core facts you want included.");
+            }
+            else if (normalized.Contains("research", StringComparison.Ordinal) ||
+                     normalized.Contains("case law", StringComparison.Ordinal) ||
+                     normalized.Contains("statute", StringComparison.Ordinal) ||
+                     enableSearch)
+            {
+                builder.AppendLine("Juris is in limited mode right now, so live legal research is not available in this response.");
+                builder.AppendLine("Provide the jurisdiction, issue, claim or defense, and the controlling facts so I can help frame the research request.");
+            }
+            else
+            {
+                builder.AppendLine("Juris is available in limited mode right now.");
+                builder.AppendLine("The external AI provider is temporarily unavailable, but I can still help you turn this into a usable legal task.");
+            }
+
+            if (hasContext)
+            {
+                builder.AppendLine();
+                builder.AppendLine("Linked document context is attached and will be useful once the provider is back.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(trimmedMessage) && !IsGreeting(normalized))
+            {
+                builder.AppendLine();
+                builder.AppendLine("Your last request:");
+                builder.AppendLine($"\"{TruncateForUi(trimmedMessage, 220)}\"");
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("Best next input:");
+            builder.AppendLine("1. State the exact task: summarize, draft, analyze, or research.");
+            builder.AppendLine("2. Add the controlling facts, parties, and jurisdiction.");
+            builder.AppendLine("3. Attach the relevant document or matter context if needed.");
+
+            return builder.ToString().Trim();
+        }
+
+        private static bool IsGreeting(string value)
+        {
+            return value is "hi" or "hello" or "hey" or "selam" or "merhaba";
+        }
+
+        private static string TruncateForUi(string value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            return value[..maxLength].TrimEnd() + "...";
         }
 
         private AiPromptPolicy ResolveAiPromptPolicy()
