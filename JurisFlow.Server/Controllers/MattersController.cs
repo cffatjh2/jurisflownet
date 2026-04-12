@@ -23,8 +23,7 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly FirmStructureService _firmStructure;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
-        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly MatterAccessService _matterAccess;
         private readonly MatterClientLinkService _matterClientLinks;
         private readonly ILogger<MattersController> _logger;
@@ -34,8 +33,7 @@ namespace JurisFlow.Server.Controllers
             JurisFlowDbContext context,
             AuditLogger auditLogger,
             FirmStructureService firmStructure,
-            OutcomeFeePlannerService outcomeFeePlanner,
-            ClientTransparencyService clientTransparencyService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             MatterAccessService matterAccess,
             MatterClientLinkService matterClientLinks,
             ILogger<MattersController> logger)
@@ -43,8 +41,7 @@ namespace JurisFlow.Server.Controllers
             _context = context;
             _auditLogger = auditLogger;
             _firmStructure = firmStructure;
-            _outcomeFeePlanner = outcomeFeePlanner;
-            _clientTransparencyService = clientTransparencyService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _matterAccess = matterAccess;
             _matterClientLinks = matterClientLinks;
             _logger = logger;
@@ -762,38 +759,34 @@ namespace JurisFlow.Server.Controllers
             }
         }
 
-        private async Task TryTriggerOutcomeFeePlannerAsync(string matterId, string triggerType)
+        private Task TryTriggerOutcomeFeePlannerAsync(string matterId, string triggerType)
         {
-            if (string.IsNullOrWhiteSpace(matterId)) return;
+            if (string.IsNullOrWhiteSpace(matterId)) return Task.CompletedTask;
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
-                {
-                    MatterId = matterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(Matter),
-                    TriggerEntityId = matterId
-                }, GetUserId() ?? "system", HttpContext.RequestAborted);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    GetUserId() ?? "system",
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = matterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(Matter),
+                        TriggerEntityId = matterId
+                    },
+                    new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = matterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(Matter),
+                        TriggerEntityId = matterId
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for matter {MatterId}", matterId);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for matter {MatterId}", matterId);
             }
 
-            try
-            {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = matterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(Matter),
-                    TriggerEntityId = matterId
-                }, GetUserId() ?? "system", HttpContext.RequestAborted);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client transparency trigger failed for matter {MatterId}", matterId);
-            }
+            return Task.CompletedTask;
         }
 
         private string? GetUserId()

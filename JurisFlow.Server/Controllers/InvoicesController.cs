@@ -18,34 +18,28 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly BillingPeriodLockService _billingPeriodLockService;
         private readonly FirmStructureService _firmStructure;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
-        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly MatterAccessService _matterAccess;
         private readonly ILogger<InvoicesController> _logger;
 
         public InvoicesController(
             JurisFlowDbContext context,
             AuditLogger auditLogger,
+            BillingPeriodLockService billingPeriodLockService,
             FirmStructureService firmStructure,
-            OutcomeFeePlannerService outcomeFeePlanner,
-            ClientTransparencyService clientTransparencyService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             MatterAccessService matterAccess,
             ILogger<InvoicesController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _billingPeriodLockService = billingPeriodLockService;
             _firmStructure = firmStructure;
-            _outcomeFeePlanner = outcomeFeePlanner;
-            _clientTransparencyService = clientTransparencyService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _matterAccess = matterAccess;
             _logger = logger;
-        }
-
-        private async Task<bool> IsPeriodLocked(DateTime date)
-        {
-            var key = date.ToString("yyyy-MM-dd");
-            return await _context.BillingLocks.AnyAsync(b => string.Compare(key, b.PeriodStart) >= 0 && string.Compare(key, b.PeriodEnd) <= 0);
         }
 
         private static void RecalculateTotals(Invoice invoice)
@@ -151,7 +145,7 @@ namespace JurisFlow.Server.Controllers
                     return BadRequest(new { message = "Selected client was not found." });
                 }
 
-                if (await IsPeriodLocked(dto.IssueDate ?? DateTime.UtcNow))
+                if (await _billingPeriodLockService.IsLockedAsync(dto.IssueDate ?? DateTime.UtcNow, HttpContext.RequestAborted))
                 {
                     return BadRequest(new { message = "Billing period is locked. Cannot create invoice." });
                 }
@@ -248,7 +242,7 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot update invoice." });
             }
@@ -359,14 +353,14 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/approve")]
         public async Task<IActionResult> ApproveInvoice(string id)
         {
-            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
             if (!await CanManageInvoiceAsync(invoice))
             {
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot approve invoice." });
             }
@@ -390,14 +384,14 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/send")]
         public async Task<IActionResult> SendInvoice(string id)
         {
-            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
             if (!await CanManageInvoiceAsync(invoice))
             {
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot send invoice." });
             }
@@ -415,11 +409,19 @@ namespace JurisFlow.Server.Controllers
 
             invoice.UpdatedAt = DateTime.UtcNow;
 
-            await _context.SaveChangesAsync();
             if (shouldNotifyClient)
             {
-                await TryQueueClientInvoiceNotificationAsync(invoice);
+                try
+                {
+                    await QueueClientInvoiceNotificationAsync(invoice);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Client invoice notification failed for invoice {InvoiceId}", invoice.Id);
+                }
             }
+
+            await _context.SaveChangesAsync();
             await TryAuditAsync("invoice.send", "Invoice", invoice.Id, $"Status={invoice.Status}");
             await TryTriggerOutcomeFeePlannerAsync(invoice, "invoice_send");
 
@@ -430,14 +432,14 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("{id}/pay")]
         public async Task<IActionResult> ApplyPayment(string id, [FromBody] InvoicePaymentDto dto)
         {
-            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
+            var invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
             if (!await CanManageInvoiceAsync(invoice))
             {
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot apply payment." });
             }
@@ -537,7 +539,7 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot write off invoice." });
             }
@@ -563,7 +565,7 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot cancel invoice." });
             }
@@ -589,7 +591,7 @@ namespace JurisFlow.Server.Controllers
                 return Forbid();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot delete invoice." });
             }
@@ -636,19 +638,6 @@ namespace JurisFlow.Server.Controllers
                 Type = "info",
                 Link = "tab:invoices"
             });
-        }
-
-        private async Task TryQueueClientInvoiceNotificationAsync(Invoice invoice)
-        {
-            try
-            {
-                await QueueClientInvoiceNotificationAsync(invoice);
-                await _context.SaveChangesAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client invoice notification failed for invoice {InvoiceId}", invoice.Id);
-            }
         }
 
         private async Task TryAuditAsync(string action, string entity, string entityId, string? details = null)
@@ -856,43 +845,39 @@ namespace JurisFlow.Server.Controllers
             return split.Length > 0 ? split[0].Trim() : trimmed;
         }
 
-        private async Task TryTriggerOutcomeFeePlannerAsync(Invoice invoice, string triggerType)
+        private Task TryTriggerOutcomeFeePlannerAsync(Invoice invoice, string triggerType)
         {
             if (invoice == null || (string.IsNullOrWhiteSpace(invoice.MatterId) && string.IsNullOrWhiteSpace(invoice.Id)))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
-                {
-                    MatterId = invoice.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(Invoice),
-                    TriggerEntityId = invoice.Id,
-                    SourceStatus = invoice.Status.ToString()
-                }, GetCurrentUserId(), HttpContext.RequestAborted);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    GetCurrentUserId(),
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = invoice.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(Invoice),
+                        TriggerEntityId = invoice.Id,
+                        SourceStatus = invoice.Status.ToString()
+                    },
+                    new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = invoice.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(Invoice),
+                        TriggerEntityId = invoice.Id
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for invoice {InvoiceId}", invoice.Id);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for invoice {InvoiceId}", invoice.Id);
             }
 
-            try
-            {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = invoice.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(Invoice),
-                    TriggerEntityId = invoice.Id
-                }, GetCurrentUserId(), HttpContext.RequestAborted);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client transparency trigger failed for invoice {InvoiceId}", invoice.Id);
-            }
+            return Task.CompletedTask;
         }
 
         private string GetCurrentUserId()

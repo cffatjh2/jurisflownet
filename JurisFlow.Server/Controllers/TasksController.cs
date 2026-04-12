@@ -17,18 +17,18 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
-        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly ILogger<TasksController> _logger;
 
         public TasksController(
             JurisFlowDbContext context,
             AuditLogger auditLogger,
-            ClientTransparencyService clientTransparencyService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             ILogger<TasksController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
-            _clientTransparencyService = clientTransparencyService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _logger = logger;
         }
 
@@ -191,27 +191,31 @@ namespace JurisFlow.Server.Controllers
             return _context.Tasks.Any(e => e.Id == id);
         }
 
-        private async Task TryTriggerClientTransparencyAsync(TaskModel task, string triggerType)
+        private Task TryTriggerClientTransparencyAsync(TaskModel task, string triggerType)
         {
             if (task == null || string.IsNullOrWhiteSpace(task.MatterId))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             try
             {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = task.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(TaskModel),
-                    TriggerEntityId = task.Id
-                }, GetUserId(), HttpContext.RequestAborted);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    GetUserId(),
+                    transparencyRequest: new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = task.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(TaskModel),
+                        TriggerEntityId = task.Id
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Client transparency trigger failed for task {TaskId}", task.Id);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for task {TaskId}", task.Id);
             }
+
+            return Task.CompletedTask;
         }
 
         private static string MapTaskTransparencyTriggerType(string? status, string fallback)

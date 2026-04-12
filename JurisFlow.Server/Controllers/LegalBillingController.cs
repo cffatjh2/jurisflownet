@@ -19,23 +19,20 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly LegalBillingEngineService _billingEngine;
         private readonly AuditLogger _auditLogger;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
-        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly ILogger<LegalBillingController> _logger;
 
         public LegalBillingController(
             JurisFlowDbContext context,
             LegalBillingEngineService billingEngine,
             AuditLogger auditLogger,
-            OutcomeFeePlannerService outcomeFeePlanner,
-            ClientTransparencyService clientTransparencyService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             ILogger<LegalBillingController> logger)
         {
             _context = context;
             _billingEngine = billingEngine;
             _auditLogger = auditLogger;
-            _outcomeFeePlanner = outcomeFeePlanner;
-            _clientTransparencyService = clientTransparencyService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _logger = logger;
         }
 
@@ -1294,42 +1291,38 @@ namespace JurisFlow.Server.Controllers
                    User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         }
 
-        private async Task TryTriggerOutcomeFeePlannerAsync(string? matterId, string triggerType, string entityType, string entityId, CancellationToken ct)
+        private Task TryTriggerOutcomeFeePlannerAsync(string? matterId, string triggerType, string entityType, string entityId, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(matterId) && string.IsNullOrWhiteSpace(entityId))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
-                {
-                    MatterId = matterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = entityType,
-                    TriggerEntityId = entityId
-                }, GetUserId() ?? "system", ct);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    GetUserId() ?? "system",
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = matterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = entityType,
+                        TriggerEntityId = entityId
+                    },
+                    new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = matterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = entityType,
+                        TriggerEntityId = entityId
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for {EntityType} {EntityId}", entityType, entityId);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for {EntityType} {EntityId}", entityType, entityId);
             }
 
-            try
-            {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = matterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = entityType,
-                    TriggerEntityId = entityId
-                }, GetUserId() ?? "system", ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client transparency trigger failed for {EntityType} {EntityId}", entityType, entityId);
-            }
+            return Task.CompletedTask;
         }
 
         public sealed class ReviewDecisionDto

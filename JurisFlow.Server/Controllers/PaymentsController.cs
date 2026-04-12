@@ -21,30 +21,30 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly BillingPeriodLockService _billingPeriodLockService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly StripePaymentService _stripePaymentService;
         private readonly TenantContext _tenantContext;
         private readonly HashSet<string> _allowedCurrencies;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
-        private readonly ClientTransparencyService _clientTransparencyService;
         private readonly ILogger<PaymentsController> _logger;
 
         public PaymentsController(
             JurisFlowDbContext context,
             IConfiguration configuration,
             AuditLogger auditLogger,
+            BillingPeriodLockService billingPeriodLockService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             StripePaymentService stripePaymentService,
             TenantContext tenantContext,
-            OutcomeFeePlannerService outcomeFeePlanner,
-            ClientTransparencyService clientTransparencyService,
             ILogger<PaymentsController> logger)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _billingPeriodLockService = billingPeriodLockService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _stripePaymentService = stripePaymentService;
             _tenantContext = tenantContext;
             _allowedCurrencies = LoadAllowedCurrencies(configuration);
-            _outcomeFeePlanner = outcomeFeePlanner;
-            _clientTransparencyService = clientTransparencyService;
             _logger = logger;
         }
 
@@ -57,31 +57,6 @@ namespace JurisFlow.Server.Controllers
             public const string Refunded = "Refunded";
             public const string PartiallyRefunded = "Partially Refunded";
             public const string RequiresAction = "Requires Action";
-        }
-
-        private async Task<bool> IsPeriodLocked(DateTime date)
-        {
-            var targetDate = DateOnly.FromDateTime(date.ToUniversalTime());
-            var billingLocks = await TenantScope(_context.BillingLocks)
-                .AsNoTracking()
-                .Select(b => new { b.PeriodStart, b.PeriodEnd })
-                .ToListAsync();
-
-            foreach (var billingLock in billingLocks)
-            {
-                if (!TryParseDateOnly(billingLock.PeriodStart, out var periodStart) ||
-                    !TryParseDateOnly(billingLock.PeriodEnd, out var periodEnd))
-                {
-                    continue;
-                }
-
-                if (targetDate >= periodStart && targetDate <= periodEnd)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         // POST: api/payments/create-checkout
@@ -114,7 +89,7 @@ namespace JurisFlow.Server.Controllers
 
             // Locked period guard
             var txnDate = DateTime.UtcNow;
-            if (await IsPeriodLocked(txnDate))
+            if (await _billingPeriodLockService.IsLockedAsync(txnDate, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot create checkout in a locked period." });
             }
@@ -253,7 +228,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "PaymentRail is invalid. Allowed values: card, ach, echeck, card_or_ach." });
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot create payment intent." });
             }
@@ -630,7 +605,7 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot modify payment." });
             }
@@ -682,7 +657,7 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot modify payment." });
             }
@@ -734,7 +709,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Can only refund completed payments" });
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot refund in locked period." });
             }
@@ -1398,43 +1373,39 @@ namespace JurisFlow.Server.Controllers
             return TenantScope(_context.PaymentPlans).FirstOrDefaultAsync(p => p.Id == id);
         }
 
-        private async Task TryTriggerOutcomeFeePlannerAsync(PaymentTransaction transaction, string triggerType)
+        private Task TryTriggerOutcomeFeePlannerAsync(PaymentTransaction transaction, string triggerType)
         {
             if (transaction == null || (string.IsNullOrWhiteSpace(transaction.MatterId) && string.IsNullOrWhiteSpace(transaction.Id)))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
-                {
-                    MatterId = transaction.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(PaymentTransaction),
-                    TriggerEntityId = transaction.Id,
-                    SourceStatus = transaction.Status
-                }, GetCurrentUserId(), HttpContext.RequestAborted);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    GetCurrentUserId(),
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = transaction.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(PaymentTransaction),
+                        TriggerEntityId = transaction.Id,
+                        SourceStatus = transaction.Status
+                    },
+                    new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = transaction.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(PaymentTransaction),
+                        TriggerEntityId = transaction.Id
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for payment transaction {PaymentTransactionId}", transaction.Id);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for payment transaction {PaymentTransactionId}", transaction.Id);
             }
 
-            try
-            {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = transaction.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(PaymentTransaction),
-                    TriggerEntityId = transaction.Id
-                }, GetCurrentUserId(), HttpContext.RequestAborted);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client transparency trigger failed for payment transaction {PaymentTransactionId}", transaction.Id);
-            }
+            return Task.CompletedTask;
         }
 
         private string GetCurrentUserId()

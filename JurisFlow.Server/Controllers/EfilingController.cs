@@ -56,8 +56,7 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisdictionRulesPlatformService _jurisdictionRulesPlatformService;
         private readonly AuditLogger _auditLogger;
         private readonly IConfiguration _configuration;
-        private readonly OutcomeFeePlannerService _outcomeFeePlanner;
-        private readonly ClientTransparencyService _clientTransparencyService;
+        private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly TenantContext _tenantContext;
         private readonly ILogger<EfilingController> _logger;
 
@@ -68,8 +67,7 @@ namespace JurisFlow.Server.Controllers
             JurisdictionRulesPlatformService jurisdictionRulesPlatformService,
             AuditLogger auditLogger,
             IConfiguration configuration,
-            OutcomeFeePlannerService outcomeFeePlanner,
-            ClientTransparencyService clientTransparencyService,
+            MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             TenantContext tenantContext,
             ILogger<EfilingController> logger)
         {
@@ -79,8 +77,7 @@ namespace JurisFlow.Server.Controllers
             _jurisdictionRulesPlatformService = jurisdictionRulesPlatformService;
             _auditLogger = auditLogger;
             _configuration = configuration;
-            _outcomeFeePlanner = outcomeFeePlanner;
-            _clientTransparencyService = clientTransparencyService;
+            _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _tenantContext = tenantContext;
             _logger = logger;
         }
@@ -1311,46 +1308,42 @@ namespace JurisFlow.Server.Controllers
             }
         }
 
-        private async Task TryTriggerOutcomeFeePlannerAsync(EfilingSubmission submission, string triggerType, CancellationToken ct)
+        private Task TryTriggerOutcomeFeePlannerAsync(EfilingSubmission submission, string triggerType, CancellationToken ct)
         {
             var userId = GetUserId();
             if (submission == null ||
                 string.IsNullOrWhiteSpace(userId) ||
                 (string.IsNullOrWhiteSpace(submission.MatterId) && string.IsNullOrWhiteSpace(submission.Id)))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             try
             {
-                await _outcomeFeePlanner.TryProcessTriggerAsync(new OutcomeFeePlanTriggerRequest
-                {
-                    MatterId = submission.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(EfilingSubmission),
-                    TriggerEntityId = submission.Id,
-                    SourceStatus = submission.Status
-                }, userId, ct);
+                _workflowTriggerDispatcher.TryEnqueue(
+                    userId,
+                    new OutcomeFeePlanTriggerRequest
+                    {
+                        MatterId = submission.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(EfilingSubmission),
+                        TriggerEntityId = submission.Id,
+                        SourceStatus = submission.Status
+                    },
+                    new ClientTransparencyTriggerRequest
+                    {
+                        MatterId = submission.MatterId,
+                        TriggerType = triggerType,
+                        TriggerEntityType = nameof(EfilingSubmission),
+                        TriggerEntityId = submission.Id
+                    });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Outcome-to-Fee planner trigger failed for e-filing submission {SubmissionId}", submission.Id);
+                _logger.LogWarning(ex, "Workflow trigger enqueue failed for e-filing submission {SubmissionId}", submission.Id);
             }
 
-            try
-            {
-                await _clientTransparencyService.TryProcessTriggerAsync(new ClientTransparencyTriggerRequest
-                {
-                    MatterId = submission.MatterId,
-                    TriggerType = triggerType,
-                    TriggerEntityType = nameof(EfilingSubmission),
-                    TriggerEntityId = submission.Id
-                }, userId, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Client transparency trigger failed for e-filing submission {SubmissionId}", submission.Id);
-            }
+            return Task.CompletedTask;
         }
 
         private string? GetUserId()

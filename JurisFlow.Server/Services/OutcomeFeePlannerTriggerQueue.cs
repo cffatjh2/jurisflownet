@@ -6,7 +6,8 @@ namespace JurisFlow.Server.Services
         string TenantId,
         string TenantSlug,
         string UserId,
-        OutcomeFeePlanTriggerRequest Request);
+        OutcomeFeePlanTriggerRequest? PlannerRequest,
+        ClientTransparencyTriggerRequest? TransparencyRequest = null);
 
     public sealed class OutcomeFeePlannerTriggerQueue
     {
@@ -47,14 +48,23 @@ namespace JurisFlow.Server.Services
         {
             await foreach (var job in _queue.DequeueAllAsync(stoppingToken))
             {
+                if (string.IsNullOrWhiteSpace(job.TenantId))
+                {
+                    _logger.LogWarning("Workflow trigger queue skipped a job because tenant context was empty.");
+                    continue;
+                }
+
                 try
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
-                    tenantContext.Set(job.TenantId, job.TenantSlug);
+                    if (job.PlannerRequest != null)
+                    {
+                        await ProcessPlannerAsync(job, stoppingToken);
+                    }
 
-                    var planner = scope.ServiceProvider.GetRequiredService<OutcomeFeePlannerService>();
-                    await planner.TryProcessTriggerAsync(job.Request, job.UserId, stoppingToken);
+                    if (job.TransparencyRequest != null)
+                    {
+                        await ProcessTransparencyAsync(job, stoppingToken);
+                    }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -64,12 +74,32 @@ namespace JurisFlow.Server.Services
                 {
                     _logger.LogWarning(
                         ex,
-                        "Outcome fee planner trigger failed in background. MatterId={MatterId} TriggerType={TriggerType} EntityId={EntityId}",
-                        job.Request.MatterId,
-                        job.Request.TriggerType,
-                        job.Request.TriggerEntityId);
+                        "Workflow trigger failed in background. MatterId={MatterId} TriggerType={TriggerType} EntityId={EntityId}",
+                        job.PlannerRequest?.MatterId ?? job.TransparencyRequest?.MatterId,
+                        job.PlannerRequest?.TriggerType ?? job.TransparencyRequest?.TriggerType,
+                        job.PlannerRequest?.TriggerEntityId ?? job.TransparencyRequest?.TriggerEntityId);
                 }
             }
+        }
+
+        private async Task ProcessPlannerAsync(OutcomeFeePlannerTriggerJob job, CancellationToken stoppingToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+            tenantContext.Set(job.TenantId, job.TenantSlug);
+
+            var planner = scope.ServiceProvider.GetRequiredService<OutcomeFeePlannerService>();
+            await planner.TryProcessTriggerAsync(job.PlannerRequest!, job.UserId, stoppingToken);
+        }
+
+        private async Task ProcessTransparencyAsync(OutcomeFeePlannerTriggerJob job, CancellationToken stoppingToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+            tenantContext.Set(job.TenantId, job.TenantSlug);
+
+            var transparencyService = scope.ServiceProvider.GetRequiredService<ClientTransparencyService>();
+            await transparencyService.TryProcessTriggerAsync(job.TransparencyRequest!, job.UserId, stoppingToken);
         }
     }
 }

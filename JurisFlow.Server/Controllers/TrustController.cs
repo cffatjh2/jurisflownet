@@ -17,21 +17,22 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly BillingPeriodLockService _billingPeriodLockService;
         private readonly FirmStructureService _firmStructure;
         private readonly TrustComplianceService _trustComplianceService;
 
-        public TrustController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure, TrustComplianceService trustComplianceService)
+        public TrustController(
+            JurisFlowDbContext context,
+            AuditLogger auditLogger,
+            BillingPeriodLockService billingPeriodLockService,
+            FirmStructureService firmStructure,
+            TrustComplianceService trustComplianceService)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _billingPeriodLockService = billingPeriodLockService;
             _firmStructure = firmStructure;
             _trustComplianceService = trustComplianceService;
-        }
-
-        private async Task<bool> IsPeriodLocked(DateTime date)
-        {
-            var key = date.ToString("yyyy-MM-dd");
-            return await _context.BillingLocks.AnyAsync(b => string.Compare(key, b.PeriodStart) >= 0 && string.Compare(key, b.PeriodEnd) <= 0);
         }
 
         private string? GetUserId()
@@ -262,7 +263,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest("Trust account is not active.");
             }
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest("Billing period is locked. Cannot post deposit.");
             }
@@ -362,7 +363,7 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest("Trust account is not active.");
             }
             
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest("Billing period is locked. Cannot post withdrawal.");
             }
@@ -425,7 +426,7 @@ namespace JurisFlow.Server.Controllers
         {
             if (!IsApprover()) return Forbid();
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest("Billing period is locked. Cannot approve transaction.");
             }
@@ -504,7 +505,7 @@ namespace JurisFlow.Server.Controllers
         {
             if (!IsApprover()) return Forbid();
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest("Billing period is locked. Cannot void transaction.");
             }
@@ -582,7 +583,7 @@ namespace JurisFlow.Server.Controllers
             var account = await _context.TrustBankAccounts.FindAsync(request.TrustAccountId);
             if (account == null) return NotFound("Trust account not found");
 
-            if (await IsPeriodLocked(DateTime.UtcNow))
+            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
                 return BadRequest("Billing period is locked. Cannot reconcile in locked period.");
             }
