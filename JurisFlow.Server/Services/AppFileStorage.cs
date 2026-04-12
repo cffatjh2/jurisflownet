@@ -30,6 +30,7 @@ namespace JurisFlow.Server.Services
         private readonly string? _supabaseBucket;
         private readonly SemaphoreSlim _bucketLock = new(1, 1);
         private bool _bucketEnsured;
+        private volatile bool _supabaseFallbackToLocal;
 
         public AppFileStorage(
             IConfiguration configuration,
@@ -99,99 +100,109 @@ namespace JurisFlow.Server.Services
         public async Task SaveBytesAsync(string relativePath, byte[] content, string? contentType = null, CancellationToken cancellationToken = default)
         {
             var normalizedPath = NormalizeRelativePath(relativePath);
-            if (string.Equals(_provider, LocalProvider, StringComparison.OrdinalIgnoreCase))
+            if (ShouldUseLocalStorage())
             {
-                var fullPath = ResolveLocalFullPath(normalizedPath);
-                var directory = Path.GetDirectoryName(fullPath);
-                if (!string.IsNullOrWhiteSpace(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                await File.WriteAllBytesAsync(fullPath, content, cancellationToken);
+                await SaveBytesLocallyAsync(normalizedPath, content, cancellationToken);
                 return;
             }
 
-            await EnsureSupabaseBucketAsync(cancellationToken);
+            try
+            {
+                await EnsureSupabaseBucketAsync(cancellationToken);
 
-            var client = CreateSupabaseClient();
-            var exists = await ExistsInSupabaseAsync(normalizedPath, cancellationToken);
-            var method = exists ? HttpMethod.Put : HttpMethod.Post;
+                var client = CreateSupabaseClient();
+                var exists = await ExistsInSupabaseAsync(normalizedPath, cancellationToken);
+                var method = exists ? HttpMethod.Put : HttpMethod.Post;
 
-            using var request = CreateSupabaseRequest(method, BuildObjectRoute("object", normalizedPath));
-            request.Content = BuildBinaryContent(content, contentType);
+                using var request = CreateSupabaseRequest(method, BuildObjectRoute("object", normalizedPath));
+                request.Content = BuildBinaryContent(content, contentType);
 
-            using var response = await client.SendAsync(request, cancellationToken);
-            await EnsureSuccessAsync(response, $"store object '{normalizedPath}' in Supabase");
+                using var response = await client.SendAsync(request, cancellationToken);
+                await EnsureSuccessAsync(response, $"store object '{normalizedPath}' in Supabase");
+            }
+            catch (Exception ex) when (TryActivateLocalFallback(ex, "save", normalizedPath))
+            {
+                await SaveBytesLocallyAsync(normalizedPath, content, cancellationToken);
+            }
         }
 
         public async Task<byte[]> ReadBytesAsync(string relativePath, CancellationToken cancellationToken = default)
         {
             var normalizedPath = NormalizeRelativePath(relativePath);
-            if (string.Equals(_provider, LocalProvider, StringComparison.OrdinalIgnoreCase))
+            if (ShouldUseLocalStorage())
             {
-                var fullPath = ResolveLocalFullPath(normalizedPath);
-                if (!File.Exists(fullPath))
+                return await ReadBytesLocallyAsync(normalizedPath, cancellationToken);
+            }
+
+            try
+            {
+                await EnsureSupabaseBucketAsync(cancellationToken);
+
+                var client = CreateSupabaseClient();
+                using var request = CreateSupabaseRequest(HttpMethod.Get, BuildObjectRoute("object/authenticated", normalizedPath));
+                using var response = await client.SendAsync(request, cancellationToken);
+
+                if (response.StatusCode == HttpStatusCode.NotFound)
                 {
                     throw new FileNotFoundException("File not found.", normalizedPath);
                 }
 
-                return await File.ReadAllBytesAsync(fullPath, cancellationToken);
+                await EnsureSuccessAsync(response, $"read object '{normalizedPath}' from Supabase");
+                return await response.Content.ReadAsByteArrayAsync(cancellationToken);
             }
-
-            await EnsureSupabaseBucketAsync(cancellationToken);
-
-            var client = CreateSupabaseClient();
-            using var request = CreateSupabaseRequest(HttpMethod.Get, BuildObjectRoute("object/authenticated", normalizedPath));
-            using var response = await client.SendAsync(request, cancellationToken);
-
-            if (response.StatusCode == HttpStatusCode.NotFound)
+            catch (Exception ex) when (TryActivateLocalFallback(ex, "read", normalizedPath))
             {
-                throw new FileNotFoundException("File not found.", normalizedPath);
+                return await ReadBytesLocallyAsync(normalizedPath, cancellationToken);
             }
-
-            await EnsureSuccessAsync(response, $"read object '{normalizedPath}' from Supabase");
-            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
         }
 
         public async Task<bool> ExistsAsync(string relativePath, CancellationToken cancellationToken = default)
         {
             var normalizedPath = NormalizeRelativePath(relativePath);
-            if (string.Equals(_provider, LocalProvider, StringComparison.OrdinalIgnoreCase))
+            if (ShouldUseLocalStorage())
             {
-                return File.Exists(ResolveLocalFullPath(normalizedPath));
+                return ExistsLocally(normalizedPath);
             }
 
-            await EnsureSupabaseBucketAsync(cancellationToken);
-            return await ExistsInSupabaseAsync(normalizedPath, cancellationToken);
+            try
+            {
+                await EnsureSupabaseBucketAsync(cancellationToken);
+                return await ExistsInSupabaseAsync(normalizedPath, cancellationToken);
+            }
+            catch (Exception ex) when (TryActivateLocalFallback(ex, "exists", normalizedPath))
+            {
+                return ExistsLocally(normalizedPath);
+            }
         }
 
         public async Task DeleteIfExistsAsync(string relativePath, CancellationToken cancellationToken = default)
         {
             var normalizedPath = NormalizeRelativePath(relativePath);
-            if (string.Equals(_provider, LocalProvider, StringComparison.OrdinalIgnoreCase))
+            if (ShouldUseLocalStorage())
             {
-                var fullPath = ResolveLocalFullPath(normalizedPath);
-                if (File.Exists(fullPath))
+                DeleteIfExistsLocally(normalizedPath);
+                return;
+            }
+
+            try
+            {
+                await EnsureSupabaseBucketAsync(cancellationToken);
+
+                var client = CreateSupabaseClient();
+                using var request = CreateSupabaseRequest(HttpMethod.Delete, BuildObjectRoute("object", normalizedPath));
+                using var response = await client.SendAsync(request, cancellationToken);
+
+                if (response.StatusCode == HttpStatusCode.NotFound)
                 {
-                    File.Delete(fullPath);
+                    return;
                 }
 
-                return;
+                await EnsureSuccessAsync(response, $"delete object '{normalizedPath}' from Supabase");
             }
-
-            await EnsureSupabaseBucketAsync(cancellationToken);
-
-            var client = CreateSupabaseClient();
-            using var request = CreateSupabaseRequest(HttpMethod.Delete, BuildObjectRoute("object", normalizedPath));
-            using var response = await client.SendAsync(request, cancellationToken);
-
-            if (response.StatusCode == HttpStatusCode.NotFound)
+            catch (Exception ex) when (TryActivateLocalFallback(ex, "delete", normalizedPath))
             {
-                return;
+                DeleteIfExistsLocally(normalizedPath);
             }
-
-            await EnsureSuccessAsync(response, $"delete object '{normalizedPath}' from Supabase");
         }
 
         public async Task CopyAsync(string sourceRelativePath, string destinationRelativePath, string? contentType = null, CancellationToken cancellationToken = default)
@@ -215,6 +226,48 @@ namespace JurisFlow.Server.Services
             }
 
             return fullPath;
+        }
+
+        private bool ShouldUseLocalStorage()
+        {
+            return string.Equals(_provider, LocalProvider, StringComparison.OrdinalIgnoreCase) || _supabaseFallbackToLocal;
+        }
+
+        private async Task SaveBytesLocallyAsync(string normalizedPath, byte[] content, CancellationToken cancellationToken)
+        {
+            var fullPath = ResolveLocalFullPath(normalizedPath);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            await File.WriteAllBytesAsync(fullPath, content, cancellationToken);
+        }
+
+        private async Task<byte[]> ReadBytesLocallyAsync(string normalizedPath, CancellationToken cancellationToken)
+        {
+            var fullPath = ResolveLocalFullPath(normalizedPath);
+            if (!File.Exists(fullPath))
+            {
+                throw new FileNotFoundException("File not found.", normalizedPath);
+            }
+
+            return await File.ReadAllBytesAsync(fullPath, cancellationToken);
+        }
+
+        private bool ExistsLocally(string normalizedPath)
+        {
+            return File.Exists(ResolveLocalFullPath(normalizedPath));
+        }
+
+        private void DeleteIfExistsLocally(string normalizedPath)
+        {
+            var fullPath = ResolveLocalFullPath(normalizedPath);
+            if (File.Exists(fullPath))
+            {
+                File.Delete(fullPath);
+            }
         }
 
         private async Task<bool> ExistsInSupabaseAsync(string normalizedPath, CancellationToken cancellationToken)
@@ -283,6 +336,26 @@ namespace JurisFlow.Server.Services
             {
                 _bucketLock.Release();
             }
+        }
+
+        private bool TryActivateLocalFallback(Exception ex, string operation, string normalizedPath)
+        {
+            if (!ShouldFallbackToLocal(ex))
+            {
+                return false;
+            }
+
+            if (!_supabaseFallbackToLocal)
+            {
+                _supabaseFallbackToLocal = true;
+                _logger.LogWarning(
+                    ex,
+                    "Supabase storage authorization failed during {Operation} for {Path}. Falling back to local file storage until the app restarts. Verify Storage__Supabase__ServiceRoleKey is a real service_role key.",
+                    operation,
+                    normalizedPath);
+            }
+
+            return true;
         }
 
         private HttpClient CreateSupabaseClient()
@@ -359,6 +432,24 @@ namespace JurisFlow.Server.Services
 
             return body.Contains("already exists", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ShouldFallbackToLocal(Exception ex)
+        {
+            var message = ex.Message ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return false;
+            }
+
+            return message.Contains("status 401", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("status 403", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("forbidden", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("row-level security", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("violates row-level security policy", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("invalid apikey", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("invalid jwt", StringComparison.OrdinalIgnoreCase);
         }
 
         private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation, string? body = null)
