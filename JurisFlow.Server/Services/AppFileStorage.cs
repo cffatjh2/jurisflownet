@@ -250,8 +250,9 @@ namespace JurisFlow.Server.Services
                 var client = CreateSupabaseClient();
                 using var getRequest = CreateSupabaseRequest(HttpMethod.Get, $"storage/v1/bucket/{Uri.EscapeDataString(_supabaseBucket!)}");
                 using var getResponse = await client.SendAsync(getRequest, cancellationToken);
+                var getBody = await ReadResponseBodyAsync(getResponse);
 
-                if (getResponse.StatusCode == HttpStatusCode.NotFound)
+                if (IsSupabaseBucketMissingResponse(getResponse.StatusCode, getBody))
                 {
                     using var createRequest = CreateSupabaseRequest(HttpMethod.Post, "storage/v1/bucket");
                     createRequest.Content = new StringContent(
@@ -260,12 +261,20 @@ namespace JurisFlow.Server.Services
                         "application/json");
 
                     using var createResponse = await client.SendAsync(createRequest, cancellationToken);
-                    await EnsureSuccessAsync(createResponse, $"create Supabase storage bucket '{_supabaseBucket}'");
-                    _logger.LogInformation("Created Supabase storage bucket {BucketName}.", _supabaseBucket);
+                    var createBody = await ReadResponseBodyAsync(createResponse);
+                    if (IsSupabaseBucketAlreadyExistsResponse(createResponse.StatusCode, createBody))
+                    {
+                        _logger.LogInformation("Supabase storage bucket {BucketName} already exists.", _supabaseBucket);
+                    }
+                    else
+                    {
+                        await EnsureSuccessAsync(createResponse, $"create Supabase storage bucket '{_supabaseBucket}'", createBody);
+                        _logger.LogInformation("Created Supabase storage bucket {BucketName}.", _supabaseBucket);
+                    }
                 }
                 else
                 {
-                    await EnsureSuccessAsync(getResponse, $"load Supabase storage bucket '{_supabaseBucket}'");
+                    await EnsureSuccessAsync(getResponse, $"load Supabase storage bucket '{_supabaseBucket}'", getBody);
                 }
 
                 _bucketEnsured = true;
@@ -322,16 +331,44 @@ namespace JurisFlow.Server.Services
             return body;
         }
 
-        private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation)
+        private static async Task<string> ReadResponseBodyAsync(HttpResponseMessage response)
+        {
+            return response.Content == null
+                ? string.Empty
+                : await response.Content.ReadAsStringAsync();
+        }
+
+        private static bool IsSupabaseBucketMissingResponse(HttpStatusCode statusCode, string body)
+        {
+            if (statusCode == HttpStatusCode.NotFound)
+            {
+                return true;
+            }
+
+            return body.Contains("bucket not found", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"statusCode\":\"404\"", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"statusCode\":404", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSupabaseBucketAlreadyExistsResponse(HttpStatusCode statusCode, string body)
+        {
+            if (statusCode == HttpStatusCode.Conflict)
+            {
+                return true;
+            }
+
+            return body.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation, string? body = null)
         {
             if (response.IsSuccessStatusCode)
             {
                 return;
             }
 
-            var body = response.Content == null
-                ? string.Empty
-                : await response.Content.ReadAsStringAsync();
+            body ??= await ReadResponseBodyAsync(response);
             var message = string.IsNullOrWhiteSpace(body)
                 ? $"{operation} failed with status {(int)response.StatusCode} ({response.ReasonPhrase})."
                 : $"{operation} failed with status {(int)response.StatusCode} ({response.ReasonPhrase}): {body}";
