@@ -6,6 +6,7 @@ using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
@@ -572,6 +573,25 @@ namespace JurisFlow.Server.Controllers
                         return false;
                     }
                     break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(field.ValidationPattern))
+            {
+                try
+                {
+                    if (!Regex.IsMatch(text, field.ValidationPattern))
+                    {
+                        error = !string.IsNullOrWhiteSpace(field.ValidationMessage)
+                            ? field.ValidationMessage
+                            : $"The field '{label}' has an invalid format.";
+                        return false;
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    error = "This intake form is misconfigured. Please contact the firm.";
+                    return false;
+                }
             }
 
             return true;

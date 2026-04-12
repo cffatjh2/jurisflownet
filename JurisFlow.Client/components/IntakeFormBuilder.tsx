@@ -26,6 +26,9 @@ interface IntakeForm {
     description?: string;
     practiceArea?: string;
     fieldsJson: string;
+    thankYouMessage?: string;
+    redirectUrl?: string;
+    notifyEmail?: string;
     slug: string;
     isActive: boolean;
     isPublic: boolean;
@@ -40,7 +43,11 @@ interface IntakeFormField {
     type: string;
     required: boolean;
     placeholder?: string;
+    helpText?: string;
     options?: string;
+    defaultValue?: string;
+    validationPattern?: string;
+    validationMessage?: string;
     order: number;
 }
 
@@ -157,11 +164,25 @@ const parseFieldOptions = (rawOptions?: string) =>
 const getFieldTypeDefinition = (type: string) =>
     fieldTypes.find(fieldType => fieldType.value === type) || fieldTypes[0];
 
+const supportsChoiceOptions = (type: string) => ['select', 'radio'].includes(type);
+
+const supportsPatternValidation = (type: string) => ['text', 'email', 'phone', 'textarea'].includes(type);
+
+const isCheckboxDefaultEnabled = (value?: string) => (value || '').trim().toLowerCase() === 'true';
+
+const getPreviewSelectValue = (field: IntakeFormField, options: string[]) => {
+    const normalizedDefault = (field.defaultValue || '').trim();
+    return options.includes(normalizedDefault) ? normalizedDefault : '';
+};
+
 export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFormBuilderProps) {
     const [form, setForm] = useState<Partial<IntakeForm>>({
         name: '',
         description: '',
         practiceArea: '',
+        thankYouMessage: 'Thank you for your submission. We will contact you shortly.',
+        redirectUrl: '',
+        notifyEmail: '',
         isPublic: true,
         isActive: true
     });
@@ -221,6 +242,25 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         setEditingField(null);
     };
 
+    const handleEditingFieldTypeChange = (type: string) => {
+        setEditingField(currentField => {
+            if (!currentField) {
+                return currentField;
+            }
+
+            return {
+                ...currentField,
+                type,
+                options: supportsChoiceOptions(type) ? currentField.options : '',
+                validationPattern: supportsPatternValidation(type) ? currentField.validationPattern : '',
+                validationMessage: supportsPatternValidation(type) ? currentField.validationMessage : '',
+                defaultValue: type === 'checkbox'
+                    ? (isCheckboxDefaultEnabled(currentField.defaultValue) ? 'true' : 'false')
+                    : currentField.defaultValue
+            };
+        });
+    };
+
     const loadForm = async () => {
         if (!formId) return;
         setLoading(true);
@@ -253,21 +293,32 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         try {
             const normalizedFields = reindexFields(fields);
             const fieldsJson = JSON.stringify(normalizedFields);
+            const updatePayload = {
+                name: form.name.trim(),
+                description: form.description ?? '',
+                practiceArea: form.practiceArea ?? '',
+                fieldsJson,
+                thankYouMessage: form.thankYouMessage?.trim() || '',
+                redirectUrl: form.redirectUrl?.trim() || '',
+                notifyEmail: form.notifyEmail?.trim() || '',
+                isPublic: Boolean(form.isPublic),
+                isActive: Boolean(form.isActive)
+            };
 
             if (formId) {
-                const updated = await api.intake.forms.update(formId, {
-                    ...form,
-                    fieldsJson
-                });
+                const updated = await api.intake.forms.update(formId, updatePayload);
                 onSave?.(updated);
             } else {
                 const created = await api.intake.forms.create({
-                    name: form.name.trim(),
-                    description: form.description,
-                    practiceArea: form.practiceArea,
+                    name: updatePayload.name,
+                    description: form.description?.trim() || undefined,
+                    practiceArea: form.practiceArea?.trim() || undefined,
                     fieldsJson,
-                    isPublic: form.isPublic,
-                    isActive: form.isActive
+                    thankYouMessage: form.thankYouMessage?.trim() || undefined,
+                    redirectUrl: form.redirectUrl?.trim() || undefined,
+                    notifyEmail: form.notifyEmail?.trim() || undefined,
+                    isPublic: updatePayload.isPublic,
+                    isActive: updatePayload.isActive
                 });
                 onSave?.(created);
             }
@@ -307,6 +358,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
             type,
             required: false,
             placeholder: '',
+            helpText: '',
             order: fields.length
         };
 
@@ -321,7 +373,13 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
         const normalizedField: IntakeFormField = {
             ...updatedField,
             label: updatedField.label.trim() || 'Untitled Field',
-            name: buildUniqueFieldName(updatedField.name || updatedField.label || updatedField.type, updatedField.id)
+            name: buildUniqueFieldName(updatedField.name || updatedField.label || updatedField.type, updatedField.id),
+            placeholder: updatedField.placeholder || '',
+            helpText: updatedField.helpText?.trim() || '',
+            options: supportsChoiceOptions(updatedField.type) ? updatedField.options || '' : '',
+            defaultValue: updatedField.defaultValue ?? '',
+            validationPattern: supportsPatternValidation(updatedField.type) ? updatedField.validationPattern?.trim() || '' : '',
+            validationMessage: supportsPatternValidation(updatedField.type) ? updatedField.validationMessage?.trim() || '' : ''
         };
 
         setFields(currentFields => reindexFields(
@@ -413,6 +471,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     const renderPreviewField = (field: IntakeFormField) => {
         const baseInputClass = 'w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm';
         const options = parseFieldOptions(field.options);
+        const previewDefaultValue = field.defaultValue || '';
 
         switch (field.type) {
             case 'textarea':
@@ -420,16 +479,17 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                     <textarea
                         readOnly
                         rows={4}
+                        value={previewDefaultValue}
                         placeholder={field.placeholder || 'Type your answer here'}
                         className={baseInputClass}
                     />
                 );
             case 'select':
                 return (
-                    <select disabled className={baseInputClass}>
-                        <option>{field.placeholder || 'Select an option'}</option>
+                    <select disabled value={getPreviewSelectValue(field, options)} className={baseInputClass}>
+                        <option value="">{field.placeholder || 'Select an option'}</option>
                         {options.map(option => (
-                            <option key={option}>{option}</option>
+                            <option key={option} value={option}>{option}</option>
                         ))}
                     </select>
                 );
@@ -438,7 +498,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                         {(options.length > 0 ? options : ['Option 1', 'Option 2']).map(option => (
                             <label key={option} className="flex items-center gap-3 text-sm text-slate-700">
-                                <span className="h-4 w-4 rounded-full border border-slate-300 bg-white" />
+                                <span className={`h-4 w-4 rounded-full border ${previewDefaultValue === option ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_white]' : 'border-slate-300 bg-white'}`} />
                                 {option}
                             </label>
                         ))}
@@ -447,12 +507,12 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
             case 'checkbox':
                 return (
                     <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                        <span className="h-4 w-4 rounded border border-slate-300 bg-white" />
+                        <span className={`h-4 w-4 rounded border ${isCheckboxDefaultEnabled(field.defaultValue) ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_2px_white]' : 'border-slate-300 bg-white'}`} />
                         {field.placeholder || 'Yes, I understand'}
                     </label>
                 );
             case 'date':
-                return <input readOnly type="text" value="" placeholder="MM/DD/YYYY" className={baseInputClass} />;
+                return <input readOnly type="text" value={previewDefaultValue} placeholder="MM/DD/YYYY" className={baseInputClass} />;
             case 'file':
                 return (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -464,7 +524,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                     <input
                         readOnly
                         type="text"
-                        value=""
+                        value={previewDefaultValue}
                         placeholder={field.placeholder || `Enter ${field.label.toLowerCase()}`}
                         className={baseInputClass}
                     />
@@ -481,6 +541,9 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     }
 
     const requiredFieldCount = fields.filter(field => field.required).length;
+    const shareUrl = form.slug
+        ? `${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/intake/${form.slug}`
+        : '';
 
     return (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -566,55 +629,132 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     </select>
                                 </div>
 
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 transition hover:border-blue-200 hover:bg-blue-50/40">
-                                        <input
-                                            type="checkbox"
-                                            checked={Boolean(form.isPublic)}
-                                            onChange={(event) => setForm({ ...form, isPublic: event.target.checked })}
-                                            className="mt-1 rounded border-slate-300"
-                                        />
-                                        <span>
-                                            <span className="block font-medium text-slate-900">Public form</span>
-                                            <span className="mt-1 block text-xs text-slate-500">Clients can submit it from the public link.</span>
-                                        </span>
-                                    </label>
+                                <div className="md:col-span-2 grid gap-4 lg:grid-cols-2">
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Visibility</p>
+                                        <div className="mt-3 grid grid-cols-2 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setForm({ ...form, isPublic: true })}
+                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                    form.isPublic
+                                                        ? 'bg-blue-600 text-white shadow-sm'
+                                                        : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+                                                }`}
+                                            >
+                                                Public
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setForm({ ...form, isPublic: false })}
+                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                    !form.isPublic
+                                                        ? 'bg-slate-900 text-white shadow-sm'
+                                                        : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+                                                }`}
+                                            >
+                                                Private
+                                            </button>
+                                        </div>
+                                        <p className="mt-3 text-xs leading-5 text-slate-500">
+                                            {form.isPublic
+                                                ? 'Public forms can accept client submissions from the share link.'
+                                                : 'Private forms stay hidden until you are ready to expose them.'}
+                                        </p>
+                                    </div>
 
-                                    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 transition hover:border-blue-200 hover:bg-blue-50/40">
-                                        <input
-                                            type="checkbox"
-                                            checked={Boolean(form.isActive)}
-                                            onChange={(event) => setForm({ ...form, isActive: event.target.checked })}
-                                            className="mt-1 rounded border-slate-300"
-                                        />
-                                        <span>
-                                            <span className="block font-medium text-slate-900">Active form</span>
-                                            <span className="mt-1 block text-xs text-slate-500">Draft forms stay hidden from public traffic.</span>
-                                        </span>
-                                    </label>
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Status</p>
+                                        <div className="mt-3 grid grid-cols-2 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setForm({ ...form, isActive: true })}
+                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                    form.isActive
+                                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                                        : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+                                                }`}
+                                            >
+                                                Active
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setForm({ ...form, isActive: false })}
+                                                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                                                    !form.isActive
+                                                        ? 'bg-slate-900 text-white shadow-sm'
+                                                        : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+                                                }`}
+                                            >
+                                                Draft
+                                            </button>
+                                        </div>
+                                        <p className="mt-3 text-xs leading-5 text-slate-500">
+                                            {form.isActive
+                                                ? 'Active forms can be reached by visitors once they are public.'
+                                                : 'Draft forms remain unavailable to public traffic even if a link exists.'}
+                                        </p>
+                                    </div>
                                 </div>
-                            </div>
 
-                            {form.slug && (
-                                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white">
-                                    <div className="flex items-center justify-between gap-3">
+                                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Submission Follow-up</p>
+                                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                                        <div className="lg:col-span-2">
+                                            <label className="mb-1.5 block text-sm font-medium text-slate-700">Thank You Message</label>
+                                            <textarea
+                                                value={form.thankYouMessage || ''}
+                                                onChange={(event) => setForm({ ...form, thankYouMessage: event.target.value })}
+                                                placeholder="Shown immediately after a successful submission."
+                                                rows={3}
+                                                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-1.5 block text-sm font-medium text-slate-700">Redirect URL</label>
+                                            <input
+                                                type="url"
+                                                value={form.redirectUrl || ''}
+                                                onChange={(event) => setForm({ ...form, redirectUrl: event.target.value })}
+                                                placeholder="https://yourfirm.com/thank-you"
+                                                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-1.5 block text-sm font-medium text-slate-700">Notify Email</label>
+                                            <input
+                                                type="email"
+                                                value={form.notifyEmail || ''}
+                                                onChange={(event) => setForm({ ...form, notifyEmail: event.target.value })}
+                                                placeholder="intake@yourfirm.com"
+                                                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white">
+                                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="min-w-0">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">Public URL</p>
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">Share Link</p>
                                             <code className="mt-2 block truncate text-sm text-white/90">
-                                                /intake/{form.slug}
+                                                {shareUrl || 'Save the form once to generate a shareable link.'}
                                             </code>
                                         </div>
                                         <button
                                             type="button"
                                             onClick={handleCopyLink}
-                                            className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15"
+                                            disabled={!form.slug}
+                                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             <Copy className="w-4 h-4" />
-                                            Copy
+                                            Copy Link
                                         </button>
                                     </div>
                                 </div>
-                            )}
+                            </div>
                         </section>
 
                         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -755,6 +895,23 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                                         {field.placeholder ? ` • ${field.placeholder}` : ''}
                                                                         {optionCount > 0 ? ` • ${optionCount} options` : ''}
                                                                     </p>
+                                                                    <div className="mt-2 flex flex-wrap gap-2">
+                                                                        {field.helpText && (
+                                                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                                                                                Help text
+                                                                            </span>
+                                                                        )}
+                                                                        {field.defaultValue && (
+                                                                            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
+                                                                                Default value
+                                                                            </span>
+                                                                        )}
+                                                                        {field.validationPattern && (
+                                                                            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                                                                                Regex rule
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
                                                                 </div>
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     <button
@@ -861,6 +1018,14 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                                         {field.required && <span className="ml-1 text-rose-500">*</span>}
                                                     </label>
                                                     {renderPreviewField(field)}
+                                                    {field.helpText && (
+                                                        <p className="mt-2 text-xs leading-5 text-slate-500">{field.helpText}</p>
+                                                    )}
+                                                    {field.validationPattern && (
+                                                        <p className="mt-2 text-xs font-medium text-amber-700">
+                                                            Pattern validation is enabled{field.validationMessage ? `: ${field.validationMessage}` : '.'}
+                                                        </p>
+                                                    )}
                                                 </div>
                                             ))
                                         )}
@@ -873,6 +1038,26 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                         >
                                             Submit Form
                                         </button>
+                                        <div className="mt-4 space-y-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600">
+                                            <div>
+                                                <p className="font-semibold uppercase tracking-[0.16em] text-slate-500">Thank You</p>
+                                                <p className="mt-1 leading-5">
+                                                    {form.thankYouMessage?.trim() || 'Default thank-you copy will be shown after submission.'}
+                                                </p>
+                                            </div>
+                                            {form.redirectUrl?.trim() && (
+                                                <div>
+                                                    <p className="font-semibold uppercase tracking-[0.16em] text-slate-500">Redirect</p>
+                                                    <p className="mt-1 truncate">{form.redirectUrl}</p>
+                                                </div>
+                                            )}
+                                            {form.notifyEmail?.trim() && (
+                                                <div>
+                                                    <p className="font-semibold uppercase tracking-[0.16em] text-slate-500">Notifications</p>
+                                                    <p className="mt-1 truncate">{form.notifyEmail}</p>
+                                                </div>
+                                            )}
+                                        </div>
                                         <p className="mt-3 text-center text-xs text-slate-500">
                                             Preview mirrors field order, labels, and required state as you edit.
                                         </p>
@@ -945,7 +1130,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                 <label className="mb-1.5 block text-sm font-medium text-slate-700">Type</label>
                                 <select
                                     value={editingField.type}
-                                    onChange={(event) => setEditingField({ ...editingField, type: event.target.value })}
+                                    onChange={(event) => handleEditingFieldTypeChange(event.target.value)}
                                     className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
                                 >
                                     {fieldTypes.map(type => (
@@ -972,7 +1157,43 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                 />
                             </div>
 
-                            {['select', 'radio'].includes(editingField.type) && (
+                            <div>
+                                <label className="mb-1.5 block text-sm font-medium text-slate-700">Help Text</label>
+                                <textarea
+                                    value={editingField.helpText || ''}
+                                    onChange={(event) => setEditingField({ ...editingField, helpText: event.target.value })}
+                                    rows={2}
+                                    placeholder="Short guidance shown below the field."
+                                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                />
+                            </div>
+
+                            {editingField.type === 'checkbox' ? (
+                                <div>
+                                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Default State</label>
+                                    <select
+                                        value={isCheckboxDefaultEnabled(editingField.defaultValue) ? 'true' : 'false'}
+                                        onChange={(event) => setEditingField({ ...editingField, defaultValue: event.target.value })}
+                                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                    >
+                                        <option value="false">Unchecked</option>
+                                        <option value="true">Checked</option>
+                                    </select>
+                                </div>
+                            ) : editingField.type !== 'file' && (
+                                <div>
+                                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Default Value</label>
+                                    <input
+                                        type="text"
+                                        value={editingField.defaultValue || ''}
+                                        onChange={(event) => setEditingField({ ...editingField, defaultValue: event.target.value })}
+                                        placeholder={supportsChoiceOptions(editingField.type) ? 'Must match one of the available options' : 'Optional pre-filled value'}
+                                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                    />
+                                </div>
+                            )}
+
+                            {supportsChoiceOptions(editingField.type) && (
                                 <div>
                                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Options (one per line)</label>
                                     <textarea
@@ -982,6 +1203,35 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                         className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
                                     />
                                 </div>
+                            )}
+
+                            {supportsPatternValidation(editingField.type) && (
+                                <>
+                                    <div>
+                                        <label className="mb-1.5 block text-sm font-medium text-slate-700">Validation Pattern (Regex)</label>
+                                        <input
+                                            type="text"
+                                            value={editingField.validationPattern || ''}
+                                            onChange={(event) => setEditingField({ ...editingField, validationPattern: event.target.value })}
+                                            placeholder="e.g. ^[0-9]{5}$"
+                                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="mb-1.5 block text-sm font-medium text-slate-700">Validation Message</label>
+                                        <input
+                                            type="text"
+                                            value={editingField.validationMessage || ''}
+                                            onChange={(event) => setEditingField({ ...editingField, validationMessage: event.target.value })}
+                                            placeholder="Shown when the regex rule fails."
+                                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm shadow-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                        />
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Pattern validation runs only when the field has a value.
+                                        </p>
+                                    </div>
+                                </>
                             )}
                         </div>
 

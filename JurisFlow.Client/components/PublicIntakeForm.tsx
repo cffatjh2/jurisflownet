@@ -14,6 +14,8 @@ interface IntakeFormField {
     helpText?: string;
     options?: string;
     defaultValue?: string;
+    validationPattern?: string;
+    validationMessage?: string;
 }
 
 interface IntakeForm {
@@ -28,6 +30,35 @@ interface IntakeForm {
 interface PublicIntakeFormProps {
     slug: string;
 }
+
+const parseFieldOptions = (rawOptions?: string) =>
+    (rawOptions || '')
+        .split('\n')
+        .map(option => option.trim())
+        .filter(Boolean);
+
+const getCheckboxDefaultValue = (value?: string) => (value || '').trim().toLowerCase() === 'true';
+
+const getDefaultFieldValue = (field: IntakeFormField) => {
+    if (!field.defaultValue) {
+        return field.type === 'checkbox' ? false : '';
+    }
+
+    const normalizedDefaultValue = field.defaultValue.trim();
+
+    if (field.type === 'checkbox') {
+        return getCheckboxDefaultValue(normalizedDefaultValue);
+    }
+
+    if (field.type === 'select' || field.type === 'radio') {
+        const options = parseFieldOptions(field.options);
+        return options.includes(normalizedDefaultValue) ? normalizedDefaultValue : '';
+    }
+
+    return normalizedDefaultValue;
+};
+
+const getTrimmedStringValue = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
 
 export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
     const [form, setForm] = useState<IntakeForm | null>(null);
@@ -55,9 +86,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
             // Set default values
             const defaults: Record<string, any> = {};
             parsedFields.forEach((field: IntakeFormField) => {
-                if (field.defaultValue) {
-                    defaults[field.name] = field.defaultValue;
-                }
+                defaults[field.name] = getDefaultFieldValue(field);
             });
             setFormData(defaults);
         } catch (err) {
@@ -82,13 +111,13 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        setError(null);
 
         if (hasUnsupportedFileField) {
             setError('This form includes a file upload field, but file uploads are not available yet. Please contact the firm directly or ask them to update the form.');
             return;
         }
 
-        // Validate required fields
         for (const field of fields) {
             const rawValue = formData[field.name];
             const hasValue = field.type === 'checkbox'
@@ -101,14 +130,29 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                 setError(`Please fill in the required field: ${field.label}`);
                 return;
             }
+
+            const trimmedValue = getTrimmedStringValue(rawValue);
+            if (!trimmedValue || !field.validationPattern) {
+                continue;
+            }
+
+            try {
+                const pattern = new RegExp(field.validationPattern);
+                if (!pattern.test(trimmedValue)) {
+                    setError(field.validationMessage?.trim() || `Please enter a valid value for ${field.label}.`);
+                    return;
+                }
+            } catch {
+                setError('This form contains an invalid validation rule. Please contact the firm.');
+                return;
+            }
         }
 
         setSubmitting(true);
-        setError(null);
 
         try {
             const result = await api.intake.public.submit(slug, JSON.stringify(formData));
-            setThankYouMessage(result.message);
+            setThankYouMessage(result.message || 'Thank you for your submission.');
             setSubmitted(true);
 
             if (result.redirectUrl) {
@@ -140,7 +184,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                 );
 
             case 'select':
-                const selectOptions = field.options?.split('\n').filter(Boolean) || [];
+                const selectOptions = parseFieldOptions(field.options);
                 return (
                     <select
                         value={formData[field.name] || ''}
@@ -156,7 +200,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                 );
 
             case 'radio':
-                const radioOptions = field.options?.split('\n').filter(Boolean) || [];
+                const radioOptions = parseFieldOptions(field.options);
                 return (
                     <div className="space-y-2">
                         {radioOptions.map((opt, i) => (
@@ -181,7 +225,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked={formData[field.name] || false}
+                            checked={Boolean(formData[field.name])}
                             onChange={(e) => handleChange(field.name, e.target.checked)}
                             className="w-5 h-5 rounded text-blue-600"
                         />
