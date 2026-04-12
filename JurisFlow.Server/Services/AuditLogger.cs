@@ -8,22 +8,19 @@ namespace JurisFlow.Server.Services
 {
     public class AuditLogger
     {
-        private readonly JurisFlowDbContext _context;
-        private readonly AuditLogIntegrityService _integrityService;
+        private readonly AuditLogWriteQueue _queue;
         private readonly TenantContext _tenantContext;
         private readonly ILogger<AuditLogger> _logger;
         private readonly bool _failClosed;
 
         public AuditLogger(
-            JurisFlowDbContext context,
-            AuditLogIntegrityService integrityService,
+            AuditLogWriteQueue queue,
             TenantContext tenantContext,
             ILogger<AuditLogger> logger,
             IConfiguration configuration,
             IHostEnvironment hostEnvironment)
         {
-            _context = context;
-            _integrityService = integrityService;
+            _queue = queue;
             _tenantContext = tenantContext;
             _logger = logger;
             _failClosed = configuration.GetValue("Security:AuditLogFailClosed", hostEnvironment.IsProduction());
@@ -53,9 +50,22 @@ namespace JurisFlow.Server.Services
                     CreatedAt = DateTime.UtcNow
                 };
 
-                await _integrityService.PrepareAsync(audit);
-                _context.AuditLogs.Add(audit);
-                await _context.SaveChangesAsync();
+                if (string.IsNullOrWhiteSpace(audit.TenantId))
+                {
+                    throw new InvalidOperationException("Tenant context is required for audit logging.");
+                }
+
+                if (!_queue.TryEnqueue(new AuditLogWriteJob(
+                        audit.TenantId,
+                        _tenantContext.TenantSlug ?? string.Empty,
+                        audit)))
+                {
+                    await _queue.WriteAsync(new AuditLogWriteJob(
+                        audit.TenantId,
+                        _tenantContext.TenantSlug ?? string.Empty,
+                        audit),
+                        httpContext.RequestAborted);
+                }
             }
             catch (Exception ex)
             {

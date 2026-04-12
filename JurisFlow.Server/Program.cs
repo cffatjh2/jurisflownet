@@ -325,6 +325,8 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<IClaimsTransformation, RoleAliasClaimsTransformation>();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
+builder.Services.AddSingleton<AuditLogWriteQueue>();
+builder.Services.AddHostedService<AuditLogWriteHostedService>();
 builder.Services.AddScoped<BillingPeriodLockService>();
 builder.Services.AddScoped<PasswordVerificationService>();
 builder.Services.AddScoped<MatterAccessService>();

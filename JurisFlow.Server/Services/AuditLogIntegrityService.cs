@@ -7,6 +7,8 @@ using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Services
 {
+    public record AuditLogChainState(long Sequence, string? Hash);
+
     public record AuditLogIntegrityResult(
         bool IsValid,
         long CheckedCount,
@@ -56,6 +58,16 @@ namespace JurisFlow.Server.Services
                 return;
             }
 
+            PrepareBatch(new[] { audit }, await GetLatestStateAsync());
+        }
+
+        public async Task<AuditLogChainState> GetLatestStateAsync(CancellationToken ct = default)
+        {
+            if (!IsConfigured)
+            {
+                return new AuditLogChainState(0, null);
+            }
+
             var last = await _context.AuditLogs
                 .AsNoTracking()
                 .OrderByDescending(a => a.Sequence)
@@ -64,12 +76,30 @@ namespace JurisFlow.Server.Services
                     a.Sequence,
                     a.Hash
                 })
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
 
-            audit.Sequence = (last?.Sequence ?? 0) + 1;
-            audit.PreviousHash = last?.Hash;
-            audit.HashAlgorithm = Algorithm;
-            audit.Hash = ComputeHash(audit);
+            return new AuditLogChainState(last?.Sequence ?? 0, last?.Hash);
+        }
+
+        public void PrepareBatch(IEnumerable<AuditLog> audits, AuditLogChainState initialState)
+        {
+            if (!IsConfigured)
+            {
+                return;
+            }
+
+            var sequence = initialState.Sequence;
+            var previousHash = initialState.Hash;
+
+            foreach (var audit in audits)
+            {
+                sequence += 1;
+                audit.Sequence = sequence;
+                audit.PreviousHash = previousHash;
+                audit.HashAlgorithm = Algorithm;
+                audit.Hash = ComputeHash(audit);
+                previousHash = audit.Hash;
+            }
         }
 
         public string ComputeHash(AuditLog audit)
