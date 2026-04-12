@@ -33,6 +33,13 @@ namespace JurisFlow.Server.Controllers
             "date"
         };
 
+        private static readonly HashSet<string> SupportedConditionalSourceFieldTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "select",
+            "radio",
+            "checkbox"
+        };
+
         private static readonly EmailAddressAttribute EmailValidator = new();
 
         private readonly JurisFlowDbContext _context;
@@ -410,13 +417,8 @@ namespace JurisFlow.Server.Controllers
                 }
 
                 var fieldType = (field.Type ?? "text").Trim();
-                if (fieldType.Equals("file", StringComparison.OrdinalIgnoreCase))
-                {
-                    error = "This form contains a file upload field, but file uploads are not available yet. Please contact the firm.";
-                    return false;
-                }
-
-                if (!SupportedPublicFieldTypes.Contains(fieldType))
+                if (!SupportedPublicFieldTypes.Contains(fieldType)
+                    && !fieldType.Equals("file", StringComparison.OrdinalIgnoreCase))
                 {
                     error = "This intake form contains an unsupported field type. Please contact the firm.";
                     return false;
@@ -464,8 +466,22 @@ namespace JurisFlow.Server.Controllers
                 }
             }
 
+            var visibleFieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var field in fieldLookup.Values.OrderBy(f => f.Order))
             {
+                if (!IsFieldVisible(field, fieldLookup, submissionLookup, visibleFieldNames))
+                {
+                    continue;
+                }
+
+                visibleFieldNames.Add(field.Name);
+
+                if (field.Type.Equals("file", StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "This form contains a file upload field, but file uploads are not available yet. Please contact the firm.";
+                    return false;
+                }
+
                 submissionLookup.TryGetValue(field.Name, out var value);
                 var isFieldPresent = submissionLookup.ContainsKey(field.Name)
                     && value.ValueKind != JsonValueKind.Null
@@ -492,6 +508,34 @@ namespace JurisFlow.Server.Controllers
             return true;
         }
 
+        private static bool IsFieldVisible(
+            IntakeFormField field,
+            Dictionary<string, IntakeFormField> fieldLookup,
+            Dictionary<string, JsonElement> submissionLookup,
+            HashSet<string> visibleFieldNames)
+        {
+            var rule = ParseConditionalLogic(field.ConditionalLogic);
+            if (rule == null)
+            {
+                return true;
+            }
+
+            if (!fieldLookup.TryGetValue(rule.SourceField, out var sourceField)
+                || !SupportedConditionalSourceFieldTypes.Contains(sourceField.Type))
+            {
+                return true;
+            }
+
+            if (!visibleFieldNames.Contains(sourceField.Name))
+            {
+                return false;
+            }
+
+            var actualValue = GetConditionalComparisonValue(sourceField, submissionLookup);
+            var expectedValue = NormalizeConditionalRuleValue(sourceField.Type, rule.Value);
+            return string.Equals(actualValue, expectedValue, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool HasRequiredValue(string fieldType, JsonElement value)
         {
             if (value.ValueKind == JsonValueKind.Null || value.ValueKind == JsonValueKind.Undefined)
@@ -510,6 +554,79 @@ namespace JurisFlow.Server.Controllers
             }
 
             return !string.IsNullOrWhiteSpace(value.ToString());
+        }
+
+        private static string GetConditionalComparisonValue(
+            IntakeFormField sourceField,
+            Dictionary<string, JsonElement> submissionLookup)
+        {
+            if (submissionLookup.TryGetValue(sourceField.Name, out var submittedValue)
+                && submittedValue.ValueKind != JsonValueKind.Null
+                && submittedValue.ValueKind != JsonValueKind.Undefined)
+            {
+                if (sourceField.Type.Equals("checkbox", StringComparison.OrdinalIgnoreCase))
+                {
+                    return TryGetBooleanValue(submittedValue, out var booleanValue)
+                        ? booleanValue ? "true" : "false"
+                        : NormalizeConditionalRuleValue(sourceField.Type, submittedValue.ToString());
+                }
+
+                if (submittedValue.ValueKind == JsonValueKind.String)
+                {
+                    return submittedValue.GetString()?.Trim() ?? string.Empty;
+                }
+
+                return submittedValue.ToString().Trim();
+            }
+
+            return NormalizeConditionalRuleValue(sourceField.Type, sourceField.DefaultValue);
+        }
+
+        private static string NormalizeConditionalRuleValue(string fieldType, string? rawValue)
+        {
+            if (fieldType.Equals("checkbox", StringComparison.OrdinalIgnoreCase))
+            {
+                return bool.TryParse(rawValue, out var booleanValue) && booleanValue ? "true" : "false";
+            }
+
+            return rawValue?.Trim() ?? string.Empty;
+        }
+
+        private static IntakeConditionalLogicRule? ParseConditionalLogic(string? rawConditionalLogic)
+        {
+            if (string.IsNullOrWhiteSpace(rawConditionalLogic))
+            {
+                return null;
+            }
+
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<IntakeConditionalLogicRule>(rawConditionalLogic, IntakeJsonOptions);
+                if (parsed == null || string.IsNullOrWhiteSpace(parsed.SourceField))
+                {
+                    return null;
+                }
+
+                var action = string.IsNullOrWhiteSpace(parsed.Action) ? "show" : parsed.Action.Trim();
+                var op = string.IsNullOrWhiteSpace(parsed.Operator) ? "equals" : parsed.Operator.Trim();
+                if (!action.Equals("show", StringComparison.OrdinalIgnoreCase)
+                    || !op.Equals("equals", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                return new IntakeConditionalLogicRule
+                {
+                    Action = "show",
+                    Operator = "equals",
+                    SourceField = parsed.SourceField.Trim(),
+                    Value = parsed.Value?.Trim() ?? string.Empty
+                };
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         private static bool TryValidateFieldValue(IntakeFormField field, JsonElement value, out string error)
@@ -842,5 +959,13 @@ Payload:
     {
         public string Status { get; set; } = "Reviewed";
         public string? Notes { get; set; }
+    }
+
+    public class IntakeConditionalLogicRule
+    {
+        public string Action { get; set; } = "show";
+        public string Operator { get; set; } = "equals";
+        public string SourceField { get; set; } = string.Empty;
+        public string? Value { get; set; }
     }
 }

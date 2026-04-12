@@ -3,6 +3,12 @@
 import { useState, useEffect } from 'react';
 import { FileText, Send, CheckCircle, AlertCircle } from './Icons';
 import { api } from '../services/api';
+import {
+    filterSubmissionValuesByVisibility,
+    getFieldDefaultValue,
+    getVisibleFields,
+    parseFieldOptions
+} from '../utils/intakeConditionalLogic';
 
 interface IntakeFormField {
     id: string;
@@ -16,6 +22,7 @@ interface IntakeFormField {
     defaultValue?: string;
     validationPattern?: string;
     validationMessage?: string;
+    conditionalLogic?: string;
 }
 
 interface IntakeForm {
@@ -31,33 +38,6 @@ interface PublicIntakeFormProps {
     slug: string;
 }
 
-const parseFieldOptions = (rawOptions?: string) =>
-    (rawOptions || '')
-        .split('\n')
-        .map(option => option.trim())
-        .filter(Boolean);
-
-const getCheckboxDefaultValue = (value?: string) => (value || '').trim().toLowerCase() === 'true';
-
-const getDefaultFieldValue = (field: IntakeFormField) => {
-    if (!field.defaultValue) {
-        return field.type === 'checkbox' ? false : '';
-    }
-
-    const normalizedDefaultValue = field.defaultValue.trim();
-
-    if (field.type === 'checkbox') {
-        return getCheckboxDefaultValue(normalizedDefaultValue);
-    }
-
-    if (field.type === 'select' || field.type === 'radio') {
-        const options = parseFieldOptions(field.options);
-        return options.includes(normalizedDefaultValue) ? normalizedDefaultValue : '';
-    }
-
-    return normalizedDefaultValue;
-};
-
 const getTrimmedStringValue = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
 
 export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
@@ -69,7 +49,6 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
     const [submitted, setSubmitted] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [thankYouMessage, setThankYouMessage] = useState('');
-    const hasUnsupportedFileField = fields.some(field => field.type === 'file');
 
     useEffect(() => {
         loadForm();
@@ -86,7 +65,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
             // Set default values
             const defaults: Record<string, any> = {};
             parsedFields.forEach((field: IntakeFormField) => {
-                defaults[field.name] = getDefaultFieldValue(field);
+                defaults[field.name] = getFieldDefaultValue(field);
             });
             setFormData(defaults);
         } catch (err) {
@@ -113,12 +92,16 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
         e.preventDefault();
         setError(null);
 
+        const visibleFields = getVisibleFields(fields, formData);
+        const filteredFormData = filterSubmissionValuesByVisibility(fields, formData);
+        const hasUnsupportedFileField = visibleFields.some(field => field.type === 'file');
+
         if (hasUnsupportedFileField) {
             setError('This form includes a file upload field, but file uploads are not available yet. Please contact the firm directly or ask them to update the form.');
             return;
         }
 
-        for (const field of fields) {
+        for (const field of visibleFields) {
             const rawValue = formData[field.name];
             const hasValue = field.type === 'checkbox'
                 ? rawValue === true
@@ -151,7 +134,7 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
         setSubmitting(true);
 
         try {
-            const result = await api.intake.public.submit(slug, JSON.stringify(formData));
+            const result = await api.intake.public.submit(slug, JSON.stringify(filteredFormData));
             setThankYouMessage(result.message || 'Thank you for your submission.');
             setSubmitted(true);
 
@@ -265,6 +248,9 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
         }
     };
 
+    const visibleFields = getVisibleFields(fields, formData);
+    const hasUnsupportedFileField = visibleFields.some(field => field.type === 'file');
+
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -334,18 +320,24 @@ export default function PublicIntakeForm({ slug }: PublicIntakeFormProps) {
                     )}
 
                     <div className="space-y-6">
-                        {fields.map(field => (
-                            <div key={field.id}>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
-                                    {field.label}
-                                    {field.required && <span className="text-red-500 ml-1">*</span>}
-                                </label>
-                                {renderField(field)}
-                                {field.helpText && (
-                                    <p className="mt-1 text-sm text-slate-500">{field.helpText}</p>
-                                )}
+                        {visibleFields.length === 0 ? (
+                            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-5 text-sm text-violet-700">
+                                This form currently has no visible questions for the selected answers.
                             </div>
-                        ))}
+                        ) : (
+                            visibleFields.map(field => (
+                                <div key={field.id}>
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                                        {field.label}
+                                        {field.required && <span className="text-red-500 ml-1">*</span>}
+                                    </label>
+                                    {renderField(field)}
+                                    {field.helpText && (
+                                        <p className="mt-1 text-sm text-slate-500">{field.helpText}</p>
+                                    )}
+                                </div>
+                            ))
+                        )}
                     </div>
 
                     <button
