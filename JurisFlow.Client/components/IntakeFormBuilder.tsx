@@ -9,12 +9,19 @@ import {
     Copy,
     Edit,
     Eye,
+    ExternalLink,
     File,
     FileText,
+    Globe,
     GripVertical,
+    LayoutGrid,
+    Link2,
     Mail,
     Phone,
     Plus,
+    RefreshCw,
+    Save,
+    Sparkles,
     Trash2
 } from './Icons';
 import { api } from '../services/api';
@@ -70,6 +77,8 @@ interface IntakeFormBuilderProps {
     onCancel?: () => void;
 }
 
+type PreviewViewport = 'desktop' | 'mobile';
+
 type FieldTypeDefinition = {
     value: string;
     label: string;
@@ -77,6 +86,19 @@ type FieldTypeDefinition = {
     icon: ({ className }: { className?: string }) => JSX.Element;
     colorClass: string;
     disabled?: boolean;
+};
+
+type TemplatePresetDefinition = {
+    id: string;
+    name: string;
+    description: string;
+    practiceArea: string;
+    formName: string;
+    formDescription: string;
+    thankYouMessage: string;
+    icon: ({ className }: { className?: string }) => JSX.Element;
+    accentClass: string;
+    fields: Array<Partial<IntakeFormField> & Pick<IntakeFormField, 'name' | 'label' | 'type'>>;
 };
 
 const fieldTypes: FieldTypeDefinition[] = [
@@ -152,6 +174,85 @@ const practiceAreas = [
     'Employment Law', 'General Practice'
 ];
 
+const templatePresets: TemplatePresetDefinition[] = [
+    {
+        id: 'personal-injury',
+        name: 'PI Rapid Screen',
+        description: 'Fast triage for accident, treatment, and representation status.',
+        practiceArea: 'Personal Injury',
+        formName: 'Personal Injury Intake',
+        formDescription: 'Help us understand the accident, the injuries involved, and how quickly your case needs attention.',
+        thankYouMessage: 'Thank you for sharing your injury details. Our intake team will review your case and follow up shortly.',
+        icon: Sparkles,
+        accentClass: 'from-rose-50 via-orange-50 to-white text-rose-700',
+        fields: [
+            { name: 'full_name', label: 'Full Name', type: 'text', required: true, placeholder: 'Jane Doe' },
+            { name: 'email', label: 'Email', type: 'email', required: true, placeholder: 'jane@example.com' },
+            { name: 'phone', label: 'Phone Number', type: 'phone', required: true, placeholder: '(555) 555-5555' },
+            { name: 'incident_date', label: 'Date of Incident', type: 'date', required: true },
+            { name: 'injury_type', label: 'Injury Type', type: 'select', required: true, options: 'Car Accident\nSlip and Fall\nWork Injury\nMedical Malpractice\nOther' },
+            { name: 'treatment_status', label: 'Medical Treatment Status', type: 'radio', required: true, options: 'Already received treatment\nTreatment scheduled\nNo treatment yet' },
+            { name: 'has_attorney', label: 'Do you already have an attorney?', type: 'checkbox', placeholder: 'Yes, I am already represented' },
+            {
+                name: 'attorney_details',
+                label: 'Current Attorney Details',
+                type: 'textarea',
+                helpText: 'Collect the current law firm only if the client is already represented.',
+                conditionalLogic: JSON.stringify({ action: 'show', operator: 'equals', sourceField: 'has_attorney', value: 'true' })
+            },
+            { name: 'incident_summary', label: 'What happened?', type: 'textarea', required: true, placeholder: 'Briefly describe the accident and injuries.' }
+        ]
+    },
+    {
+        id: 'family-law',
+        name: 'Family Law Intake',
+        description: 'Structured screening for custody, divorce, and urgent hearing needs.',
+        practiceArea: 'Family Law',
+        formName: 'Family Law Consultation Request',
+        formDescription: 'Share the core family-law issue, urgency, and family context before we schedule your consultation.',
+        thankYouMessage: 'Your family-law request has been received. We will review the urgency and contact you with next steps.',
+        icon: Globe,
+        accentClass: 'from-blue-50 via-cyan-50 to-white text-blue-700',
+        fields: [
+            { name: 'full_name', label: 'Full Name', type: 'text', required: true, placeholder: 'Jane Doe' },
+            { name: 'email', label: 'Email', type: 'email', required: true, placeholder: 'jane@example.com' },
+            { name: 'phone', label: 'Phone Number', type: 'phone', required: true, placeholder: '(555) 555-5555' },
+            { name: 'matter_type', label: 'Matter Type', type: 'select', required: true, options: 'Divorce\nCustody\nChild Support\nProtective Order\nPrenuptial Agreement' },
+            { name: 'urgent_hearing', label: 'Do you have an urgent hearing or deadline?', type: 'checkbox', placeholder: 'Yes, there is an urgent court date or deadline' },
+            {
+                name: 'hearing_date',
+                label: 'Hearing / Deadline Date',
+                type: 'date',
+                helpText: 'Shown only when the client indicates an urgent hearing or deadline.',
+                conditionalLogic: JSON.stringify({ action: 'show', operator: 'equals', sourceField: 'urgent_hearing', value: 'true' })
+            },
+            { name: 'children_involved', label: 'Are children involved?', type: 'radio', required: true, options: 'Yes\nNo' },
+            { name: 'opposing_party', label: 'Opposing Party Name', type: 'text', placeholder: 'Full name if known' },
+            { name: 'case_summary', label: 'Case Summary', type: 'textarea', required: true, placeholder: 'Tell us what is happening and what outcome you need.' }
+        ]
+    },
+    {
+        id: 'general-consult',
+        name: 'General Consult',
+        description: 'Clean starting point for broad consultation requests and lead routing.',
+        practiceArea: 'General Practice',
+        formName: 'General Consultation Request',
+        formDescription: 'Tell us what you need help with and how you would like our team to follow up.',
+        thankYouMessage: 'Thank you for reaching out. We have your consultation request and will follow up soon.',
+        icon: LayoutGrid,
+        accentClass: 'from-emerald-50 via-teal-50 to-white text-emerald-700',
+        fields: [
+            { name: 'full_name', label: 'Full Name', type: 'text', required: true, placeholder: 'Jane Doe' },
+            { name: 'email', label: 'Email', type: 'email', required: true, placeholder: 'jane@example.com' },
+            { name: 'phone', label: 'Phone Number', type: 'phone', placeholder: '(555) 555-5555' },
+            { name: 'practice_need', label: 'What do you need help with?', type: 'select', required: true, options: 'Personal Injury\nFamily Law\nCriminal Defense\nBusiness Law\nEstate Planning\nGeneral Question' },
+            { name: 'preferred_contact', label: 'Preferred Contact Method', type: 'radio', required: true, options: 'Phone\nEmail' },
+            { name: 'best_time', label: 'Best Time To Reach You', type: 'text', placeholder: 'Weekday afternoons, mornings, etc.' },
+            { name: 'details', label: 'How can we help?', type: 'textarea', required: true, placeholder: 'Briefly describe the matter or question.' }
+        ]
+    }
+];
+
 const createFieldId = () => Math.random().toString(36).slice(2, 11);
 
 const slugifyFieldName = (value: string) => {
@@ -182,6 +283,9 @@ const getPreviewSelectValue = (field: IntakeFormField, options: string[]) => {
     return options.includes(normalizedDefault) ? normalizedDefault : '';
 };
 
+const buildPreviewDefaults = (items: IntakeFormField[]) =>
+    Object.fromEntries(items.map(field => [field.name, getFieldDefaultValue(field)]));
+
 export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFormBuilderProps) {
     const [form, setForm] = useState<Partial<IntakeForm>>({
         name: '',
@@ -195,6 +299,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     });
     const [fields, setFields] = useState<IntakeFormField[]>([]);
     const [previewValues, setPreviewValues] = useState<Record<string, unknown>>({});
+    const [previewViewport, setPreviewViewport] = useState<PreviewViewport>('desktop');
     const [loading, setLoading] = useState(!!formId);
     const [saving, setSaving] = useState(false);
 
@@ -422,6 +527,70 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
             console.error('Failed to copy intake link:', error);
             toast.error('Failed to copy intake link.');
         }
+    };
+
+    const handleCopyEmbedCode = async () => {
+        if (!form.slug) {
+            toast.info('Save the form first to generate an embeddable snippet.');
+            return;
+        }
+
+        const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+        const iframeTitle = form.name?.trim() || 'Intake Form';
+        const embedCode = `<iframe src="${baseUrl}/intake/${form.slug}" title="${iframeTitle}" width="100%" height="960" style="border:0;border-radius:24px;overflow:hidden;" loading="lazy"></iframe>`;
+
+        try {
+            await navigator.clipboard.writeText(embedCode);
+            toast.success('Embed code copied.');
+        } catch (error) {
+            console.error('Failed to copy embed code:', error);
+            toast.error('Failed to copy embed code.');
+        }
+    };
+
+    const resetPreviewToDefaults = () => {
+        setPreviewValues(buildPreviewDefaults(fields));
+        toast.success('Preview reset to default answers.');
+    };
+
+    const applyTemplatePreset = (preset: TemplatePresetDefinition) => {
+        const hasExistingContent = fields.length > 0 || Boolean(form.name?.trim()) || Boolean(form.description?.trim());
+        if (hasExistingContent && typeof window !== 'undefined') {
+            const confirmed = window.confirm(`Apply "${preset.name}"? This will replace the current form layout.`);
+            if (!confirmed) {
+                return;
+            }
+        }
+
+        const nextFields = normalizeBuilderFields(
+            preset.fields.map((field, index) => ({
+                id: createFieldId(),
+                name: field.name,
+                label: field.label,
+                type: field.type,
+                required: field.required ?? false,
+                placeholder: field.placeholder || '',
+                helpText: field.helpText || '',
+                options: field.options || '',
+                defaultValue: field.defaultValue || '',
+                validationPattern: field.validationPattern || '',
+                validationMessage: field.validationMessage || '',
+                conditionalLogic: field.conditionalLogic || '',
+                order: index
+            }))
+        );
+
+        setForm(currentForm => ({
+            ...currentForm,
+            name: preset.formName,
+            description: preset.formDescription,
+            practiceArea: preset.practiceArea,
+            thankYouMessage: preset.thankYouMessage
+        }));
+        setFields(nextFields);
+        setPreviewValues(buildPreviewDefaults(nextFields));
+        setIsFieldPaletteOpen(false);
+        toast.success(`${preset.name} loaded.`);
     };
 
     const addField = (type: string) => {
@@ -663,6 +832,9 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     const shareUrl = form.slug
         ? `${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/intake/${form.slug}`
         : '';
+    const embedCode = shareUrl
+        ? `<iframe src="${shareUrl}" title="${form.name?.trim() || 'Intake Form'}" width="100%" height="960" style="border:0;border-radius:24px;overflow:hidden;" loading="lazy"></iframe>`
+        : '';
     const availableConditionalSourceFields = getAvailableConditionalSourceFields(editingField?.id);
     const editingConditionalRule = editingField ? parseConditionalLogic(editingField.conditionalLogic) : null;
     const selectedConditionalSourceField = editingConditionalRule
@@ -671,6 +843,8 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
     const conditionalValueOptions = selectedConditionalSourceField
         ? getConditionalRuleValueOptions(selectedConditionalSourceField)
         : [];
+    const previewFrameWidthClass = previewViewport === 'mobile' ? 'mx-auto max-w-[320px]' : '';
+    const previewViewportLabel = previewViewport === 'mobile' ? 'Mobile' : 'Desktop';
 
     return (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -862,25 +1036,138 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     </div>
                                 </div>
 
-                                <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-950 p-4 text-white">
-                                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                                        <div className="min-w-0">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">Share Link</p>
-                                            <code className="mt-2 block truncate text-sm text-white/90">
-                                                {shareUrl || 'Save the form once to generate a shareable link.'}
-                                            </code>
+                                <div className="md:col-span-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 text-white">
+                                    <div className="border-b border-white/10 px-4 py-4">
+                                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                            <div>
+                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">Share and Embed</p>
+                                                <h4 className="mt-2 text-lg font-semibold text-white">Distribution tools for launch day</h4>
+                                                <p className="mt-1 text-sm text-white/70">
+                                                    Copy the hosted link, open the live form, or grab an iframe snippet for your website.
+                                                </p>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleCopyLink}
+                                                    disabled={!form.slug}
+                                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <Link2 className="w-4 h-4" />
+                                                    Copy Link
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleCopyEmbedCode}
+                                                    disabled={!form.slug}
+                                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <LayoutGrid className="w-4 h-4" />
+                                                    Copy Embed
+                                                </button>
+                                                <a
+                                                    href={shareUrl || undefined}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${
+                                                        form.slug
+                                                            ? 'bg-white text-slate-900 hover:bg-slate-100'
+                                                            : 'pointer-events-none bg-white/10 text-white/50'
+                                                    }`}
+                                                >
+                                                    <ExternalLink className="w-4 h-4" />
+                                                    Open Live
+                                                </a>
+                                            </div>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={handleCopyLink}
-                                            disabled={!form.slug}
-                                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                            <Copy className="w-4 h-4" />
-                                            Copy Link
-                                        </button>
+                                    </div>
+
+                                    <div className="grid gap-4 px-4 py-4 lg:grid-cols-2">
+                                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">
+                                                <Globe className="w-4 h-4" />
+                                                Public Link
+                                            </div>
+                                            <code className="mt-3 block min-h-[48px] break-all rounded-xl bg-black/20 px-3 py-3 text-sm text-white/85">
+                                                {shareUrl || 'Save the form once to generate a hosted share link.'}
+                                            </code>
+                                            <p className="mt-3 text-xs leading-5 text-white/60">
+                                                {form.isPublic && form.isActive
+                                                    ? 'This form is ready for public traffic.'
+                                                    : 'The link exists after save, but submissions only open when the form is both Public and Active.'}
+                                            </p>
+                                        </div>
+
+                                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">
+                                                <LayoutGrid className="w-4 h-4" />
+                                                Embed Snippet
+                                            </div>
+                                            <textarea
+                                                readOnly
+                                                rows={4}
+                                                value={embedCode || '<iframe ... />'}
+                                                className="mt-3 w-full rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/85 outline-none"
+                                            />
+                                            <p className="mt-3 text-xs leading-5 text-white/60">
+                                                Use this iframe on your marketing site, campaign page, or client portal shell.
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
+                            </div>
+                        </section>
+
+                        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                                <div>
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Template Presets</p>
+                                    <h3 className="mt-2 text-lg font-semibold text-slate-900">Start from a polished workflow</h3>
+                                    <p className="mt-1 text-sm text-slate-600">
+                                        Load a ready-made intake structure, then tailor copy, routing, and logic instead of starting from zero.
+                                    </p>
+                                </div>
+                                <p className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+                                    {templatePresets.length} launch-ready presets
+                                </p>
+                            </div>
+
+                            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+                                {templatePresets.map(preset => {
+                                    const Icon = preset.icon;
+
+                                    return (
+                                        <button
+                                            key={preset.id}
+                                            type="button"
+                                            onClick={() => applyTemplatePreset(preset)}
+                                            className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                                        >
+                                            <div className={`rounded-2xl bg-gradient-to-br ${preset.accentClass} p-4`}>
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/80 text-current shadow-sm">
+                                                        <Icon className="h-6 w-6" />
+                                                    </div>
+                                                    <span className="rounded-full bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-700">
+                                                        {preset.fields.length} fields
+                                                    </span>
+                                                </div>
+                                                <p className="mt-4 text-base font-semibold text-slate-900">{preset.name}</p>
+                                                <p className="mt-2 text-sm leading-6 text-slate-700">{preset.description}</p>
+                                            </div>
+                                            <div className="mt-4 flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-medium text-slate-900">{preset.formName}</p>
+                                                    <p className="mt-1 text-xs text-slate-500">{preset.practiceArea}</p>
+                                                </div>
+                                                <span className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition group-hover:bg-slate-800">
+                                                    <Sparkles className="h-4 w-4" />
+                                                    Apply
+                                                </span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </section>
 
@@ -954,14 +1241,55 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
 
                             <div className="mt-6 space-y-3">
                                 {fields.length === 0 ? (
-                                    <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-14 text-center">
-                                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm ring-1 ring-slate-200">
-                                            <Plus className="w-6 h-6" />
+                                    <div className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-blue-50">
+                                        <div className="grid gap-6 px-6 py-10 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
+                                            <div>
+                                                <div className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
+                                                    <Sparkles className="h-4 w-4" />
+                                                    Blank Canvas
+                                                </div>
+                                                <h4 className="mt-4 text-2xl font-semibold text-slate-900">Launch the form with structure, not guesswork</h4>
+                                                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                                                    Start from a preset for a premium first draft, or open the field library and build the intake journey question by question.
+                                                </p>
+                                                <div className="mt-5 flex flex-wrap gap-3">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => applyTemplatePreset(templatePresets[0])}
+                                                        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                                                    >
+                                                        <Sparkles className="h-4 w-4" />
+                                                        Use Recommended Preset
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setIsFieldPaletteOpen(true)}
+                                                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                                    >
+                                                        <Plus className="h-4 w-4" />
+                                                        Add First Field
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="rounded-3xl border border-slate-200 bg-white/80 p-5 shadow-sm">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Starter Checklist</p>
+                                                <div className="mt-4 space-y-3 text-sm text-slate-600">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="flex h-8 w-8 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">1</span>
+                                                        Choose a preset or add your first field
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="flex h-8 w-8 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">2</span>
+                                                        Refine copy, required state, and logic
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="flex h-8 w-8 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">3</span>
+                                                        Save to unlock share link and embed code
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <h4 className="mt-4 text-base font-semibold text-slate-800">Start with your first question</h4>
-                                        <p className="mt-2 text-sm text-slate-500">
-                                            Open the field library to add contact details, incident facts, routing questions, and acknowledgements.
-                                        </p>
                                     </div>
                                 ) : (
                                     <>
@@ -1117,13 +1445,47 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-200">Live Preview</p>
                                     <h3 className="mt-1 text-sm font-semibold">Public intake experience</h3>
                                 </div>
-                                <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/90">
-                                    <Eye className="w-3.5 h-3.5" />
-                                    Auto-updating
+                                <div className="flex items-center gap-2">
+                                    <div className="inline-flex rounded-full bg-white/10 p-1 text-xs font-medium text-white/90">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPreviewViewport('desktop')}
+                                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 transition ${previewViewport === 'desktop' ? 'bg-white text-slate-900' : 'text-white/80 hover:text-white'}`}
+                                        >
+                                            <LayoutGrid className="h-3.5 w-3.5" />
+                                            Desktop
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPreviewViewport('mobile')}
+                                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 transition ${previewViewport === 'mobile' ? 'bg-white text-slate-900' : 'text-white/80 hover:text-white'}`}
+                                        >
+                                            <Phone className="h-3.5 w-3.5" />
+                                            Mobile
+                                        </button>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={resetPreviewToDefaults}
+                                        className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white/90 transition hover:bg-white/15"
+                                    >
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                        Reset
+                                    </button>
                                 </div>
                             </div>
                             <div className="bg-slate-100 p-4">
-                                <div className="overflow-hidden rounded-[28px] border border-slate-300 bg-white shadow-xl">
+                                <div className={`transition-all duration-300 ${previewFrameWidthClass}`}>
+                                    <div className="mb-3 flex items-center justify-between px-1 text-xs font-medium text-slate-500">
+                                        <span>{previewViewportLabel} canvas</span>
+                                        <span>{visiblePreviewFields.length} visible field{visiblePreviewFields.length === 1 ? '' : 's'}</span>
+                                    </div>
+                                <div className={`overflow-hidden border border-slate-300 bg-white shadow-xl transition-all duration-300 ${previewViewport === 'mobile' ? 'rounded-[32px]' : 'rounded-[28px]'}`}>
+                                    {previewViewport === 'mobile' && (
+                                        <div className="flex items-center justify-center border-b border-slate-200 bg-slate-950 py-3">
+                                            <span className="h-1.5 w-16 rounded-full bg-white/60" />
+                                        </div>
+                                    )}
                                     <div className="border-b border-slate-100 px-6 py-6">
                                         <div className="mb-4 flex items-center gap-3">
                                             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
@@ -1144,8 +1506,14 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                     </div>
                                     <div className="space-y-5 px-6 py-6">
                                         {fields.length === 0 ? (
-                                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                                                Add fields to generate the live public form preview.
+                                            <div className="rounded-3xl border border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-blue-50 px-5 py-10 text-center">
+                                                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-blue-700 shadow-sm ring-1 ring-slate-200">
+                                                    <Sparkles className="h-6 w-6" />
+                                                </div>
+                                                <h4 className="mt-4 text-base font-semibold text-slate-900">Preview wakes up as soon as the form has structure</h4>
+                                                <p className="mt-2 text-sm leading-6 text-slate-500">
+                                                    Load a preset or add a few fields to see the public experience, responsive frame, and conditional logic in motion.
+                                                </p>
                                             </div>
                                         ) : visiblePreviewFields.length === 0 ? (
                                             <div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50 px-4 py-8 text-center text-sm text-violet-700">
@@ -1209,6 +1577,7 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                         )}
                                     </div>
                                 </div>
+                                </div>
                                 <div className="mt-4 grid grid-cols-2 gap-3">
                                     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Visible</p>
@@ -1224,24 +1593,62 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                     </aside>
                 </div>
             </div>
-            <div className="flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-6 py-4">
-                {onCancel && (
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
-                    >
-                        Cancel
-                    </button>
-                )}
-                <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving || !form.name?.trim()}
-                    className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    {saving ? 'Saving...' : formId ? 'Update Form' : 'Create Form'}
-                </button>
+            <div className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Builder State</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                {form.name?.trim() || 'Untitled form'}
+                            </p>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Launch Tools</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                                {form.slug ? 'Share + embed ready' : 'Save to unlock share + embed'}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        {onCancel && (
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
+                            >
+                                Cancel
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={handleCopyLink}
+                            disabled={!form.slug}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Link2 className="h-4 w-4" />
+                            Copy Link
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleCopyEmbedCode}
+                            disabled={!form.slug}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <LayoutGrid className="h-4 w-4" />
+                            Copy Embed
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleSave}
+                            disabled={saving || !form.name?.trim()}
+                            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Save className="h-4 w-4" />
+                            {saving ? 'Saving...' : formId ? 'Update Form' : 'Create Form'}
+                        </button>
+                    </div>
+                </div>
             </div>
             {showFieldModal && editingField && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
