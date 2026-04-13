@@ -178,9 +178,36 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("accounts")]
-        public async Task<ActionResult<TrustBankAccount>> CreateTrustAccount(TrustBankAccount account)
+        public async Task<ActionResult<TrustBankAccount>> CreateTrustAccount([FromBody] CreateTrustAccountRequest request)
         {
-            var resolved = await _firmStructure.ResolveEntityOfficeAsync(account.EntityId, account.OfficeId);
+            var accountNumber = string.IsNullOrWhiteSpace(request.AccountNumberEnc)
+                ? request.AccountNumber?.Trim()
+                : request.AccountNumberEnc.Trim();
+
+            if (string.IsNullOrWhiteSpace(request.Name) ||
+                string.IsNullOrWhiteSpace(request.BankName) ||
+                string.IsNullOrWhiteSpace(request.RoutingNumber) ||
+                string.IsNullOrWhiteSpace(accountNumber) ||
+                string.IsNullOrWhiteSpace(request.Jurisdiction))
+            {
+                return BadRequest("Name, bank, routing number, account number, and jurisdiction are required.");
+            }
+
+            if (request.RoutingNumber.Trim().Length != 9 || !request.RoutingNumber.Trim().All(char.IsDigit))
+            {
+                return BadRequest("Routing number must be exactly 9 digits.");
+            }
+
+            var account = new TrustBankAccount
+            {
+                Name = request.Name.Trim(),
+                BankName = request.BankName.Trim(),
+                RoutingNumber = request.RoutingNumber.Trim(),
+                AccountNumberEnc = accountNumber,
+                Jurisdiction = request.Jurisdiction.Trim().ToUpperInvariant()
+            };
+
+            var resolved = await _firmStructure.ResolveEntityOfficeAsync(request.EntityId, request.OfficeId);
             account.EntityId = resolved.entityId;
             account.OfficeId = resolved.officeId;
             account.Id = Guid.NewGuid().ToString();
@@ -217,11 +244,27 @@ namespace JurisFlow.Server.Controllers
         public async Task<ActionResult<ClientTrustLedger>> CreateLedger(ClientTrustLedger ledger)
         {
             var account = await _context.TrustBankAccounts.FindAsync(ledger.TrustAccountId);
-            if (account != null)
+            if (account == null) return NotFound("Trust account not found");
+            if (account.Status != TrustAccountStatus.ACTIVE)
             {
-                ledger.EntityId = account.EntityId;
-                ledger.OfficeId = account.OfficeId;
+                return BadRequest("Trust account is not active.");
             }
+
+            var client = await _context.Clients.FindAsync(ledger.ClientId);
+            if (client == null) return BadRequest("Client not found");
+
+            if (!string.IsNullOrWhiteSpace(ledger.MatterId))
+            {
+                var matter = await _context.Matters.FindAsync(ledger.MatterId);
+                if (matter == null) return BadRequest("Matter not found");
+                if (!string.Equals(matter.ClientId, ledger.ClientId, StringComparison.Ordinal))
+                {
+                    return BadRequest("Selected matter does not belong to the selected client.");
+                }
+            }
+
+            ledger.EntityId = account.EntityId;
+            ledger.OfficeId = account.OfficeId;
             ledger.Id = Guid.NewGuid().ToString();
             ledger.CreatedAt = DateTime.UtcNow;
             ledger.UpdatedAt = DateTime.UtcNow;
@@ -662,5 +705,17 @@ namespace JurisFlow.Server.Controllers
     public class TrustVoidDto
     {
         public string? Reason { get; set; }
+    }
+
+    public class CreateTrustAccountRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public string BankName { get; set; } = string.Empty;
+        public string RoutingNumber { get; set; } = string.Empty;
+        public string? AccountNumber { get; set; }
+        public string? AccountNumberEnc { get; set; }
+        public string Jurisdiction { get; set; } = string.Empty;
+        public string? EntityId { get; set; }
+        public string? OfficeId { get; set; }
     }
 }

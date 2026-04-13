@@ -1,15 +1,54 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { FileText, Download, Calendar, DollarSign, Clock, Users, BarChart3, TrendingUp } from './Icons';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../contexts/AuthContext';
+import { api } from '../services/api';
+import { FirmEntity, FirmSettings, Office } from '../types';
 import { toast } from './Toast';
 
 // Helper function for status checks (handles both legacy strings and new enums)
 const isPaid = (status: any) => status === 'Paid' || status === 'PAID';
+
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+});
+
+const shortDateFormatter = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+});
+
+const longDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+});
+
+const formatCurrency = (value?: number | null) => currencyFormatter.format(Number.isFinite(value) ? Number(value) : 0);
+
+const formatDate = (value?: Date | string | null) => {
+    if (!value) return 'N/A';
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) return 'N/A';
+    return shortDateFormatter.format(parsed);
+};
+
+const formatDateTime = (value?: Date | string | null) => {
+    if (!value) return 'N/A';
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) return 'N/A';
+    return longDateTimeFormatter.format(parsed);
+};
 
 interface DateRange {
     start: Date;
@@ -18,6 +57,7 @@ interface DateRange {
 
 const Reports: React.FC = () => {
     const { t } = useTranslation();
+    const { user } = useAuth();
     const { matters, clients, timeEntries, invoices, tasks, leads } = useData();
 
     const [activeReport, setActiveReport] = useState<'executive' | 'performance' | 'profitability' | 'matters' | 'billing' | 'kpis'>('executive');
@@ -25,10 +65,73 @@ const Reports: React.FC = () => {
         start: new Date(new Date().setMonth(new Date().getMonth() - 3)),
         end: new Date()
     });
-    const [selectedAttorney, setSelectedAttorney] = useState<string>('all');
     const [isExporting, setIsExporting] = useState(false);
     const [entityFilter, setEntityFilter] = useState('');
     const [officeFilter, setOfficeFilter] = useState('');
+    const [firmSettings, setFirmSettings] = useState<Partial<FirmSettings> | null>(null);
+    const [entities, setEntities] = useState<FirmEntity[]>([]);
+    const [offices, setOffices] = useState<Office[]>([]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadExportMetadata = async () => {
+            try {
+                const [firmData, entityData] = await Promise.all([
+                    api.settings.getFirm().catch(() => null),
+                    api.entities.list().catch(() => [])
+                ]);
+
+                if (!isMounted) return;
+
+                setFirmSettings(firmData || null);
+                setEntities(Array.isArray(entityData)
+                    ? entityData.filter((entity): entity is FirmEntity => !!entity && typeof entity.id === 'string')
+                    : []);
+            } catch (error) {
+                if (!isMounted) return;
+                setFirmSettings(null);
+                setEntities([]);
+            }
+        };
+
+        loadExportMetadata();
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        if (!entityFilter) {
+            setOffices([]);
+            return () => {
+                isMounted = false;
+            };
+        }
+
+        const loadOffices = async () => {
+            try {
+                const officeData = await api.entities.offices.list(entityFilter).catch(() => []);
+                if (!isMounted) return;
+
+                setOffices(Array.isArray(officeData)
+                    ? officeData.filter((office): office is Office => !!office && typeof office.id === 'string')
+                    : []);
+            } catch {
+                if (!isMounted) return;
+                setOffices([]);
+            }
+        };
+
+        loadOffices();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [entityFilter]);
 
     const filteredMatters = useMemo(() => {
         return (matters || []).filter(matter => {
@@ -209,6 +312,27 @@ const Reports: React.FC = () => {
 
     const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
+    const activeEntity = useMemo(
+        () => entities.find(entity => entity.id === entityFilter) || null,
+        [entities, entityFilter]
+    );
+
+    const activeOffice = useMemo(
+        () => offices.find(office => office.id === officeFilter) || null,
+        [offices, officeFilter]
+    );
+
+    const reportTabs = [
+        { id: 'executive', label: 'Executive KPIs', icon: TrendingUp },
+        { id: 'performance', label: t('rep_attorney_perf'), icon: BarChart3 },
+        { id: 'profitability', label: t('rep_top_clients'), icon: DollarSign },
+        { id: 'matters', label: t('rep_matters'), icon: FileText },
+        { id: 'billing', label: t('rep_billing_trends'), icon: Clock },
+        { id: 'kpis', label: t('rep_kpi'), icon: Users }
+    ];
+
+    const activeReportConfig = reportTabs.find(tab => tab.id === activeReport) || reportTabs[0];
+
     // Export to CSV
     const exportToCSV = async (data: any[], filename: string) => {
         setIsExporting(true);
@@ -252,23 +376,114 @@ const Reports: React.FC = () => {
             } as any);
 
             const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = pdf.internal.pageSize.getHeight();
-            const imgWidth = pdfWidth;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            const pdf = new jsPDF('p', 'pt', 'a4');
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const margin = 36;
+            const contentWidth = pageWidth - (margin * 2);
+            const coverMetrics = exportCoverMetrics.slice(0, 4);
+            const metricRows = Math.max(1, Math.ceil(coverMetrics.length / 2));
+            const metricsHeight = metricRows * 72;
+            const reportImageWidth = contentWidth;
+            const reportImageHeight = (canvas.height * reportImageWidth) / canvas.width;
+            const topBandHeight = 88;
+            const reportImageStartY = 262 + metricsHeight;
 
-            let heightLeft = imgHeight;
-            let position = 0;
+            const writeMuted = (text: string, x: number, y: number, align: 'left' | 'right' = 'left') => {
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(10);
+                pdf.setTextColor(100, 116, 139);
+                pdf.text(text, x, y, { align });
+            };
 
-            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pdfHeight;
+            const writeStrong = (text: string, x: number, y: number, size = 12, align: 'left' | 'right' = 'left') => {
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(size);
+                pdf.setTextColor(15, 23, 42);
+                pdf.text(text, x, y, { align });
+            };
 
-            while (heightLeft >= 0) {
-                position = heightLeft - imgHeight;
+            pdf.setFillColor(15, 23, 42);
+            pdf.rect(0, 0, pageWidth, topBandHeight, 'F');
+            pdf.setTextColor(255, 255, 255);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(22);
+            pdf.text('JurisFlow', margin, 38);
+            pdf.setFontSize(18);
+            pdf.text(activeReportConfig.label, margin, 62);
+
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(10);
+            pdf.text('Report export', pageWidth - margin, 30, { align: 'right' });
+            pdf.text(formatDateTime(new Date()), pageWidth - margin, 48, { align: 'right' });
+
+            const firmName = activeEntity?.name || firmSettings?.firmName || 'JurisFlow Legal System';
+            const scopeLabel = [
+                activeEntity?.name || 'All entities',
+                activeOffice?.name || (entityFilter ? 'All offices' : 'Firm-wide')
+            ].join(' / ');
+            const preparedFor = user?.name || user?.email || 'Current user';
+            const coverageText = [
+                `Window: ${formatDate(dateRange.start)} - ${formatDate(dateRange.end)}`,
+                `Scope: ${scopeLabel}`,
+                `Prepared for: ${preparedFor}`
+            ];
+            const firmAddress = [firmSettings?.address, firmSettings?.city, firmSettings?.state, firmSettings?.zipCode]
+                .filter(Boolean)
+                .join(', ');
+            const metadataLines = [
+                firmName,
+                firmAddress,
+                firmSettings?.website || '',
+                firmSettings?.phone ? `Phone: ${firmSettings.phone}` : '',
+                exportDataSnapshot
+            ].filter(Boolean);
+
+            let y = topBandHeight + 32;
+            writeStrong('Report Context', margin, y, 13);
+            y += 18;
+            metadataLines.forEach(line => {
+                writeMuted(line, margin, y);
+                y += 14;
+            });
+
+            let metaRightY = topBandHeight + 50;
+            coverageText.forEach(line => {
+                writeMuted(line, pageWidth - margin, metaRightY, 'right');
+                metaRightY += 14;
+            });
+
+            const metricCardWidth = (contentWidth - 14) / 2;
+            const metricsStartY = 174;
+            coverMetrics.forEach((metric, index) => {
+                const col = index % 2;
+                const row = Math.floor(index / 2);
+                const x = margin + (col * (metricCardWidth + 14));
+                const cardY = metricsStartY + (row * 72);
+
+                pdf.setFillColor(248, 250, 252);
+                pdf.setDrawColor(226, 232, 240);
+                pdf.roundedRect(x, cardY, metricCardWidth, 58, 10, 10, 'FD');
+                writeMuted(metric.label, x + 12, cardY + 17);
+                writeStrong(metric.value, x + 12, cardY + 37, 16);
+                if (metric.detail) {
+                    writeMuted(metric.detail, x + 12, cardY + 51);
+                }
+            });
+
+            pdf.setDrawColor(226, 232, 240);
+            pdf.line(margin, reportImageStartY - 18, pageWidth - margin, reportImageStartY - 18);
+
+            pdf.addImage(imgData, 'PNG', margin, reportImageStartY, reportImageWidth, reportImageHeight);
+
+            let remainingHeight = reportImageHeight - (pageHeight - reportImageStartY - margin);
+            let currentOffset = reportImageStartY - reportImageHeight + (pageHeight - reportImageStartY - margin);
+
+            while (remainingHeight > 0) {
                 pdf.addPage();
-                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                heightLeft -= pdfHeight;
+                pdf.addImage(imgData, 'PNG', margin, currentOffset, reportImageWidth, reportImageHeight);
+                remainingHeight -= (pageHeight - (margin * 2));
+                currentOffset -= (pageHeight - (margin * 2));
             }
 
             pdf.save(`report-${activeReport}-${new Date().toISOString().split('T')[0]}.pdf`);
@@ -280,15 +495,6 @@ const Reports: React.FC = () => {
             setIsExporting(false);
         }
     };
-
-    const reportTabs = [
-        { id: 'executive', label: 'Executive KPIs', icon: TrendingUp },
-        { id: 'performance', label: t('rep_attorney_perf'), icon: BarChart3 },
-        { id: 'profitability', label: t('rep_top_clients'), icon: DollarSign },
-        { id: 'matters', label: t('rep_matters'), icon: FileText },
-        { id: 'billing', label: t('rep_billing_trends'), icon: Clock },
-        { id: 'kpis', label: t('rep_kpi'), icon: Users }
-    ];
 
     // Advanced KPIs calculation
     const kpiData = useMemo(() => {
@@ -466,6 +672,88 @@ const Reports: React.FC = () => {
             avgDaysToPay
         };
     }, [filteredMatters, filteredInvoices, clients, leads]);
+
+    const exportDataSnapshot = useMemo(() => {
+        return [
+            `${filteredMatters.length} matters`,
+            `${filteredInvoices.length} invoices`,
+            `${filteredTimeEntries.length} time entries`,
+            `${filteredTasks.length} tasks`
+        ].join(' • ');
+    }, [filteredMatters.length, filteredInvoices.length, filteredTimeEntries.length, filteredTasks.length]);
+
+    const exportCoverMetrics = useMemo(() => {
+        if (activeReport === 'executive') {
+            return [
+                { label: 'Open matters', value: String(executiveStats.openMatters), detail: `${executiveStats.activeClients} active clients` },
+                { label: 'Lead conversion', value: `${executiveStats.leadConversionRate.toFixed(1)}%`, detail: `${executiveStats.totalLeads} leads tracked` },
+                { label: 'Average days to pay', value: `${executiveStats.avgDaysToPay.toFixed(0)} days`, detail: 'Paid invoices only' },
+                { label: 'Average matter age', value: `${executiveStats.avgMatterAgeDays.toFixed(0)} days`, detail: 'Open matters only' }
+            ];
+        }
+
+        if (activeReport === 'performance') {
+            const topAttorney = [...performanceData].sort((a, b) => b.billableHours - a.billableHours)[0];
+            const completedTasks = performanceData.reduce((sum, item) => sum + item.tasks, 0);
+            return [
+                { label: 'Top attorney', value: topAttorney?.name || 'No data', detail: topAttorney ? `${topAttorney.billableHours.toFixed(1)}h logged` : 'No billable activity yet' },
+                { label: 'Billable hours', value: `${performanceData.reduce((sum, item) => sum + item.billableHours, 0).toFixed(1)}h`, detail: `${performanceData.length} timekeepers represented` },
+                { label: 'Matters handled', value: String(performanceData.reduce((sum, item) => sum + item.matters, 0)), detail: 'Within selected window' },
+                { label: 'Tasks completed', value: String(completedTasks), detail: 'Completed by assigned attorneys' }
+            ];
+        }
+
+        if (activeReport === 'profitability') {
+            const topClient = profitabilityData[0];
+            return [
+                { label: 'Top client', value: topClient?.name || 'No data', detail: topClient ? `${formatCurrency(topClient.revenue)} revenue` : 'No paid invoices yet' },
+                { label: 'Tracked client revenue', value: formatCurrency(profitabilityData.reduce((sum, item) => sum + item.revenue, 0)), detail: `${profitabilityData.length} clients in ranking` },
+                { label: 'Tracked client hours', value: `${profitabilityData.reduce((sum, item) => sum + item.hours, 0).toFixed(1)}h`, detail: 'Across linked matters' },
+                { label: 'Client matters', value: String(profitabilityData.reduce((sum, item) => sum + item.matters, 0)), detail: 'Revenue-bearing client matters' }
+            ];
+        }
+
+        if (activeReport === 'matters') {
+            const topArea = [...matterStats].sort((a, b) => b.total - a.total)[0];
+            const totalClosed = matterStats.reduce((sum, item) => sum + item.closed, 0);
+            const totalOpen = matterStats.reduce((sum, item) => sum + item.open, 0);
+            return [
+                { label: 'Total matters', value: String(filteredMatters.length), detail: `${matterStats.length} practice areas` },
+                { label: 'Open matters', value: String(totalOpen), detail: 'Currently active' },
+                { label: 'Closed matters', value: String(totalClosed), detail: 'Closed or archived' },
+                { label: 'Top practice area', value: topArea?.area || 'No data', detail: topArea ? `${topArea.total} total matters` : 'No practice data yet' }
+            ];
+        }
+
+        if (activeReport === 'billing') {
+            const totalBilled = billingTrends.reduce((sum, item) => sum + item.billed, 0);
+            const totalCollected = billingTrends.reduce((sum, item) => sum + item.collected, 0);
+            const openInvoiceCount = filteredInvoices.filter(invoice => !isPaid(invoice.status)).length;
+            return [
+                { label: 'Total billed', value: formatCurrency(totalBilled), detail: 'Across billing trend window' },
+                { label: 'Total collected', value: formatCurrency(totalCollected), detail: 'Paid invoice volume' },
+                { label: 'Collection rate', value: `${totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0.0'}%`, detail: 'Collected / billed' },
+                { label: 'Open invoices', value: String(openInvoiceCount), detail: 'Still pending collection' }
+            ];
+        }
+
+        return [
+            { label: 'Utilization', value: `${kpiData.utilizationRate.toFixed(1)}%`, detail: `${kpiData.totalBillableHours.toFixed(1)} billable hours` },
+            { label: 'Realization', value: `${kpiData.realizationRate.toFixed(1)}%`, detail: `${formatCurrency(kpiData.totalBilledAmount)} billed` },
+            { label: 'Collection', value: `${kpiData.collectionRate.toFixed(1)}%`, detail: `${formatCurrency(kpiData.totalCollected)} collected` },
+            { label: 'Work in progress', value: formatCurrency(kpiData.wip), detail: 'Unbilled time value' }
+        ];
+    }, [
+        activeReport,
+        executiveStats,
+        performanceData,
+        profitabilityData,
+        matterStats,
+        filteredMatters.length,
+        billingTrends,
+        filteredInvoices,
+        kpiData
+    ]);
 
     return (
         <div className="p-6 space-y-6 h-full overflow-y-auto">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ComponentType } from 'react';
 import {
     Calendar,
     CheckCircle,
@@ -86,7 +86,7 @@ type FieldTypeDefinition = {
     value: string;
     label: string;
     description: string;
-    icon: ({ className }: { className?: string }) => JSX.Element;
+    icon: ComponentType<{ className?: string }>;
     colorClass: string;
     disabled?: boolean;
 };
@@ -99,7 +99,7 @@ type TemplatePresetDefinition = {
     formName: string;
     formDescription: string;
     thankYouMessage: string;
-    icon: ({ className }: { className?: string }) => JSX.Element;
+    icon: ComponentType<{ className?: string }>;
     accentClass: string;
     fields: Array<Partial<IntakeFormField> & Pick<IntakeFormField, 'name' | 'label' | 'type'>>;
 };

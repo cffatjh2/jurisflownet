@@ -68,30 +68,9 @@ const Building2 = ({ className }: { className?: string }) => (
 
 import { toast } from './Toast';
 
-// API helper
-const api = {
-    async get(url: string) {
-        const res = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
-        });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
-    },
-    async post(url: string, data: any) {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-            },
-            body: JSON.stringify(data)
-        });
-        if (!res.ok) {
-            const error = await res.json();
-            throw new Error(error.error || 'Request failed');
-        }
-        return res.json();
-    }
+const trustApi = {
+    get: (url: string) => apiClient.get(url),
+    post: (url: string, data: any) => apiClient.post(url, data)
 };
 
 export default function TrustAccounting() {
@@ -185,10 +164,10 @@ export default function TrustAccounting() {
         setLoading(true);
         try {
             const [accountsData, ledgersData, txData, reconData] = await Promise.all([
-                api.get('/api/trust/accounts').catch(() => []),
-                api.get('/api/trust/ledgers').catch(() => []),
-                api.get('/api/trust/transactions?limit=50').catch(() => []),
-                api.get('/api/trust/reconciliations').catch(() => [])
+                trustApi.get('/api/trust/accounts').catch(() => []),
+                trustApi.get('/api/trust/ledgers').catch(() => []),
+                trustApi.get('/api/trust/transactions?limit=50').catch(() => []),
+                trustApi.get('/api/trust/reconciliations').catch(() => [])
             ]);
             setAccounts(accountsData || []);
             setLedgers(ledgersData || []);
@@ -240,6 +219,42 @@ export default function TrustAccounting() {
         return new Map(accounts.map(a => [a.id, a]));
     }, [accounts]);
 
+    const clientMap = useMemo(() => {
+        return new Map(clients.map(client => [client.id, client]));
+    }, [clients]);
+
+    const matterMap = useMemo(() => {
+        return new Map(matters.map(matter => [matter.id, matter]));
+    }, [matters]);
+
+    const maskAccountNumber = (value?: string | null) => {
+        if (!value) return 'Pending setup';
+        const digits = value.replace(/\s+/g, '');
+        if (digits.length <= 4) return digits;
+        return `•••• ${digits.slice(-4)}`;
+    };
+
+    const getAccountLabel = (accountId?: string | null) => {
+        if (!accountId) return 'Unknown account';
+        return accountMap.get(accountId)?.name || accountId;
+    };
+
+    const getClientLabel = (clientId?: string | null) => {
+        if (!clientId) return 'Client';
+        return clientMap.get(clientId)?.name || clientId;
+    };
+
+    const getMatterLabel = (matterId?: string | null) => {
+        if (!matterId) return 'General Ledger';
+        const matter = matterMap.get(matterId);
+        if (!matter) return matterId;
+        return matter.caseNumber ? `${matter.name} • ${matter.caseNumber}` : matter.name;
+    };
+
+    const getLedgerLabel = (ledger: ClientTrustLedger) => {
+        return `${getClientLabel(ledger.clientId)} • ${getMatterLabel(ledger.matterId)}`;
+    };
+
     const filteredAccounts = useMemo(() => {
         return accounts.filter(a => {
             if (entityFilter && a.entityId !== entityFilter) return false;
@@ -280,6 +295,28 @@ export default function TrustAccounting() {
         });
     }, [reconciliations, accountMap, entityFilter, officeFilter]);
 
+    const availableDepositLedgers = useMemo(() => {
+        return filteredLedgers.filter(ledger =>
+            ledger.status === 'ACTIVE' &&
+            (!depositForm.trustAccountId || ledger.trustAccountId === depositForm.trustAccountId)
+        );
+    }, [filteredLedgers, depositForm.trustAccountId]);
+
+    const availableWithdrawalLedgers = useMemo(() => {
+        return filteredLedgers.filter(ledger =>
+            ledger.status === 'ACTIVE' &&
+            Number(ledger.runningBalance) > 0 &&
+            (!withdrawalForm.trustAccountId || ledger.trustAccountId === withdrawalForm.trustAccountId)
+        );
+    }, [filteredLedgers, withdrawalForm.trustAccountId]);
+
+    const availableMattersForLedger = useMemo(() => {
+        return matters.filter(matter => {
+            if (!ledgerForm.clientId) return true;
+            return matter.clientId === ledgerForm.clientId;
+        });
+    }, [matters, ledgerForm.clientId]);
+
     useEffect(() => {
         if (filteredAccounts.length === 0) {
             setSelectedAccount('');
@@ -298,7 +335,7 @@ export default function TrustAccounting() {
     // Calculate totals
     const totalTrustBalance = filteredAccounts.reduce((sum, a) => sum + Number(a.currentBalance), 0);
     const totalClientLedgers = filteredLedgers.reduce((sum, l) => sum + Number(l.runningBalance), 0);
-    const pendingTransactions = filteredTransactions.filter(t => t.status === 'PENDING').length;
+    const pendingTransactions = filteredTransactions.filter(t => t.status === 'PENDING' && !t.isVoided).length;
     const unreconciledAccounts = filteredAccounts.filter(a => {
         const lastRecon = filteredReconciliations.find(r => r.trustAccountId === a.id);
         if (!lastRecon) return true;
@@ -331,7 +368,7 @@ export default function TrustAccounting() {
                 return;
             }
 
-            await api.post('/api/trust/deposit', {
+            await trustApi.post('/api/trust/deposit', {
                 trustAccountId: depositForm.trustAccountId,
                 amount: parseFloat(depositForm.amount),
                 payorPayee: depositForm.payorPayee,
@@ -360,7 +397,7 @@ export default function TrustAccounting() {
     const handleWithdrawal = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            await api.post('/api/trust/withdrawal', {
+            await trustApi.post('/api/trust/withdrawal', {
                 trustAccountId: withdrawalForm.trustAccountId,
                 ledgerId: withdrawalForm.ledgerId,
                 amount: parseFloat(withdrawalForm.amount),
@@ -389,7 +426,7 @@ export default function TrustAccounting() {
     const handleReconcile = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const result = await api.post('/api/trust/reconcile', {
+            const result = await trustApi.post('/api/trust/reconcile', {
                 trustAccountId: reconcileForm.trustAccountId,
                 periodEnd: reconcileForm.periodEnd,
                 bankStatementBalance: parseFloat(reconcileForm.bankStatementBalance),
@@ -417,7 +454,7 @@ export default function TrustAccounting() {
             return;
         }
         try {
-            await api.post('/api/trust/ledgers', {
+            await trustApi.post('/api/trust/ledgers', {
                 clientId: ledgerForm.clientId,
                 matterId: ledgerForm.matterId || null,
                 trustAccountId: ledgerForm.trustAccountId,
@@ -445,11 +482,12 @@ export default function TrustAccounting() {
             return;
         }
         try {
-            await api.post('/api/trust/accounts', {
+            await trustApi.post('/api/trust/accounts', {
                 name: accountForm.name,
                 bankName: accountForm.bankName,
                 routingNumber: accountForm.routingNumber,
-                accountNumber: accountForm.accountNumber, // Backend expects 'accountNumber'
+                accountNumber: accountForm.accountNumber,
+                accountNumberEnc: accountForm.accountNumber,
                 jurisdiction: accountForm.jurisdiction,
                 entityId: accountForm.entityId || undefined,
                 officeId: accountForm.officeId || undefined
@@ -469,7 +507,7 @@ export default function TrustAccounting() {
         if (!reason) return;
 
         try {
-            await api.post(`/api/trust/transactions/${txId}/void`, { reason });
+            await trustApi.post(`/api/trust/transactions/${txId}/void`, { reason });
             toast.success('Transaction voided');
             loadData();
         } catch (err: any) {
@@ -480,7 +518,7 @@ export default function TrustAccounting() {
     // Handle approve transaction
     const handleApproveTransaction = async (txId: string) => {
         try {
-            await api.post(`/api/trust/transactions/${txId}/approve`, {});
+            await trustApi.post(`/api/trust/transactions/${txId}/approve`, {});
             toast.success('Transaction approved');
             loadData();
         } catch (err: any) {
@@ -491,7 +529,7 @@ export default function TrustAccounting() {
     const handleRejectTransaction = async (txId: string) => {
         const reason = prompt('Rejection reason (optional):') || undefined;
         try {
-            await api.post(`/api/trust/transactions/${txId}/reject`, { reason });
+            await trustApi.post(`/api/trust/transactions/${txId}/reject`, { reason });
             toast.success('Transaction rejected');
             loadData();
         } catch (err: any) {
@@ -706,8 +744,12 @@ export default function TrustAccounting() {
                                 <Plus className="w-4 h-4" /> New Account
                             </button>
                         </div>
-                        {accounts.length === 0 ? (
-                            <p className="text-gray-500">No trust accounts yet. Click "New Account" to create one.</p>
+                        {filteredAccounts.length === 0 ? (
+                            <p className="text-gray-500">
+                                {entityFilter || officeFilter
+                                    ? 'No trust accounts match the current entity/office filter.'
+                                    : 'No trust accounts yet. Click "New Account" to create one.'}
+                            </p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
@@ -726,7 +768,7 @@ export default function TrustAccounting() {
                                             <tr key={account.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4 font-medium">{account.name}</td>
                                                 <td className="py-3 px-4">{account.bankName}</td>
-                                                <td className="py-3 px-4 font-mono">{account.accountNumberEnc}</td>
+                                                <td className="py-3 px-4 font-mono">{maskAccountNumber(account.accountNumberEnc)}</td>
                                                 <td className="py-3 px-4">{account.jurisdiction}</td>
                                                 <td className="py-3 px-4 text-right font-semibold">
                                                     {formatCurrency(Number(account.currentBalance))}
@@ -760,8 +802,12 @@ export default function TrustAccounting() {
                                 <Plus className="w-4 h-4" /> New Ledger
                             </button>
                         </div>
-                        {ledgers.length === 0 ? (
-                            <p className="text-gray-500">No client ledgers yet.</p>
+                        {filteredLedgers.length === 0 ? (
+                            <p className="text-gray-500">
+                                {entityFilter || officeFilter
+                                    ? 'No client ledgers match the current entity/office filter.'
+                                    : 'No client ledgers yet.'}
+                            </p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
@@ -778,13 +824,13 @@ export default function TrustAccounting() {
                                         {filteredLedgers.map(ledger => (
                                             <tr key={ledger.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4 font-medium">
-                                                    {(ledger as any).client?.name || ledger.clientId}
+                                                    {getClientLabel(ledger.clientId)}
                                                 </td>
                                                 <td className="py-3 px-4">
-                                                    {ledger.matterId || '(General)'}
+                                                    {getMatterLabel(ledger.matterId)}
                                                 </td>
                                                 <td className="py-3 px-4">
-                                                    {(ledger as any).trustAccount?.name || ledger.trustAccountId}
+                                                    {getAccountLabel(ledger.trustAccountId)}
                                                 </td>
                                                 <td className="py-3 px-4 text-right font-semibold">
                                                     {formatCurrency(Number(ledger.runningBalance))}
@@ -812,8 +858,12 @@ export default function TrustAccounting() {
                 {activeTab === 'transactions' && (
                     <div className="space-y-4">
                         <h2 className="text-lg font-semibold">Transaction History</h2>
-                        {transactions.length === 0 ? (
-                            <p className="text-gray-500">No transactions yet.</p>
+                        {filteredTransactions.length === 0 ? (
+                            <p className="text-gray-500">
+                                {entityFilter || officeFilter
+                                    ? 'No trust transactions match the current entity/office filter.'
+                                    : 'No transactions yet.'}
+                            </p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
@@ -901,8 +951,12 @@ export default function TrustAccounting() {
                 {activeTab === 'reconciliation' && (
                     <div className="space-y-4">
                         <h2 className="text-lg font-semibold">Reconciliation Records</h2>
-                        {reconciliations.length === 0 ? (
-                            <p className="text-gray-500">No reconciliation records yet.</p>
+                        {filteredReconciliations.length === 0 ? (
+                            <p className="text-gray-500">
+                                {entityFilter || officeFilter
+                                    ? 'No reconciliation records match the current entity/office filter.'
+                                    : 'No reconciliation records yet.'}
+                            </p>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
@@ -922,7 +976,7 @@ export default function TrustAccounting() {
                                             <tr key={recon.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4">{formatDate(recon.periodEnd)}</td>
                                                 <td className="py-3 px-4">
-                                                    {(recon as any).trustAccount?.name || recon.trustAccountId}
+                                                    {getAccountLabel(recon.trustAccountId)}
                                                 </td>
                                                 <td className="py-3 px-4 text-right">
                                                     {formatCurrency(Number(recon.bankStatementBalance))}
@@ -1045,51 +1099,63 @@ export default function TrustAccounting() {
                         {/* Recent Transactions */}
                         <div>
                             <h3 className="text-lg font-semibold mb-4">Recent Transactions</h3>
-                            <div className="space-y-2">
-                                {transactions.slice(0, 5).map(tx => (
-                                    <div key={tx.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                                        <div className="flex items-center gap-3">
-                                            {tx.type === 'DEPOSIT' ? (
-                                                <ArrowDownCircle className="w-5 h-5 text-green-600" />
-                                            ) : (
-                                                <ArrowUpCircle className="w-5 h-5 text-red-600" />
-                                            )}
-                                            <div>
-                                                <p className="font-medium text-sm">{tx.description}</p>
-                                                <p className="text-xs text-gray-500">{tx.payorPayee}</p>
+                            {filteredTransactions.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 p-5 text-sm text-gray-500">
+                                    No trust transactions yet. Deposits, withdrawals, and approvals will appear here once posted.
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {filteredTransactions.slice(0, 5).map(tx => (
+                                        <div key={tx.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                                            <div className="flex items-center gap-3">
+                                                {tx.type === 'DEPOSIT' ? (
+                                                    <ArrowDownCircle className="w-5 h-5 text-green-600" />
+                                                ) : (
+                                                    <ArrowUpCircle className="w-5 h-5 text-red-600" />
+                                                )}
+                                                <div>
+                                                    <p className="font-medium text-sm">{tx.description}</p>
+                                                    <p className="text-xs text-gray-500">
+                                                        {[tx.payorPayee, getAccountLabel(tx.trustAccountId)].filter(Boolean).join(' • ')}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className={`font-semibold ${tx.type === 'DEPOSIT' ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {tx.type === 'DEPOSIT' ? '+' : '-'}{formatCurrency(Number(tx.amount))}
+                                                </p>
+                                                <p className="text-xs text-gray-500">{formatDate(tx.createdAt)}</p>
                                             </div>
                                         </div>
-                                        <div className="text-right">
-                                            <p className={`font-semibold ${tx.type === 'DEPOSIT' ? 'text-green-600' : 'text-red-600'}`}>
-                                                {tx.type === 'DEPOSIT' ? '+' : '-'}{formatCurrency(Number(tx.amount))}
-                                            </p>
-                                            <p className="text-xs text-gray-500">{formatDate(tx.createdAt)}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {/* Client Ledger Summary */}
                         <div>
                             <h3 className="text-lg font-semibold mb-4">Client Balances</h3>
-                            <div className="space-y-2">
-                                {filteredLedgers.slice(0, 5).map(ledger => (
-                                    <div key={ledger.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                                        <div>
-                                            <p className="font-medium text-sm">
-                                                {(ledger as any).client?.name || 'Client'}
-                                            </p>
-                                            <p className="text-xs text-gray-500">
-                                                {ledger.matterId || 'General Ledger'}
+                            {filteredLedgers.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 p-5 text-sm text-gray-500">
+                                    No client ledgers yet. Create a ledger to tie trust funds to a client or matter.
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {filteredLedgers.slice(0, 5).map(ledger => (
+                                        <div key={ledger.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                                            <div>
+                                                <p className="font-medium text-sm">{getClientLabel(ledger.clientId)}</p>
+                                                <p className="text-xs text-gray-500">
+                                                    {[getMatterLabel(ledger.matterId), getAccountLabel(ledger.trustAccountId)].filter(Boolean).join(' • ')}
+                                                </p>
+                                            </div>
+                                            <p className="font-semibold text-green-600">
+                                                {formatCurrency(Number(ledger.runningBalance))}
                                             </p>
                                         </div>
-                                        <p className="font-semibold text-green-600">
-                                            {formatCurrency(Number(ledger.runningBalance))}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -1108,7 +1174,11 @@ export default function TrustAccounting() {
                                 <label className="block text-sm font-medium mb-1">Trust Account</label>
                                 <select
                                     value={depositForm.trustAccountId}
-                                    onChange={e => setDepositForm({ ...depositForm, trustAccountId: e.target.value })}
+                                    onChange={e => setDepositForm({
+                                        ...depositForm,
+                                        trustAccountId: e.target.value,
+                                        allocations: depositForm.allocations.map(allocation => ({ ...allocation, ledgerId: '' }))
+                                    })}
                                     className="input w-full"
                                     required
                                 >
@@ -1175,9 +1245,9 @@ export default function TrustAccounting() {
                                             className="input flex-1"
                                         >
                                             <option value="">Select Ledger...</option>
-                                            {filteredLedgers.filter(l => l.status === 'ACTIVE').map(l => (
+                                            {availableDepositLedgers.map(l => (
                                                 <option key={l.id} value={l.id}>
-                                                    {(l as any).client?.name || l.clientId} - {formatCurrency(Number(l.runningBalance))}
+                                                    {getLedgerLabel(l)} - {formatCurrency(Number(l.runningBalance))}
                                                 </option>
                                             ))}
                                         </select>
@@ -1233,7 +1303,7 @@ export default function TrustAccounting() {
                                 <label className="block text-sm font-medium mb-1">Trust Account</label>
                                 <select
                                     value={withdrawalForm.trustAccountId}
-                                    onChange={e => setWithdrawalForm({ ...withdrawalForm, trustAccountId: e.target.value })}
+                                    onChange={e => setWithdrawalForm({ ...withdrawalForm, trustAccountId: e.target.value, ledgerId: '' })}
                                     className="input w-full"
                                     required
                                 >
@@ -1251,9 +1321,9 @@ export default function TrustAccounting() {
                                     required
                                 >
                                     <option value="">Select Ledger...</option>
-                                    {filteredLedgers.filter(l => l.status === 'ACTIVE' && Number(l.runningBalance) > 0).map(l => (
+                                    {availableWithdrawalLedgers.map(l => (
                                         <option key={l.id} value={l.id}>
-                                            {(l as any).client?.name || l.clientId} - Available: {formatCurrency(Number(l.runningBalance))}
+                                            {getLedgerLabel(l)} - Available: {formatCurrency(Number(l.runningBalance))}
                                         </option>
                                     ))}
                                 </select>
@@ -1420,7 +1490,7 @@ export default function TrustAccounting() {
                                 <label className="block text-sm font-medium mb-1">Client *</label>
                                 <select
                                     value={ledgerForm.clientId}
-                                    onChange={e => setLedgerForm({ ...ledgerForm, clientId: e.target.value })}
+                                    onChange={e => setLedgerForm({ ...ledgerForm, clientId: e.target.value, matterId: '' })}
                                     className="input w-full"
                                     required
                                 >
@@ -1438,7 +1508,7 @@ export default function TrustAccounting() {
                                     className="input w-full"
                                 >
                                     <option value="">General Ledger (No specific matter)</option>
-                                    {matters.map(m => (
+                                    {availableMattersForLedger.map(m => (
                                         <option key={m.id} value={m.id}>{m.name} - {m.caseNumber}</option>
                                     ))}
                                 </select>
