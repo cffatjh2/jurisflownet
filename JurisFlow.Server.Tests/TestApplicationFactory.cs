@@ -70,7 +70,8 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
                 if (hostedDescriptor.ImplementationType == typeof(RetentionHostedService)
                     || hostedDescriptor.ImplementationType == typeof(DeadlineReminderHostedService)
                     || hostedDescriptor.ImplementationType == typeof(OperationsJobHostedService)
-                    || hostedDescriptor.ImplementationType == typeof(IntegrationSecretMaintenanceHostedService))
+                    || hostedDescriptor.ImplementationType == typeof(IntegrationSecretMaintenanceHostedService)
+                    || hostedDescriptor.ImplementationType == typeof(AuditLogWriteHostedService))
                 {
                     services.Remove(hostedDescriptor);
                 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using JurisFlow.Server.Contracts;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.Models;
 using Microsoft.EntityFrameworkCore;
@@ -317,6 +318,30 @@ namespace JurisFlow.Server.Services
                 throw new InvalidOperationException("PayorClientId does not match InvoicePayorAllocation.");
             }
 
+            var fundSource = (request.FundSource ?? "operating").Trim().ToLowerInvariant();
+            var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+                ? $"alloc:{payment.Id}:{invoice.Id}:{request.InvoiceLineItemId ?? "header"}:{(invoicePayorAllocation?.Id ?? "no_payor_alloc")}:{(resolvedPayorClientId ?? "no_payor")}:{amount.ToString(CultureInfo.InvariantCulture)}:{(request.FundSource ?? "operating").ToLowerInvariant()}"
+                : request.IdempotencyKey.Trim();
+
+            if (idempotencyKey.Length > 160)
+            {
+                idempotencyKey = idempotencyKey[..160];
+            }
+
+            var existing = await _context.BillingPaymentAllocations
+                .FirstOrDefaultAsync(a => a.IdempotencyKey == idempotencyKey, ct);
+            if (existing != null)
+            {
+                EnsurePaymentAllocationReplayMatches(
+                    existing,
+                    invoiceLine?.Id,
+                    invoicePayorAllocation?.Id,
+                    resolvedPayorClientId,
+                    amount,
+                    fundSource);
+                return existing;
+            }
+
             await _trustRiskRadarService.EnforceNoActiveHardHoldsAsync(new TrustRiskRadarService.TrustRiskHoldGuardContext
             {
                 OperationType = "payment_allocation_apply",
@@ -343,18 +368,22 @@ namespace JurisFlow.Server.Services
                 await EnforceTrustFundingGuardrailAsync(request, invoice, amount, ct);
             }
 
-            var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
-                ? $"alloc:{payment.Id}:{invoice.Id}:{request.InvoiceLineItemId ?? "header"}:{(invoicePayorAllocation?.Id ?? "no_payor_alloc")}:{(resolvedPayorClientId ?? "no_payor")}:{amount.ToString(CultureInfo.InvariantCulture)}:{(request.FundSource ?? "operating").ToLowerInvariant()}"
-                : request.IdempotencyKey.Trim();
-
-            var existing = await _context.BillingPaymentAllocations
-                .FirstOrDefaultAsync(a => a.MetadataJson != null && a.MetadataJson.Contains(idempotencyKey) && a.Status == "applied", ct);
-            if (existing != null)
+            if (string.Equals(fundSource, "trust", StringComparison.OrdinalIgnoreCase))
             {
-                return existing;
+                var role = TrustActionAuthorizationService.GetRole(_httpContextAccessor.HttpContext?.User);
+                if (!_trustAuthorization.IsAllowed(TrustActionKeys.EarnedFeeTransfer, role))
+                {
+                    throw new InvalidOperationException("Current role is not allowed to perform earned-fee transfers from trust.");
+                }
             }
 
             await using var tx = await _context.Database.BeginTransactionAsync(ct);
+            ClientTrustLedger? trustSourceLedger = null;
+            string? trustFundingTransactionId = null;
+            if (string.Equals(fundSource, "trust", StringComparison.OrdinalIgnoreCase))
+            {
+                trustSourceLedger = await ResolveTrustFundingLedgerAsync(request, invoice, ct);
+            }
 
             var allocation = new BillingPaymentAllocation
             {
@@ -367,15 +396,18 @@ namespace JurisFlow.Server.Services
                 MatterId = request.MatterId ?? invoice.MatterId ?? payment.MatterId,
                 Amount = amount,
                 AllocationType = NormalizeEnum(request.AllocationType, invoiceLine == null ? "invoice_header" : "invoice_line", ["invoice_line", "invoice_header", "tax", "fee"]),
-                Status = "applied",
+                Status = fundSource == "trust" ? "pending_trust_approval" : "applied",
                 Notes = Truncate(request.Notes, 2048),
+                IdempotencyKey = idempotencyKey,
                 MetadataJson = BuildPaymentAllocationMetadataJson(new
                 {
                     idempotencyKey,
                     fundSource = (request.FundSource ?? "operating").Trim().ToLowerInvariant(),
                     payorClientId = resolvedPayorClientId,
                     invoicePayorAllocationId = invoicePayorAllocation?.Id,
+                    trustAccountId = trustSourceLedger?.TrustAccountId ?? request.TrustAccountId,
                     trustSourceClientId = request.TrustSourceClientId,
+                    trustLedgerId = request.TrustLedgerId,
                     request.Reference,
                     request.ApplyInvoiceHeaderIfNotAlreadyApplied
                 }),
@@ -385,124 +417,186 @@ namespace JurisFlow.Server.Services
                 UpdatedAt = DateTime.UtcNow
             };
             _context.BillingPaymentAllocations.Add(allocation);
-            await _context.SaveChangesAsync(ct);
+            try
+            {
+                await _context.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException)
+            {
+                _context.Entry(allocation).State = EntityState.Detached;
+                var replay = await _context.BillingPaymentAllocations
+                    .FirstOrDefaultAsync(a => a.IdempotencyKey == idempotencyKey, ct);
+                if (replay == null)
+                {
+                    throw;
+                }
 
-            var fundSource = (request.FundSource ?? "operating").Trim().ToLowerInvariant();
-            var ledgerEntries = new List<BillingLedgerEntry>();
+                EnsurePaymentAllocationReplayMatches(
+                    replay,
+                    invoiceLine?.Id,
+                    invoicePayorAllocation?.Id,
+                    resolvedPayorClientId,
+                    amount,
+                    fundSource);
+                return replay;
+            }
+
             if (fundSource == "trust")
             {
-                ledgerEntries.Add(new BillingLedgerEntry
+                var trustTransfer = await _trustAccountingService.PostEarnedFeeTransferAsync(new TrustEarnedFeeTransferCommand
                 {
-                    LedgerDomain = "trust",
-                    LedgerBucket = "trust_liability",
-                    EntryType = "payment_allocation",
-                    Currency = payment.Currency,
-                    Amount = NormalizeMoney(-amount),
+                    TrustAccountId = trustSourceLedger!.TrustAccountId,
+                    LedgerId = trustSourceLedger.Id,
                     MatterId = allocation.MatterId,
-                    ClientId = allocation.ClientId,
-                    PayorClientId = allocation.PayorClientId,
-                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
-                    InvoiceId = invoice.Id,
-                    InvoiceLineItemId = invoiceLine?.Id,
-                    PaymentTransactionId = payment.Id,
-                    CorrelationKey = $"allocation:{allocation.Id}:trust_liability",
-                    Description = $"Trust liability reduced for invoice {invoice.Id} allocation.",
-                    PostedBy = userId,
-                    PostedAt = allocation.AppliedAt,
-                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource, trustAccountId = request.TrustAccountId })
-                });
-                ledgerEntries.Add(new BillingLedgerEntry
-                {
-                    LedgerDomain = "operating",
-                    LedgerBucket = "cash",
-                    EntryType = "payment_allocation",
-                    Currency = payment.Currency,
                     Amount = amount,
-                    MatterId = allocation.MatterId,
-                    ClientId = allocation.ClientId,
-                    PayorClientId = allocation.PayorClientId,
-                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
-                    InvoiceId = invoice.Id,
-                    InvoiceLineItemId = invoiceLine?.Id,
+                    Description = $"Earned fee transfer for invoice {invoice.Id}.",
+                    PayorPayee = "Operating Account",
+                    Reference = request.Reference ?? $"billing-allocation:{allocation.Id}",
+                    BillingPaymentAllocationId = allocation.Id,
                     PaymentTransactionId = payment.Id,
-                    CorrelationKey = $"allocation:{allocation.Id}:operating_cash",
-                    Description = $"Earned fees transfer from trust for invoice {invoice.Id}.",
-                    PostedBy = userId,
-                    PostedAt = allocation.AppliedAt,
-                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource, trustAccountId = request.TrustAccountId })
-                });
-            }
-            else
-            {
-                ledgerEntries.Add(new BillingLedgerEntry
+                    InvoiceId = invoice.Id,
+                    EffectiveAt = allocation.AppliedAt,
+                    ShadowPolicyOnly = false
+                }, ct);
+                trustFundingTransactionId = trustTransfer.Id;
+                allocation.TrustTransactionId = trustFundingTransactionId;
+                if (!string.Equals(trustTransfer.Status, "APPROVED", StringComparison.OrdinalIgnoreCase))
                 {
-                    LedgerDomain = "operating",
-                    LedgerBucket = "cash",
-                    EntryType = "payment_allocation",
-                    Currency = payment.Currency,
-                    Amount = amount,
-                    MatterId = allocation.MatterId,
-                    ClientId = allocation.ClientId,
-                    PayorClientId = allocation.PayorClientId,
-                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
-                    InvoiceId = invoice.Id,
-                    InvoiceLineItemId = invoiceLine?.Id,
-                    PaymentTransactionId = payment.Id,
-                    CorrelationKey = $"allocation:{allocation.Id}:operating_cash",
-                    Description = $"Operating cash allocation for invoice {invoice.Id}.",
-                    PostedBy = userId,
-                    PostedAt = allocation.AppliedAt,
-                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource })
-                });
+                    allocation.Status = "pending_trust_approval";
+                    allocation.UpdatedAt = DateTime.UtcNow;
+                    await _context.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                    await TryRecordTrustRiskAllocationAsync(allocation, "payment_allocation_pending_trust_approval", ct);
+                    return allocation;
+                }
+
+                allocation.Status = "applied";
             }
 
-            ledgerEntries.Add(new BillingLedgerEntry
-            {
-                LedgerDomain = "billing",
-                LedgerBucket = "accounts_receivable",
-                EntryType = "payment_allocation",
-                Currency = payment.Currency,
-                Amount = NormalizeMoney(-amount),
-                MatterId = allocation.MatterId,
-                ClientId = allocation.ClientId,
-                PayorClientId = allocation.PayorClientId,
-                InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
-                InvoiceId = invoice.Id,
-                InvoiceLineItemId = invoiceLine?.Id,
-                PaymentTransactionId = payment.Id,
-                CorrelationKey = $"allocation:{allocation.Id}:ar",
-                Description = $"A/R reduced by payment allocation on invoice {invoice.Id}.",
-                PostedBy = userId,
-                PostedAt = allocation.AppliedAt,
-                MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource })
-            });
-
-            _context.BillingLedgerEntries.AddRange(ledgerEntries);
-            await _context.SaveChangesAsync(ct);
-
-            allocation.LedgerEntryId = ledgerEntries.Last().Id;
-            allocation.UpdatedAt = DateTime.UtcNow;
-
-            if (request.ApplyInvoiceHeaderIfNotAlreadyApplied == true)
-            {
-                await ApplyInvoiceHeaderAllocationIfNeededAsync(invoice, payment, amount, ct);
-            }
-
-            await _context.SaveChangesAsync(ct);
+            await FinalizeAppliedAllocationAsync(
+                allocation,
+                payment,
+                invoice,
+                invoiceLine,
+                fundSource,
+                trustSourceLedger?.TrustAccountId ?? request.TrustAccountId,
+                userId,
+                request.ApplyInvoiceHeaderIfNotAlreadyApplied == true,
+                ct);
             await tx.CommitAsync(ct);
-            foreach (var ledgerEntry in ledgerEntries)
-            {
-                await TryRecordTrustRiskLedgerAsync(ledgerEntry, "payment_allocation_ledger_posted", ct);
-            }
-            await TryRecordTrustRiskAllocationAsync(allocation, "payment_allocation_applied", ct);
             return allocation;
         }
 
         public async Task<BillingPaymentAllocation?> ReversePaymentAllocationAsync(string allocationId, ReversePaymentAllocationRequest request, string? userId, CancellationToken ct = default)
         {
             var allocation = await _context.BillingPaymentAllocations.FirstOrDefaultAsync(a => a.Id == allocationId, ct);
+            return allocation == null
+                ? null
+                : await ReversePaymentAllocationInternalAsync(allocation, request, userId, skipTrustReversal: false, ct);
+        }
+
+        public async Task<BillingPaymentAllocation?> FinalizePendingTrustAllocationAsync(string allocationId, string? userId, CancellationToken ct = default)
+        {
+            var allocation = await _context.BillingPaymentAllocations.FirstOrDefaultAsync(a => a.Id == allocationId, ct);
             if (allocation == null) return null;
-            if (allocation.Status == "reversed") return allocation;
+            if (!string.Equals(allocation.Status, "pending_trust_approval", StringComparison.OrdinalIgnoreCase))
+            {
+                return allocation;
+            }
+
+            if (string.IsNullOrWhiteSpace(allocation.TrustTransactionId))
+            {
+                throw new InvalidOperationException("Pending trust allocation is missing its trust transaction link.");
+            }
+
+            var trustTransaction = await _context.TrustTransactions.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == allocation.TrustTransactionId, ct)
+                ?? throw new InvalidOperationException("Linked trust transaction was not found.");
+            if (!string.Equals(trustTransaction.Status, "APPROVED", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Linked trust transaction is not yet approved.");
+            }
+
+            var payment = await _context.PaymentTransactions.FirstOrDefaultAsync(p => p.Id == allocation.PaymentTransactionId, ct)
+                ?? throw new InvalidOperationException("Payment transaction not found.");
+            var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == allocation.InvoiceId, ct)
+                ?? throw new InvalidOperationException("Invoice not found.");
+            var invoiceLine = !string.IsNullOrWhiteSpace(allocation.InvoiceLineItemId)
+                ? invoice.LineItems.FirstOrDefault(li => li.Id == allocation.InvoiceLineItemId)
+                : null;
+
+            var fundSource = ReadPaymentAllocationFundSource(allocation.MetadataJson);
+            var trustAccountId = ReadPaymentAllocationMetadataValue(allocation.MetadataJson, "trustAccountId");
+
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
+            var existingLedger = await _context.BillingLedgerEntries
+                .AnyAsync(e => e.CorrelationKey != null && e.CorrelationKey.StartsWith($"allocation:{allocation.Id}:"), ct);
+            if (!existingLedger)
+            {
+                await FinalizeAppliedAllocationAsync(
+                    allocation,
+                    payment,
+                    invoice,
+                    invoiceLine,
+                    fundSource,
+                    trustAccountId,
+                    userId,
+                    applyInvoiceHeaderIfNeeded: false,
+                    ct);
+            }
+
+            await tx.CommitAsync(ct);
+            return allocation;
+        }
+
+        public async Task<BillingPaymentAllocation?> SyncTrustAllocationAsync(string trustTransactionId, string trustTransactionStatus, string? reason, string? userId, CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(trustTransactionId))
+            {
+                return null;
+            }
+
+            var allocation = await _context.BillingPaymentAllocations
+                .FirstOrDefaultAsync(a => a.TrustTransactionId == trustTransactionId, ct);
+            if (allocation == null)
+            {
+                return null;
+            }
+
+            if (string.Equals(trustTransactionStatus, "APPROVED", StringComparison.OrdinalIgnoreCase))
+            {
+                return await FinalizePendingTrustAllocationAsync(allocation.Id, userId, ct);
+            }
+
+            if (string.Equals(trustTransactionStatus, "REJECTED", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(trustTransactionStatus, "VOIDED", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ReversePaymentAllocationInternalAsync(
+                    allocation,
+                    new ReversePaymentAllocationRequest
+                    {
+                        Reason = reason ?? $"Mirrored from trust transaction {trustTransactionStatus.ToLowerInvariant()}.",
+                        ReversedAt = DateTime.UtcNow
+                    },
+                    userId,
+                    skipTrustReversal: true,
+                    ct);
+            }
+
+            return allocation;
+        }
+
+        private async Task<BillingPaymentAllocation> ReversePaymentAllocationInternalAsync(
+            BillingPaymentAllocation allocation,
+            ReversePaymentAllocationRequest request,
+            string? userId,
+            bool skipTrustReversal,
+            CancellationToken ct)
+        {
+            if (allocation.Status == "reversed")
+            {
+                return allocation;
+            }
 
             await _trustRiskRadarService.EnforceNoActiveHardHoldsAsync(new TrustRiskRadarService.TrustRiskHoldGuardContext
             {
@@ -525,6 +619,32 @@ namespace JurisFlow.Server.Services
 
             await using var tx = await _context.Database.BeginTransactionAsync(ct);
 
+            var linkedTrustTransactionId = ledgers
+                .Select(e => e.TrustTransactionId)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                ?? allocation.TrustTransactionId;
+            if (!skipTrustReversal && !string.IsNullOrWhiteSpace(linkedTrustTransactionId))
+            {
+                var trustTx = await _context.TrustTransactions
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.Id == linkedTrustTransactionId, ct);
+                if (trustTx != null)
+                {
+                    if (string.Equals(trustTx.Status, "PENDING", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _trustAccountingService.RejectTransactionAsync(
+                            trustTx.Id,
+                            new TrustRejectDto { Reason = request.Reason },
+                            null,
+                            ct);
+                    }
+                    else if (string.Equals(trustTx.Status, "APPROVED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _trustAccountingService.ReverseEarnedFeeTransferAsync(trustTx.Id, request.Reason, ct);
+                    }
+                }
+            }
+
             foreach (var ledger in ledgers)
             {
                 var existsReversal = await _context.BillingLedgerEntries.AnyAsync(e => e.ReversalOfLedgerEntryId == ledger.Id, ct);
@@ -544,10 +664,11 @@ namespace JurisFlow.Server.Services
                     InvoiceId = ledger.InvoiceId,
                     InvoiceLineItemId = ledger.InvoiceLineItemId,
                     PaymentTransactionId = ledger.PaymentTransactionId,
+                    TrustTransactionId = ledger.TrustTransactionId,
                     ReversalOfLedgerEntryId = ledger.Id,
                     CorrelationKey = $"reverse:allocation:{allocation.Id}:{ledger.Id}",
                     Description = Truncate($"Reversal of allocation {allocation.Id}. {request.Reason}", 2048),
-                    MetadataJson = BuildLedgerMetadataJson(new { allocationId, reversalReason = request.Reason }),
+                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, reversalReason = request.Reason, mirroredFromTrust = skipTrustReversal }),
                     PostedBy = userId,
                     PostedAt = request.ReversedAt ?? DateTime.UtcNow
                 };
@@ -569,6 +690,132 @@ namespace JurisFlow.Server.Services
             }
             await TryRecordTrustRiskAllocationAsync(allocation, "payment_allocation_reversed", ct);
             return allocation;
+        }
+
+        private async Task<List<BillingLedgerEntry>> FinalizeAppliedAllocationAsync(
+            BillingPaymentAllocation allocation,
+            PaymentTransaction payment,
+            Invoice invoice,
+            InvoiceLineItem? invoiceLine,
+            string fundSource,
+            string? trustAccountId,
+            string? userId,
+            bool applyInvoiceHeaderIfNeeded,
+            CancellationToken ct)
+        {
+            var amount = NormalizeMoney(allocation.Amount);
+            var ledgerEntries = new List<BillingLedgerEntry>();
+            if (string.Equals(fundSource, "trust", StringComparison.OrdinalIgnoreCase))
+            {
+                ledgerEntries.Add(new BillingLedgerEntry
+                {
+                    LedgerDomain = "trust",
+                    LedgerBucket = "trust_liability",
+                    EntryType = "payment_allocation",
+                    Currency = payment.Currency,
+                    Amount = NormalizeMoney(-amount),
+                    MatterId = allocation.MatterId,
+                    ClientId = allocation.ClientId,
+                    PayorClientId = allocation.PayorClientId,
+                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
+                    InvoiceId = invoice.Id,
+                    InvoiceLineItemId = invoiceLine?.Id,
+                    PaymentTransactionId = payment.Id,
+                    TrustTransactionId = allocation.TrustTransactionId,
+                    CorrelationKey = $"allocation:{allocation.Id}:trust_liability",
+                    Description = $"Trust liability reduced for invoice {invoice.Id} allocation.",
+                    PostedBy = userId,
+                    PostedAt = allocation.AppliedAt,
+                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource, trustAccountId })
+                });
+                ledgerEntries.Add(new BillingLedgerEntry
+                {
+                    LedgerDomain = "operating",
+                    LedgerBucket = "cash",
+                    EntryType = "payment_allocation",
+                    Currency = payment.Currency,
+                    Amount = amount,
+                    MatterId = allocation.MatterId,
+                    ClientId = allocation.ClientId,
+                    PayorClientId = allocation.PayorClientId,
+                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
+                    InvoiceId = invoice.Id,
+                    InvoiceLineItemId = invoiceLine?.Id,
+                    PaymentTransactionId = payment.Id,
+                    TrustTransactionId = allocation.TrustTransactionId,
+                    CorrelationKey = $"allocation:{allocation.Id}:operating_cash",
+                    Description = $"Earned fees transfer from trust for invoice {invoice.Id}.",
+                    PostedBy = userId,
+                    PostedAt = allocation.AppliedAt,
+                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource, trustAccountId })
+                });
+            }
+            else
+            {
+                ledgerEntries.Add(new BillingLedgerEntry
+                {
+                    LedgerDomain = "operating",
+                    LedgerBucket = "cash",
+                    EntryType = "payment_allocation",
+                    Currency = payment.Currency,
+                    Amount = amount,
+                    MatterId = allocation.MatterId,
+                    ClientId = allocation.ClientId,
+                    PayorClientId = allocation.PayorClientId,
+                    InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
+                    InvoiceId = invoice.Id,
+                    InvoiceLineItemId = invoiceLine?.Id,
+                    PaymentTransactionId = payment.Id,
+                    TrustTransactionId = allocation.TrustTransactionId,
+                    CorrelationKey = $"allocation:{allocation.Id}:operating_cash",
+                    Description = $"Operating cash allocation for invoice {invoice.Id}.",
+                    PostedBy = userId,
+                    PostedAt = allocation.AppliedAt,
+                    MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource })
+                });
+            }
+
+            ledgerEntries.Add(new BillingLedgerEntry
+            {
+                LedgerDomain = "billing",
+                LedgerBucket = "accounts_receivable",
+                EntryType = "payment_allocation",
+                Currency = payment.Currency,
+                Amount = NormalizeMoney(-amount),
+                MatterId = allocation.MatterId,
+                ClientId = allocation.ClientId,
+                PayorClientId = allocation.PayorClientId,
+                InvoicePayorAllocationId = allocation.InvoicePayorAllocationId,
+                InvoiceId = invoice.Id,
+                InvoiceLineItemId = invoiceLine?.Id,
+                PaymentTransactionId = payment.Id,
+                TrustTransactionId = allocation.TrustTransactionId,
+                CorrelationKey = $"allocation:{allocation.Id}:ar",
+                Description = $"A/R reduced by payment allocation on invoice {invoice.Id}.",
+                PostedBy = userId,
+                PostedAt = allocation.AppliedAt,
+                MetadataJson = BuildLedgerMetadataJson(new { allocationId = allocation.Id, fundSource })
+            });
+
+            _context.BillingLedgerEntries.AddRange(ledgerEntries);
+            await _context.SaveChangesAsync(ct);
+
+            allocation.LedgerEntryId = ledgerEntries.Last().Id;
+            allocation.Status = "applied";
+            allocation.UpdatedAt = DateTime.UtcNow;
+
+            if (applyInvoiceHeaderIfNeeded)
+            {
+                await ApplyInvoiceHeaderAllocationIfNeededAsync(invoice, payment, amount, ct);
+            }
+
+            await _context.SaveChangesAsync(ct);
+            foreach (var ledgerEntry in ledgerEntries)
+            {
+                await TryRecordTrustRiskLedgerAsync(ledgerEntry, "payment_allocation_ledger_posted", ct);
+            }
+            await TryRecordTrustRiskAllocationAsync(allocation, "payment_allocation_applied", ct);
+            return ledgerEntries;
         }
 
         private async Task TryCreateManualLedgerPayorDistributionEntriesAsync(BillingLedgerEntry entry, ManualLedgerEntryRequest request, string? userId, CancellationToken ct)
@@ -834,9 +1081,16 @@ namespace JurisFlow.Server.Services
                 .Where(l => accountIds.Contains(l.TrustAccountId))
                 .ToListAsync(ct);
 
-            var trustTransactions = await _context.TrustTransactions.AsNoTracking()
-                .Where(t => accountIds.Contains(t.TrustAccountId) && !t.IsVoided && t.CreatedAt <= asOf)
-                .ToListAsync(ct);
+            var journalAggregates = await _context.TrustJournalEntries.AsNoTracking()
+                .Where(j => accountIds.Contains(j.TrustAccountId) && j.EffectiveAt <= asOf)
+                .GroupBy(j => j.TrustAccountId)
+                .Select(g => new
+                {
+                    TrustAccountId = g.Key,
+                    JournalBalance = g.Sum(x => x.Amount),
+                    ClientLedgerBalance = g.Where(x => x.ClientTrustLedgerId != null).Sum(x => x.Amount)
+                })
+                .ToDictionaryAsync(x => x.TrustAccountId, StringComparer.Ordinal, ct);
 
             var billingTrustLedgerEntries = await _context.BillingLedgerEntries.AsNoTracking()
                 .Where(e => e.LedgerDomain == "trust" && e.PostedAt <= asOf)
@@ -845,14 +1099,17 @@ namespace JurisFlow.Server.Services
             var items = new List<TrustThreeWayReconciliationAccountItem>(accounts.Count);
             foreach (var account in accounts)
             {
-                var bankBalance = NormalizeMoney((decimal)account.CurrentBalance);
-                var clientLedgerTotal = NormalizeMoney(clientLedgers
-                    .Where(l => l.TrustAccountId == account.Id && l.Status != LedgerStatus.CLOSED)
-                    .Sum(l => (decimal)l.RunningBalance));
+                var hasJournal = journalAggregates.TryGetValue(account.Id, out var journalAggregate);
+                var bankBalance = hasJournal
+                    ? NormalizeMoney(journalAggregate!.JournalBalance)
+                    : NormalizeMoney(account.CurrentBalance);
+                var clientLedgerTotal = hasJournal
+                    ? NormalizeMoney(journalAggregate!.ClientLedgerBalance)
+                    : NormalizeMoney(clientLedgers
+                        .Where(l => l.TrustAccountId == account.Id && l.Status != LedgerStatus.CLOSED)
+                        .Sum(l => l.RunningBalance));
 
-                var trustTransactionsNet = NormalizeMoney(trustTransactions
-                    .Where(t => t.TrustAccountId == account.Id)
-                    .Sum(t => SignedTrustTransactionAmount(t)));
+                var trustTransactionsNet = bankBalance;
 
                 var billingTrustLedgerTotal = NormalizeMoney(billingTrustLedgerEntries
                     .Where(e => e.MetadataJson != null && e.MetadataJson.Contains(account.Id))
@@ -1030,6 +1287,16 @@ namespace JurisFlow.Server.Services
                 return;
             }
 
+            var ledger = await ResolveTrustFundingLedgerAsync(request, invoice, ct);
+            if (amount > ledger.AvailableToDisburse)
+            {
+                throw new InvalidOperationException("Trust-funded allocation exceeds available client trust balance (IOLTA guardrail).");
+            }
+        }
+
+        private async Task<ClientTrustLedger> ResolveTrustFundingLedgerAsync(ApplyPaymentAllocationRequest request, Invoice invoice, CancellationToken ct)
+        {
+            var targetMatterId = request.MatterId ?? invoice.MatterId;
             var clientId = request.TrustSourceClientId ?? request.ClientId ?? invoice.ClientId;
             if (string.IsNullOrWhiteSpace(clientId))
             {
@@ -1044,24 +1311,129 @@ namespace JurisFlow.Server.Services
                 throw new InvalidOperationException("Trust-funded allocations for third-party payors require TrustSourceClientId to be specified explicitly.");
             }
 
-            var trustLedgerBalance = await _context.ClientTrustLedgers
+            if (!string.IsNullOrWhiteSpace(request.TrustLedgerId))
+            {
+                var explicitLedger = await _context.ClientTrustLedgers
+                    .FirstOrDefaultAsync(l => l.Id == request.TrustLedgerId, ct)
+                    ?? throw new InvalidOperationException("Selected trust ledger was not found.");
+
+                if (explicitLedger.Status != LedgerStatus.ACTIVE)
+                {
+                    throw new InvalidOperationException("Selected trust ledger is not active.");
+                }
+
+                if (!string.Equals(explicitLedger.ClientId, clientId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Selected trust ledger does not belong to the expected client.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(targetMatterId) &&
+                    !string.IsNullOrWhiteSpace(explicitLedger.MatterId) &&
+                    !string.Equals(explicitLedger.MatterId, targetMatterId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Selected trust ledger does not match the target matter.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.TrustAccountId) &&
+                    !string.Equals(explicitLedger.TrustAccountId, request.TrustAccountId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Selected trust ledger does not belong to the selected trust account.");
+                }
+
+                return explicitLedger;
+            }
+
+            var candidates = await _context.ClientTrustLedgers
                 .Where(l =>
                     l.ClientId == clientId &&
-                    (string.IsNullOrWhiteSpace(targetMatterId) || l.MatterId == targetMatterId) &&
                     l.Status == LedgerStatus.ACTIVE &&
+                    (string.IsNullOrWhiteSpace(targetMatterId) || l.MatterId == targetMatterId) &&
                     (string.IsNullOrWhiteSpace(request.TrustAccountId) || l.TrustAccountId == request.TrustAccountId))
-                .SumAsync(l => (double?)l.RunningBalance, ct) ?? 0d;
+                .OrderByDescending(l => l.AvailableToDisburse)
+                .ThenBy(l => l.Id)
+                .ToListAsync(ct);
 
-            var available = NormalizeMoney((decimal)trustLedgerBalance);
-            if (amount > available)
+            if (candidates.Count == 0)
             {
-                throw new InvalidOperationException("Trust-funded allocation exceeds available client trust balance (IOLTA guardrail).");
+                throw new InvalidOperationException("No active trust ledger was found for the requested trust-funded allocation.");
             }
+
+            if (candidates.Count > 1)
+            {
+                throw new InvalidOperationException("Multiple trust ledgers match this trust-funded allocation. Specify TrustLedgerId explicitly.");
+            }
+
+            return candidates[0];
+        }
+
+        private static void EnsurePaymentAllocationReplayMatches(
+            BillingPaymentAllocation existing,
+            string? invoiceLineItemId,
+            string? invoicePayorAllocationId,
+            string? payorClientId,
+            decimal amount,
+            string fundSource)
+        {
+            if (!string.Equals(existing.InvoiceLineItemId, invoiceLineItemId, StringComparison.Ordinal) ||
+                !string.Equals(existing.InvoicePayorAllocationId, invoicePayorAllocationId, StringComparison.Ordinal) ||
+                !string.Equals(existing.PayorClientId, payorClientId, StringComparison.Ordinal) ||
+                existing.Amount != amount ||
+                !string.Equals(ReadPaymentAllocationFundSource(existing.MetadataJson), fundSource, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Idempotency key was already used for a different billing allocation payload.");
+            }
+        }
+
+        private static string ReadPaymentAllocationFundSource(string? metadataJson)
+        {
+            if (string.IsNullOrWhiteSpace(metadataJson))
+            {
+                return "operating";
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(metadataJson);
+                if (document.RootElement.TryGetProperty("fundSource", out var fundSource) &&
+                    fundSource.ValueKind == JsonValueKind.String)
+                {
+                    return (fundSource.GetString() ?? "operating").Trim().ToLowerInvariant();
+                }
+            }
+            catch
+            {
+            }
+
+            return "operating";
+        }
+
+        private static string? ReadPaymentAllocationMetadataValue(string? metadataJson, string propertyName)
+        {
+            if (string.IsNullOrWhiteSpace(metadataJson) || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return null;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(metadataJson);
+                if (document.RootElement.TryGetProperty(propertyName, out var value) &&
+                    value.ValueKind == JsonValueKind.String)
+                {
+                    var text = value.GetString()?.Trim();
+                    return string.IsNullOrWhiteSpace(text) ? null : text;
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         private static decimal SignedTrustTransactionAmount(TrustTransaction tx)
         {
-            var amount = NormalizeMoney((decimal)tx.Amount);
+            var amount = NormalizeMoney(tx.Amount);
             var type = (tx.Type ?? string.Empty).Trim().ToLowerInvariant();
             return type switch
             {

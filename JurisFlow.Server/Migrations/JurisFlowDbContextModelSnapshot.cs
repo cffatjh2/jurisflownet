@@ -1178,6 +1178,11 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("InvoiceId")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -1228,6 +1233,10 @@ namespace JurisFlow.Server.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("TrustTransactionId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
@@ -1235,7 +1244,12 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "IdempotencyKey")
+                        .IsUnique();
+
                     b.HasIndex("TenantId", "InvoicePayorAllocationId", "Status");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "Status");
 
                     b.HasIndex("TenantId", "InvoiceId", "InvoiceLineItemId", "Status");
 
@@ -1780,6 +1794,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "Date");
+
+                    b.HasIndex("TenantId", "MatterId", "Date");
+
                     b.ToTable("CalendarEvents");
                 });
 
@@ -1935,6 +1953,8 @@ namespace JurisFlow.Server.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CreatedAt");
 
                     b.HasIndex("TenantId", "NormalizedEmail")
                         .IsUnique();
@@ -2541,6 +2561,14 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
 
+                    b.Property<decimal>("AvailableToDisburse")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("ClearedBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ClientId")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -2549,6 +2577,10 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("HoldAmount")
+                        .HasPrecision(18, 2)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("MatterId")
@@ -2560,8 +2592,15 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("RunningBalance")
-                        .HasColumnType("REAL");
+                    b.Property<string>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("RunningBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
@@ -2572,6 +2611,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("TrustAccountId")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("UnclearedBalance")
+                        .HasPrecision(18, 2)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("UpdatedAt")
@@ -3073,6 +3116,12 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("MatterId");
 
                     b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "UploadedBy", "CreatedAt");
 
                     b.ToTable("Documents");
                 });
@@ -3687,6 +3736,12 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("MatterId", "Date");
 
+                    b.HasIndex("TenantId", "Date");
+
+                    b.HasIndex("TenantId", "MatterId", "Date");
+
+                    b.HasIndex("TenantId", "SubmittedBy", "Date");
+
                     b.ToTable("Expenses");
                 });
 
@@ -3755,7 +3810,7 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId", "IsDefault")
                         .IsUnique()
-                        .HasFilter("IsDefault = 1");
+                        .HasFilter("\"IsDefault\" = 1");
 
                     b.ToTable("FirmEntities");
                 });
@@ -4854,6 +4909,12 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("EntityId", "OfficeId");
 
+                    b.HasIndex("TenantId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "IssueDate");
+
                     b.ToTable("Invoices");
                 });
 
@@ -4889,6 +4950,9 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("Rate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ServiceDate")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TaskCode")
@@ -5680,6 +5744,8 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "CreatedAt");
+
                     b.ToTable("Leads");
                 });
 
@@ -5709,6 +5775,9 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("CourtType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CurrentOutcomeFeePlanId")
@@ -5742,6 +5811,15 @@ namespace JurisFlow.Server.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("ShareBillingWithFirm")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ShareNotesWithFirm")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ShareWithFirm")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -5762,6 +5840,16 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("TenantId");
 
                     b.HasIndex("EntityId", "OfficeId");
+
+                    b.HasIndex("TenantId", "CreatedByUserId");
+
+                    b.HasIndex("TenantId", "OpenDate");
+
+                    b.HasIndex("TenantId", "ShareWithFirm");
+
+                    b.HasIndex("TenantId", "CreatedByUserId", "OpenDate");
+
+                    b.HasIndex("TenantId", "ShareWithFirm", "OpenDate");
 
                     b.ToTable("Matters");
                 });
@@ -5897,6 +5985,91 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("MatterBillingPolicies");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.MatterClientLink", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatterId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientId");
+
+                    b.HasIndex("MatterId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "ClientId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "ClientId")
+                        .IsUnique();
+
+                    b.ToTable("MatterClientLinks");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.MatterNote", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatterId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(250)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UpdatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatterId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "MatterId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "UpdatedAt");
+
+                    b.ToTable("MatterNotes");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.MfaChallenge", b =>
                 {
                     b.Property<string>("Id")
@@ -5977,6 +6150,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "ClientId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "UserId", "CreatedAt");
+
                     b.HasIndex("UserId", "ClientId", "CreatedAt");
 
                     b.ToTable("Notifications");
@@ -6046,7 +6223,7 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId", "EntityId", "IsDefault")
                         .IsUnique()
-                        .HasFilter("IsDefault = 1");
+                        .HasFilter("\"IsDefault\" = 1");
 
                     b.ToTable("Offices");
                 });
@@ -6995,17 +7172,20 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("BankStatementBalance")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("BankStatementBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
-                    b.Property<double>("ClientLedgerSumBalance")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("ClientLedgerSumBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("DiscrepancyAmount")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("DiscrepancyAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.Property<bool>("IsReconciled")
                         .HasColumnType("INTEGER");
@@ -7024,8 +7204,9 @@ namespace JurisFlow.Server.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("TrustLedgerBalance")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("TrustLedgerBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
@@ -7591,6 +7772,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "MatterId", "CreatedAt");
+
                     b.ToTable("Tasks");
                 });
 
@@ -7704,7 +7889,170 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("MatterId", "Date");
 
+                    b.HasIndex("TenantId", "Date");
+
+                    b.HasIndex("TenantId", "MatterId", "Date");
+
+                    b.HasIndex("TenantId", "SubmittedBy", "Date");
+
                     b.ToTable("TimeEntries");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustApprovalDecision", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorRole")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorUserId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DecisionType")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustApprovalRequirementId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustApprovalRequirementId", "ActorUserId")
+                        .IsUnique();
+
+                    b.ToTable("TrustApprovalDecisions");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustApprovalOverride", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorRole")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorUserId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustApprovalRequirementId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "CreatedAt");
+
+                    b.ToTable("TrustApprovalOverrides");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustApprovalRequirement", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PolicyKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RequiredCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RequirementType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SatisfiedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Summary")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "RequirementType", "Status");
+
+                    b.ToTable("TrustApprovalRequirements");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.TrustBankAccount", b =>
@@ -7716,21 +8064,43 @@ namespace JurisFlow.Server.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("AccountType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AllowedSignatoriesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("AvailableDisbursementCapacity")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("BankName")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BankReferenceMetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("ClearedBalance")
+                        .HasPrecision(18, 2)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("CurrentBalance")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("CurrentBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("EntityId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Jurisdiction")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("JurisdictionPolicyKey")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
@@ -7740,7 +8110,23 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("OverdraftNotificationEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ResponsibleLawyerUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("RoutingNumber")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StatementCadence")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
@@ -7749,6 +8135,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("TenantId")
                         .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("UnclearedBalance")
+                        .HasPrecision(18, 2)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("UpdatedAt")
@@ -7761,6 +8151,1710 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("EntityId", "OfficeId");
 
                     b.ToTable("TrustBankAccounts");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustBundleSignature", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EvidenceManifestJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IntegrityStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ManifestExportId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentManifestExportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RedactionProfile")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RetentionPolicyTag")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignatureAlgorithm")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignatureDigest")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("SignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VerificationStatus")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "ManifestExportId", "SignedAt");
+
+                    b.ToTable("TrustBundleSignatures");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustCloseForecastSnapshot", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CanonicalMonthCloseId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CanonicalPacketId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CloseDueAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("DraftBundleEligible")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("DraftBundleGeneratedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DraftBundleManifestExportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EscalatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("HasCanonicalMonthClose")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("HasCanonicalPacket")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Jurisdiction")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastAutomationRunAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastAutomationRunBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastReminderAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LatestStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MissingAttestationCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MissingRequiredSectionCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("MissingStatementImport")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MonthCloseStatus")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("NextReminderAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("OldestOutstandingAgeDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("OldestUnclearedAgeDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("OpenExceptionCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("OutstandingItemCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PacketStatus")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReadinessStatus")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RecommendedAction")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ReminderCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StatementCadence")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("StatementImportedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("UnclearedBalance")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("UnclearedEntryCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "ReadinessStatus", "CloseDueAt");
+
+                    b.HasIndex("TenantId", "Severity", "NextReminderAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Jurisdiction", "OfficeId", "CloseDueAt");
+
+                    b.ToTable("TrustCloseForecastSnapshots");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustCommandDeduplication", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorUserId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CommandName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultEntityId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultEntityType")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ResultStatusCode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "ResultEntityType", "ResultEntityId");
+
+                    b.HasIndex("TenantId", "CommandName", "ActorUserId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("TrustCommandDeduplications");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustComplianceExport", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientTrustLedgerId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExportType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GeneratedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IntegrityStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentExportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayloadJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProvenanceJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RedactionProfile")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RetentionPolicyTag")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustMonthCloseId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustReconciliationPacketId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "GeneratedAt");
+
+                    b.HasIndex("TenantId", "ExportType", "GeneratedAt");
+
+                    b.HasIndex("TenantId", "IntegrityStatus", "GeneratedAt");
+
+                    b.HasIndex("TenantId", "ParentExportId", "GeneratedAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "GeneratedAt");
+
+                    b.ToTable("TrustComplianceExports");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustEvidenceFile", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CanonicalStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentType")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DuplicateOfEvidenceFileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EvidenceKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FileHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("FileSizeBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LatestParserRunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RegisteredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RegisteredBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededByEvidenceFileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "DuplicateOfEvidenceFileId");
+
+                    b.HasIndex("TenantId", "EvidenceKey");
+
+                    b.HasIndex("TenantId", "SupersededByEvidenceFileId");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodStart", "PeriodEnd", "FileHash");
+
+                    b.ToTable("TrustEvidenceFiles");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustJournalEntry", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AvailabilityClass")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientTrustLedgerId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CorrelationKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("EffectiveAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EntryKind")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatterId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperationType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PostingBatchId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReversalOfTrustJournalEntryId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CorrelationKey");
+
+                    b.HasIndex("TenantId", "ReversalOfTrustJournalEntryId");
+
+                    b.HasIndex("TenantId", "ClientTrustLedgerId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "PostingBatchId", "EffectiveAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "ClientTrustLedgerId", "AvailabilityClass", "EffectiveAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "AvailabilityClass", "EffectiveAt");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "EntryKind", "EffectiveAt");
+
+                    b.ToTable("TrustJournalEntries");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustJurisdictionPacketTemplate", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AccountType")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisclosureBlocksJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Jurisdiction")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PolicyKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RenderingProfileJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequiredAttestationsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequiredSectionsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TemplateKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "Jurisdiction", "AccountType", "IsActive");
+
+                    b.HasIndex("TenantId", "PolicyKey", "Jurisdiction", "AccountType", "TemplateKey", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("TrustJurisdictionPacketTemplates");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustJurisdictionPolicy", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AccountType")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisbursementClassesRequiringSignatoryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("DualApprovalThreshold")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ExceptionAgingSlaHours")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsSystemBaseline")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Jurisdiction")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MonthlyCloseCadenceDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperationalApproverRolesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OverrideApproverRolesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PolicyKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("RequireMakerChecker")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("RequireMonthlyThreeWayReconciliation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("RequireOverrideReason")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("RequireResponsibleLawyerAssignment")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("ResponsibleLawyerApprovalThreshold")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RetentionPeriodMonths")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("SignatoryApprovalThreshold")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "PolicyKey", "Jurisdiction", "AccountType", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("TrustJurisdictionPolicies");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustMonthClose", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsCanonical")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("OpenExceptionCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PolicyKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PreparedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreparedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReconciliationPacketId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReopenReason")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReopenedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReopenedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReopenedFromMonthCloseId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ResponsibleLawyerSignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResponsibleLawyerSignedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewerSignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewerSignedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersedeReason")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededByMonthCloseId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "SupersededByMonthCloseId");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "IsCanonical")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("TrustMonthCloses");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustMonthCloseAttestation", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Accepted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AttestationKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Label")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustMonthCloseId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustMonthCloseId", "Role", "AttestationKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "TrustMonthCloseId", "Role", "SignedAt");
+
+                    b.ToTable("TrustMonthCloseAttestations");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustMonthCloseStep", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CompletedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StepKey")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustMonthCloseId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustMonthCloseId", "StepKey")
+                        .IsUnique();
+
+                    b.ToTable("TrustMonthCloseSteps");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustOperationalAlert", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("AcknowledgedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AcknowledgedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActionHint")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AlertKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AlertType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AssignedUserId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EscalatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EscalatedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FirstDetectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastDetectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastNotificationAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("NotificationCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("OpenedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RelatedEntityId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RelatedEntityType")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkflowStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "AlertKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "AlertType", "Severity", "WorkflowStatus");
+
+                    b.HasIndex("TenantId", "AssignedUserId", "WorkflowStatus", "LastDetectedAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "WorkflowStatus", "LastDetectedAt");
+
+                    b.ToTable("TrustOperationalAlerts");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustOperationalAlertEvent", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorUserId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustOperationalAlertId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustOperationalAlertId", "CreatedAt");
+
+                    b.ToTable("TrustOperationalAlertEvents");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustOpsInboxEvent", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorUserId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustOpsInboxItemId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustOpsInboxItemId", "CreatedAt");
+
+                    b.ToTable("TrustOpsInboxEvents");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustOpsInboxItem", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActionHint")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AssignedUserId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BlockerGroup")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DeferredUntil")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DueAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Jurisdiction")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastActionAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastDetectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OpenedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestedExportType")
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestedRoute")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustCloseForecastSnapshotId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustOperationalAlertId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkflowStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustCloseForecastSnapshotId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "TrustOperationalAlertId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "AssignedUserId", "WorkflowStatus", "DueAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "BlockerGroup", "WorkflowStatus");
+
+                    b.HasIndex("TenantId", "Jurisdiction", "OfficeId", "Severity", "DueAt");
+
+                    b.ToTable("TrustOpsInboxItems");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustOutstandingItem", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AttachmentEvidenceKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientTrustLedgerId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CorrelationKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ImpactDirection")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReasonCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustReconciliationPacketId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustStatementLineId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CorrelationKey");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "Status");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "ReasonCode", "Status");
+
+                    b.ToTable("TrustOutstandingItems");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustPostingBatch", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BatchType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("EffectiveAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("JournalEntryCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ParentPostingBatchId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustTransactionId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "ParentPostingBatchId");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "EffectiveAt");
+
+                    b.HasIndex("TenantId", "TrustTransactionId", "EffectiveAt");
+
+                    b.ToTable("TrustPostingBatches");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustReconciliationPacket", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("AdjustedBankBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("ClientLedgerBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ExceptionCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsCanonical")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("JournalBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MatchedStatementLineCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("OtherAdjustmentsTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("OutstandingChecksTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("OutstandingDepositsTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayloadJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PreparedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreparedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("StatementEndingBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersedeReason")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededByPacketId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("UnmatchedStatementLineCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "SupersededByPacketId");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "IsCanonical");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("TrustReconciliationPackets");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustReconciliationSignoff", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("SignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignedBy")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SignerRole")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustReconciliationPacketId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustReconciliationPacketId", "SignedAt");
+
+                    b.ToTable("TrustReconciliationSignoffs");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.TrustReconciliationSnapshot", b =>
@@ -8278,6 +10372,310 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("TrustRiskReviewLinks");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustStatementImport", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DuplicateOfStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ImportFingerprint")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ImportedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ImportedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LineCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceEvidenceKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceFileHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceFileName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("SourceFileSizeBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("StatementEndingBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupersededByStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "DuplicateOfStatementImportId");
+
+                    b.HasIndex("TenantId", "SourceFileHash");
+
+                    b.HasIndex("TenantId", "SupersededByStatementImportId");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodStart", "PeriodEnd", "ImportFingerprint");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodStart", "PeriodEnd", "Status");
+
+                    b.ToTable("TrustStatementImports");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustStatementLine", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("BalanceAfter")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CheckNumber")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Counterparty")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EffectiveAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExternalLineId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("MatchConfidence")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatchMethod")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatchNotes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatchStatus")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("MatchedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatchedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatchedTrustTransactionId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PostedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustStatementImportId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustStatementImportId", "MatchStatus");
+
+                    b.HasIndex("TenantId", "TrustStatementImportId", "PostedAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "CheckNumber", "Amount");
+
+                    b.ToTable("TrustStatementLines");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.TrustStatementParserRun", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParserKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StartedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustEvidenceFileId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustStatementImportId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "TrustStatementImportId");
+
+                    b.HasIndex("TenantId", "TrustEvidenceFileId", "StartedAt");
+
+                    b.HasIndex("TenantId", "TrustAccountId", "PeriodEnd", "Status");
+
+                    b.ToTable("TrustStatementParserRuns");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.TrustTransaction", b =>
                 {
                     b.Property<string>("Id")
@@ -8286,8 +10684,12 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("AllocationsJson")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("Amount")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovalStatus")
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("ApprovedAt")
                         .HasColumnType("TEXT");
@@ -8295,13 +10697,22 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("ApprovedBy")
                         .HasColumnType("TEXT");
 
-                    b.Property<double>("BalanceAfter")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("BalanceAfter")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
-                    b.Property<double>("BalanceBefore")
-                        .HasColumnType("REAL");
+                    b.Property<decimal>("BalanceBefore")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("CheckNumber")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ClearedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClearingStatus")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -8312,6 +10723,9 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("Description")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisbursementClass")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("EarnedDate")
@@ -8338,6 +10752,15 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("PayorPayee")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("PolicyDecisionJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PostingBatchId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PrimaryJournalEntryId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Reference")
                         .HasColumnType("TEXT");
 
@@ -8348,6 +10771,18 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReturnReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReturnedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
@@ -8653,6 +11088,36 @@ namespace JurisFlow.Server.Migrations
                     b.Navigation("Entity");
 
                     b.Navigation("Office");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.MatterClientLink", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Client", "Client")
+                        .WithMany()
+                        .HasForeignKey("ClientId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JurisFlow.Server.Models.Matter", "Matter")
+                        .WithMany()
+                        .HasForeignKey("MatterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Client");
+
+                    b.Navigation("Matter");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.MatterNote", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Matter", "Matter")
+                        .WithMany()
+                        .HasForeignKey("MatterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Matter");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.Office", b =>

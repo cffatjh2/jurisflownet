@@ -422,16 +422,23 @@ namespace JurisFlow.Server.Models
         public string AllocationType { get; set; } = "invoice_line"; // invoice_line | invoice_header | tax | fee
 
         [MaxLength(24)]
-        public string Status { get; set; } = "applied"; // applied | reversed
+        public string Status { get; set; } = "applied"; // applied | pending_trust_approval | reversed
 
         [MaxLength(128)]
         public string? LedgerEntryId { get; set; }
+
+        [MaxLength(128)]
+        public string? TrustTransactionId { get; set; }
 
         [MaxLength(128)]
         public string? ReversalOfAllocationId { get; set; }
 
         [MaxLength(2048)]
         public string? Notes { get; set; }
+
+        [Required]
+        [MaxLength(160)]
+        public string IdempotencyKey { get; set; } = Guid.NewGuid().ToString("N");
 
         public string? MetadataJson { get; set; }
 

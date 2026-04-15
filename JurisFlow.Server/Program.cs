@@ -322,6 +322,7 @@ builder.Services.AddAuthorization(options =>
 });
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.Configure<TrustAccountingOptions>(builder.Configuration.GetSection("TrustAccounting"));
 builder.Services.AddTransient<IClaimsTransformation, RoleAliasClaimsTransformation>();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
@@ -347,6 +348,15 @@ builder.Services.AddSingleton<PasswordPolicyService>();
 builder.Services.AddSingleton<SessionTokenService>();
 builder.Services.AddSingleton<LoginAttemptService>();
 builder.Services.AddScoped<TrustComplianceService>();
+builder.Services.AddScoped<TrustActionAuthorizationService>();
+builder.Services.AddScoped<TrustPolicyResolverService>();
+builder.Services.AddScoped<TrustAccountingService>();
+builder.Services.AddScoped<TrustStatementIngestionService>();
+builder.Services.AddScoped<TrustOpsInboxService>();
+builder.Services.AddScoped<TrustCloseAutomationService>();
+builder.Services.AddScoped<TrustComplianceExportService>();
+builder.Services.AddScoped<TrustBundleIntegrityService>();
+builder.Services.AddScoped<TrustRecoveryService>();
 builder.Services.AddScoped<TwilioSmsService>();
 builder.Services.AddScoped<SmsReminderService>();
 builder.Services.AddScoped<OutboundEmailService>();

@@ -33,6 +33,31 @@ namespace JurisFlow.Server.Data
         public DbSet<TrustTransaction> TrustTransactions { get; set; }
         public DbSet<TrustBankAccount> TrustBankAccounts { get; set; }
         public DbSet<ClientTrustLedger> ClientTrustLedgers { get; set; }
+        public DbSet<TrustJournalEntry> TrustJournalEntries { get; set; }
+        public DbSet<TrustPostingBatch> TrustPostingBatches { get; set; }
+        public DbSet<TrustCommandDeduplication> TrustCommandDeduplications { get; set; }
+        public DbSet<TrustStatementImport> TrustStatementImports { get; set; }
+        public DbSet<TrustStatementLine> TrustStatementLines { get; set; }
+        public DbSet<TrustEvidenceFile> TrustEvidenceFiles { get; set; }
+        public DbSet<TrustStatementParserRun> TrustStatementParserRuns { get; set; }
+        public DbSet<TrustOutstandingItem> TrustOutstandingItems { get; set; }
+        public DbSet<TrustReconciliationPacket> TrustReconciliationPackets { get; set; }
+        public DbSet<TrustReconciliationSignoff> TrustReconciliationSignoffs { get; set; }
+        public DbSet<TrustJurisdictionPolicy> TrustJurisdictionPolicies { get; set; }
+        public DbSet<TrustJurisdictionPacketTemplate> TrustJurisdictionPacketTemplates { get; set; }
+        public DbSet<TrustApprovalRequirement> TrustApprovalRequirements { get; set; }
+        public DbSet<TrustApprovalDecision> TrustApprovalDecisions { get; set; }
+        public DbSet<TrustApprovalOverride> TrustApprovalOverrides { get; set; }
+        public DbSet<TrustMonthClose> TrustMonthCloses { get; set; }
+        public DbSet<TrustMonthCloseStep> TrustMonthCloseSteps { get; set; }
+        public DbSet<TrustMonthCloseAttestation> TrustMonthCloseAttestations { get; set; }
+        public DbSet<TrustComplianceExport> TrustComplianceExports { get; set; }
+        public DbSet<TrustOperationalAlert> TrustOperationalAlerts { get; set; }
+        public DbSet<TrustOperationalAlertEvent> TrustOperationalAlertEvents { get; set; }
+        public DbSet<TrustOpsInboxItem> TrustOpsInboxItems { get; set; }
+        public DbSet<TrustOpsInboxEvent> TrustOpsInboxEvents { get; set; }
+        public DbSet<TrustBundleSignature> TrustBundleSignatures { get; set; }
+        public DbSet<TrustCloseForecastSnapshot> TrustCloseForecastSnapshots { get; set; }
         public DbSet<ReconciliationRecord> ReconciliationRecords { get; set; }
         public DbSet<Lead> Leads { get; set; }
         public DbSet<TimeEntry> TimeEntries { get; set; }
@@ -301,6 +326,256 @@ namespace JurisFlow.Server.Data
                 .HasIndex("TenantId", nameof(BillingPaymentAllocation.PayorClientId), nameof(BillingPaymentAllocation.Status), nameof(BillingPaymentAllocation.AppliedAt));
             modelBuilder.Entity<BillingPaymentAllocation>()
                 .HasIndex("TenantId", nameof(BillingPaymentAllocation.InvoicePayorAllocationId), nameof(BillingPaymentAllocation.Status));
+            modelBuilder.Entity<BillingPaymentAllocation>()
+                .HasIndex("TenantId", nameof(BillingPaymentAllocation.IdempotencyKey))
+                .IsUnique();
+            modelBuilder.Entity<TrustPostingBatch>()
+                .HasIndex("TenantId", nameof(TrustPostingBatch.TrustTransactionId), nameof(TrustPostingBatch.EffectiveAt));
+            modelBuilder.Entity<TrustPostingBatch>()
+                .HasIndex("TenantId", nameof(TrustPostingBatch.TrustAccountId), nameof(TrustPostingBatch.EffectiveAt));
+            modelBuilder.Entity<TrustPostingBatch>()
+                .HasIndex("TenantId", nameof(TrustPostingBatch.ParentPostingBatchId));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.PostingBatchId), nameof(TrustJournalEntry.EffectiveAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.TrustTransactionId), nameof(TrustJournalEntry.EntryKind), nameof(TrustJournalEntry.EffectiveAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.TrustAccountId), nameof(TrustJournalEntry.AvailabilityClass), nameof(TrustJournalEntry.EffectiveAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.ClientTrustLedgerId), nameof(TrustJournalEntry.AvailabilityClass), nameof(TrustJournalEntry.EffectiveAt));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.TrustAccountId), nameof(TrustStatementImport.PeriodEnd));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.TrustAccountId), nameof(TrustStatementImport.PeriodStart), nameof(TrustStatementImport.PeriodEnd), nameof(TrustStatementImport.ImportFingerprint));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.SourceFileHash));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.DuplicateOfStatementImportId));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.TrustAccountId), nameof(TrustStatementImport.PeriodStart), nameof(TrustStatementImport.PeriodEnd), nameof(TrustStatementImport.Status));
+            modelBuilder.Entity<TrustStatementImport>()
+                .HasIndex("TenantId", nameof(TrustStatementImport.SupersededByStatementImportId));
+            modelBuilder.Entity<TrustEvidenceFile>()
+                .HasIndex("TenantId", nameof(TrustEvidenceFile.TrustAccountId), nameof(TrustEvidenceFile.PeriodEnd));
+            modelBuilder.Entity<TrustEvidenceFile>()
+                .HasIndex("TenantId", nameof(TrustEvidenceFile.TrustAccountId), nameof(TrustEvidenceFile.PeriodStart), nameof(TrustEvidenceFile.PeriodEnd), nameof(TrustEvidenceFile.FileHash));
+            modelBuilder.Entity<TrustEvidenceFile>()
+                .HasIndex("TenantId", nameof(TrustEvidenceFile.EvidenceKey));
+            modelBuilder.Entity<TrustEvidenceFile>()
+                .HasIndex("TenantId", nameof(TrustEvidenceFile.DuplicateOfEvidenceFileId));
+            modelBuilder.Entity<TrustEvidenceFile>()
+                .HasIndex("TenantId", nameof(TrustEvidenceFile.SupersededByEvidenceFileId));
+            modelBuilder.Entity<TrustStatementParserRun>()
+                .HasIndex("TenantId", nameof(TrustStatementParserRun.TrustAccountId), nameof(TrustStatementParserRun.PeriodEnd), nameof(TrustStatementParserRun.Status));
+            modelBuilder.Entity<TrustStatementParserRun>()
+                .HasIndex("TenantId", nameof(TrustStatementParserRun.TrustEvidenceFileId), nameof(TrustStatementParserRun.StartedAt));
+            modelBuilder.Entity<TrustStatementParserRun>()
+                .HasIndex("TenantId", nameof(TrustStatementParserRun.TrustStatementImportId));
+            modelBuilder.Entity<TrustStatementLine>()
+                .HasIndex("TenantId", nameof(TrustStatementLine.TrustStatementImportId), nameof(TrustStatementLine.PostedAt));
+            modelBuilder.Entity<TrustStatementLine>()
+                .HasIndex("TenantId", nameof(TrustStatementLine.TrustAccountId), nameof(TrustStatementLine.CheckNumber), nameof(TrustStatementLine.Amount));
+            modelBuilder.Entity<TrustStatementLine>()
+                .HasIndex("TenantId", nameof(TrustStatementLine.TrustStatementImportId), nameof(TrustStatementLine.MatchStatus));
+            modelBuilder.Entity<TrustOutstandingItem>()
+                .HasIndex("TenantId", nameof(TrustOutstandingItem.TrustAccountId), nameof(TrustOutstandingItem.PeriodEnd), nameof(TrustOutstandingItem.Status));
+            modelBuilder.Entity<TrustOutstandingItem>()
+                .HasIndex("TenantId", nameof(TrustOutstandingItem.CorrelationKey));
+            modelBuilder.Entity<TrustOutstandingItem>()
+                .HasIndex("TenantId", nameof(TrustOutstandingItem.TrustAccountId), nameof(TrustOutstandingItem.ReasonCode), nameof(TrustOutstandingItem.Status));
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .HasIndex("TenantId", nameof(TrustReconciliationPacket.TrustAccountId), nameof(TrustReconciliationPacket.PeriodEnd));
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .HasIndex("TenantId", nameof(TrustReconciliationPacket.TrustAccountId), nameof(TrustReconciliationPacket.PeriodEnd), nameof(TrustReconciliationPacket.IsCanonical));
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .HasIndex("TenantId", nameof(TrustReconciliationPacket.TrustAccountId), nameof(TrustReconciliationPacket.PeriodEnd), nameof(TrustReconciliationPacket.VersionNumber))
+                .IsUnique();
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .HasIndex("TenantId", nameof(TrustReconciliationPacket.SupersededByPacketId));
+            modelBuilder.Entity<TrustReconciliationSignoff>()
+                .HasIndex("TenantId", nameof(TrustReconciliationSignoff.TrustReconciliationPacketId), nameof(TrustReconciliationSignoff.SignedAt));
+            modelBuilder.Entity<TrustJurisdictionPolicy>()
+                .HasIndex("TenantId", nameof(TrustJurisdictionPolicy.PolicyKey), nameof(TrustJurisdictionPolicy.Jurisdiction), nameof(TrustJurisdictionPolicy.AccountType), nameof(TrustJurisdictionPolicy.VersionNumber))
+                .IsUnique();
+            modelBuilder.Entity<TrustJurisdictionPacketTemplate>()
+                .HasIndex("TenantId", nameof(TrustJurisdictionPacketTemplate.PolicyKey), nameof(TrustJurisdictionPacketTemplate.Jurisdiction), nameof(TrustJurisdictionPacketTemplate.AccountType), nameof(TrustJurisdictionPacketTemplate.TemplateKey), nameof(TrustJurisdictionPacketTemplate.VersionNumber))
+                .IsUnique();
+            modelBuilder.Entity<TrustJurisdictionPacketTemplate>()
+                .HasIndex("TenantId", nameof(TrustJurisdictionPacketTemplate.Jurisdiction), nameof(TrustJurisdictionPacketTemplate.AccountType), nameof(TrustJurisdictionPacketTemplate.IsActive));
+            modelBuilder.Entity<TrustApprovalRequirement>()
+                .HasIndex("TenantId", nameof(TrustApprovalRequirement.TrustTransactionId), nameof(TrustApprovalRequirement.RequirementType), nameof(TrustApprovalRequirement.Status));
+            modelBuilder.Entity<TrustApprovalDecision>()
+                .HasIndex("TenantId", nameof(TrustApprovalDecision.TrustApprovalRequirementId), nameof(TrustApprovalDecision.ActorUserId))
+                .IsUnique();
+            modelBuilder.Entity<TrustApprovalOverride>()
+                .HasIndex("TenantId", nameof(TrustApprovalOverride.TrustTransactionId), nameof(TrustApprovalOverride.CreatedAt));
+            modelBuilder.Entity<TrustMonthClose>()
+                .HasIndex("TenantId", nameof(TrustMonthClose.TrustAccountId), nameof(TrustMonthClose.PeriodEnd), nameof(TrustMonthClose.IsCanonical))
+                .IsUnique();
+            modelBuilder.Entity<TrustMonthClose>()
+                .HasIndex("TenantId", nameof(TrustMonthClose.TrustAccountId), nameof(TrustMonthClose.PeriodEnd), nameof(TrustMonthClose.VersionNumber))
+                .IsUnique();
+            modelBuilder.Entity<TrustMonthClose>()
+                .HasIndex("TenantId", nameof(TrustMonthClose.SupersededByMonthCloseId));
+            modelBuilder.Entity<TrustMonthCloseStep>()
+                .HasIndex("TenantId", nameof(TrustMonthCloseStep.TrustMonthCloseId), nameof(TrustMonthCloseStep.StepKey))
+                .IsUnique();
+            modelBuilder.Entity<TrustMonthCloseAttestation>()
+                .HasIndex("TenantId", nameof(TrustMonthCloseAttestation.TrustMonthCloseId), nameof(TrustMonthCloseAttestation.Role), nameof(TrustMonthCloseAttestation.AttestationKey))
+                .IsUnique();
+            modelBuilder.Entity<TrustMonthCloseAttestation>()
+                .HasIndex("TenantId", nameof(TrustMonthCloseAttestation.TrustMonthCloseId), nameof(TrustMonthCloseAttestation.Role), nameof(TrustMonthCloseAttestation.SignedAt));
+            modelBuilder.Entity<TrustComplianceExport>()
+                .HasIndex("TenantId", nameof(TrustComplianceExport.GeneratedAt));
+            modelBuilder.Entity<TrustComplianceExport>()
+                .HasIndex("TenantId", nameof(TrustComplianceExport.ExportType), nameof(TrustComplianceExport.GeneratedAt));
+            modelBuilder.Entity<TrustComplianceExport>()
+                .HasIndex("TenantId", nameof(TrustComplianceExport.TrustAccountId), nameof(TrustComplianceExport.GeneratedAt));
+            modelBuilder.Entity<TrustComplianceExport>()
+                .HasIndex("TenantId", nameof(TrustComplianceExport.ParentExportId), nameof(TrustComplianceExport.GeneratedAt));
+            modelBuilder.Entity<TrustComplianceExport>()
+                .HasIndex("TenantId", nameof(TrustComplianceExport.IntegrityStatus), nameof(TrustComplianceExport.GeneratedAt));
+            modelBuilder.Entity<TrustOperationalAlert>()
+                .HasIndex("TenantId", nameof(TrustOperationalAlert.AlertKey))
+                .IsUnique();
+            modelBuilder.Entity<TrustOperationalAlert>()
+                .HasIndex("TenantId", nameof(TrustOperationalAlert.TrustAccountId), nameof(TrustOperationalAlert.WorkflowStatus), nameof(TrustOperationalAlert.LastDetectedAt));
+            modelBuilder.Entity<TrustOperationalAlert>()
+                .HasIndex("TenantId", nameof(TrustOperationalAlert.AssignedUserId), nameof(TrustOperationalAlert.WorkflowStatus), nameof(TrustOperationalAlert.LastDetectedAt));
+            modelBuilder.Entity<TrustOperationalAlert>()
+                .HasIndex("TenantId", nameof(TrustOperationalAlert.AlertType), nameof(TrustOperationalAlert.Severity), nameof(TrustOperationalAlert.WorkflowStatus));
+            modelBuilder.Entity<TrustOperationalAlertEvent>()
+                .HasIndex("TenantId", nameof(TrustOperationalAlertEvent.TrustOperationalAlertId), nameof(TrustOperationalAlertEvent.CreatedAt));
+            modelBuilder.Entity<TrustOpsInboxItem>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxItem.TrustOperationalAlertId))
+                .IsUnique();
+            modelBuilder.Entity<TrustOpsInboxItem>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxItem.TrustCloseForecastSnapshotId))
+                .IsUnique();
+            modelBuilder.Entity<TrustOpsInboxItem>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxItem.AssignedUserId), nameof(TrustOpsInboxItem.WorkflowStatus), nameof(TrustOpsInboxItem.DueAt));
+            modelBuilder.Entity<TrustOpsInboxItem>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxItem.TrustAccountId), nameof(TrustOpsInboxItem.BlockerGroup), nameof(TrustOpsInboxItem.WorkflowStatus));
+            modelBuilder.Entity<TrustOpsInboxItem>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxItem.Jurisdiction), nameof(TrustOpsInboxItem.OfficeId), nameof(TrustOpsInboxItem.Severity), nameof(TrustOpsInboxItem.DueAt));
+            modelBuilder.Entity<TrustOpsInboxEvent>()
+                .HasIndex("TenantId", nameof(TrustOpsInboxEvent.TrustOpsInboxItemId), nameof(TrustOpsInboxEvent.CreatedAt));
+            modelBuilder.Entity<TrustBundleSignature>()
+                .HasIndex("TenantId", nameof(TrustBundleSignature.ManifestExportId), nameof(TrustBundleSignature.SignedAt));
+            modelBuilder.Entity<TrustCloseForecastSnapshot>()
+                .HasIndex("TenantId", nameof(TrustCloseForecastSnapshot.TrustAccountId), nameof(TrustCloseForecastSnapshot.PeriodEnd))
+                .IsUnique();
+            modelBuilder.Entity<TrustCloseForecastSnapshot>()
+                .HasIndex("TenantId", nameof(TrustCloseForecastSnapshot.ReadinessStatus), nameof(TrustCloseForecastSnapshot.CloseDueAt));
+            modelBuilder.Entity<TrustCloseForecastSnapshot>()
+                .HasIndex("TenantId", nameof(TrustCloseForecastSnapshot.Severity), nameof(TrustCloseForecastSnapshot.NextReminderAt));
+            modelBuilder.Entity<TrustCloseForecastSnapshot>()
+                .HasIndex("TenantId", nameof(TrustCloseForecastSnapshot.Jurisdiction), nameof(TrustCloseForecastSnapshot.OfficeId), nameof(TrustCloseForecastSnapshot.CloseDueAt));
+
+            modelBuilder.Entity<TrustTransaction>()
+                .Property(t => t.Amount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustTransaction>()
+                .Property(t => t.BalanceBefore)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustTransaction>()
+                .Property(t => t.BalanceAfter)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustBankAccount>()
+                .Property(t => t.CurrentBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustBankAccount>()
+                .Property(t => t.ClearedBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustBankAccount>()
+                .Property(t => t.UnclearedBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustBankAccount>()
+                .Property(t => t.AvailableDisbursementCapacity)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ClientTrustLedger>()
+                .Property(l => l.RunningBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ClientTrustLedger>()
+                .Property(l => l.ClearedBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ClientTrustLedger>()
+                .Property(l => l.UnclearedBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ClientTrustLedger>()
+                .Property(l => l.AvailableToDisburse)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ClientTrustLedger>()
+                .Property(l => l.HoldAmount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ReconciliationRecord>()
+                .Property(r => r.BankStatementBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ReconciliationRecord>()
+                .Property(r => r.TrustLedgerBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ReconciliationRecord>()
+                .Property(r => r.ClientLedgerSumBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<ReconciliationRecord>()
+                .Property(r => r.DiscrepancyAmount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<BillingPaymentAllocation>()
+                .Property(a => a.IdempotencyKey)
+                .HasMaxLength(160);
+            modelBuilder.Entity<TrustPostingBatch>()
+                .Property(b => b.TotalAmount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustJournalEntry>()
+                .Property(j => j.Amount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustStatementImport>()
+                .Property(s => s.StatementEndingBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustStatementLine>()
+                .Property(s => s.Amount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustStatementLine>()
+                .Property(s => s.BalanceAfter)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustStatementLine>()
+                .Property(s => s.MatchConfidence)
+                .HasPrecision(5, 2);
+            modelBuilder.Entity<TrustOutstandingItem>()
+                .Property(o => o.Amount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.StatementEndingBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.AdjustedBankBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.JournalBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.ClientLedgerBalance)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.OutstandingDepositsTotal)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.OutstandingChecksTotal)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustReconciliationPacket>()
+                .Property(p => p.OtherAdjustmentsTotal)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustJurisdictionPolicy>()
+                .Property(p => p.DualApprovalThreshold)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustJurisdictionPolicy>()
+                .Property(p => p.ResponsibleLawyerApprovalThreshold)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<TrustJurisdictionPolicy>()
+                .Property(p => p.SignatoryApprovalThreshold)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<BillingPaymentAllocation>()
+                .HasIndex("TenantId", nameof(BillingPaymentAllocation.TrustTransactionId), nameof(BillingPaymentAllocation.Status));
 
             modelBuilder.Entity<InvoicePayorAllocation>()
                 .HasIndex("TenantId", nameof(InvoicePayorAllocation.InvoiceId), nameof(InvoicePayorAllocation.Status), nameof(InvoicePayorAllocation.Priority));
@@ -697,6 +972,22 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<TrustTransaction>()
                 .HasIndex(t => new { t.EntityId, t.OfficeId });
+
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.TrustTransactionId), nameof(TrustJournalEntry.CreatedAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.TrustAccountId), nameof(TrustJournalEntry.CreatedAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.ClientTrustLedgerId), nameof(TrustJournalEntry.CreatedAt));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.ReversalOfTrustJournalEntryId));
+            modelBuilder.Entity<TrustJournalEntry>()
+                .HasIndex("TenantId", nameof(TrustJournalEntry.CorrelationKey));
+            modelBuilder.Entity<TrustCommandDeduplication>()
+                .HasIndex("TenantId", nameof(TrustCommandDeduplication.CommandName), nameof(TrustCommandDeduplication.ActorUserId), nameof(TrustCommandDeduplication.IdempotencyKey))
+                .IsUnique();
+            modelBuilder.Entity<TrustCommandDeduplication>()
+                .HasIndex("TenantId", nameof(TrustCommandDeduplication.ResultEntityType), nameof(TrustCommandDeduplication.ResultEntityId));
 
             modelBuilder.Entity<PaymentTransaction>()
                 .HasIndex(p => p.PaymentPlanId);
@@ -1251,6 +1542,13 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<TrustRiskReviewLink>()
                 .Property(l => l.MetadataJson)
+                .HasConversion(converter);
+
+            modelBuilder.Entity<TrustJournalEntry>()
+                .Property(j => j.Description)
+                .HasConversion(converter);
+            modelBuilder.Entity<TrustJournalEntry>()
+                .Property(j => j.MetadataJson)
                 .HasConversion(converter);
 
             modelBuilder.Entity<AiDraftSession>()

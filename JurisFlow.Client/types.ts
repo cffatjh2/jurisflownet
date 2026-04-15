@@ -1050,6 +1050,9 @@ export interface TrustBankAccount {
   routingNumber: string;
   jurisdiction: string; // State code
   currentBalance: number;
+  clearedBalance?: number;
+  unclearedBalance?: number;
+  availableDisbursementCapacity?: number;
   status: TrustAccountStatus;
   entityId?: string;
   officeId?: string;
@@ -1068,6 +1071,10 @@ export interface ClientTrustLedger {
   trustAccountId: string;
   trustAccount?: TrustBankAccount;
   runningBalance: number;
+  clearedBalance?: number;
+  unclearedBalance?: number;
+  availableToDisburse?: number;
+  holdAmount?: number;
   status: LedgerStatus;
   entityId?: string;
   officeId?: string;
@@ -1086,6 +1093,8 @@ export interface TrustTransactionV2 {
   trustAccount?: TrustBankAccount;
   type: TrustTransactionTypeV2;
   amount: number;
+  matterId?: string;
+  ledgerId?: string;
   entityId?: string;
   officeId?: string;
 
@@ -1110,6 +1119,12 @@ export interface TrustTransactionV2 {
   rejectedBy?: string;
   rejectedAt?: string;
   rejectionReason?: string;
+  clearingStatus?: 'not_applicable' | 'pending_clearance' | 'cleared' | 'returned';
+  clearedAt?: string;
+  returnedAt?: string;
+  returnReason?: string;
+  postingBatchId?: string;
+  primaryJournalEntryId?: string;
 
   // IOLTA Tracking
   isEarned: boolean;
@@ -1118,8 +1133,11 @@ export interface TrustTransactionV2 {
   // Balance Snapshots
   accountBalanceBefore: number;
   accountBalanceAfter: number;
+  balanceBefore?: number;
+  balanceAfter?: number;
 
   createdAt: string;
+  updatedAt?: string;
 
   // Relations
   allocations?: TrustAllocationLine[];
@@ -1159,7 +1177,7 @@ export interface ReconciliationRecord {
   id: string;
   trustAccountId: string;
   trustAccount?: TrustBankAccount;
-  periodStart: string;
+  periodStart?: string;
   periodEnd: string;
 
   // Three-Way Balances
@@ -1591,6 +1609,650 @@ export interface IntegrationOutboxEventListItem {
   errorMessage?: string | null;
   deadLettered: boolean;
   createdAt: string;
+}
+
+export interface TrustStatementImport {
+  id: string;
+  trustAccountId: string;
+  periodStart: string;
+  periodEnd: string;
+  statementEndingBalance: number;
+  status: string;
+  source: string;
+  sourceFileName?: string;
+  sourceFileHash?: string;
+  sourceEvidenceKey?: string;
+  importFingerprint?: string;
+  duplicateOfStatementImportId?: string;
+  supersededByStatementImportId?: string;
+  supersededBy?: string;
+  supersededAt?: string;
+  sourceFileSizeBytes?: number;
+  currency: string;
+  importedBy?: string;
+  lineCount: number;
+  notes?: string;
+  metadataJson?: string;
+  importedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustEvidenceFile {
+  id: string;
+  trustAccountId: string;
+  periodStart: string;
+  periodEnd: string;
+  source: string;
+  fileName: string;
+  contentType?: string;
+  fileHash: string;
+  evidenceKey?: string;
+  fileSizeBytes?: number;
+  status: string;
+  latestParserRunId?: string;
+  canonicalStatementImportId?: string;
+  duplicateOfEvidenceFileId?: string;
+  supersededByEvidenceFileId?: string;
+  supersededBy?: string;
+  supersededAt?: string;
+  registeredBy?: string;
+  notes?: string;
+  metadataJson?: string;
+  registeredAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustStatementParserRun {
+  id: string;
+  trustAccountId: string;
+  trustEvidenceFileId: string;
+  trustStatementImportId?: string;
+  periodStart: string;
+  periodEnd: string;
+  parserKey: string;
+  status: string;
+  attemptCount: number;
+  source: string;
+  startedBy?: string;
+  notes?: string;
+  errorMessage?: string;
+  summaryJson?: string;
+  startedAt: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustStatementLine {
+  id: string;
+  trustStatementImportId: string;
+  trustAccountId: string;
+  postedAt: string;
+  effectiveAt?: string;
+  amount: number;
+  balanceAfter?: number;
+  reference?: string;
+  checkNumber?: string;
+  description?: string;
+  counterparty?: string;
+  matchStatus: string;
+  matchMethod: string;
+  matchConfidence?: number;
+  matchedTrustTransactionId?: string;
+  matchedBy?: string;
+  matchedAt?: string;
+  matchNotes?: string;
+  externalLineId?: string;
+  metadataJson?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustStatementMatchingRunResult {
+  trustStatementImportId: string;
+  totalLineCount: number;
+  matchedLineCount: number;
+  unmatchedLineCount: number;
+  ignoredLineCount: number;
+  processedAt: string;
+}
+
+export interface TrustOutstandingItem {
+  id: string;
+  trustAccountId: string;
+  trustTransactionId?: string;
+  clientTrustLedgerId?: string;
+  trustStatementImportId?: string;
+  trustStatementLineId?: string;
+  trustReconciliationPacketId?: string;
+  periodStart: string;
+  periodEnd: string;
+  occurredAt: string;
+  itemType: string;
+  impactDirection: string;
+  status: string;
+  source: string;
+  amount: number;
+  correlationKey?: string;
+  reference?: string;
+  description?: string;
+  reasonCode?: string;
+  attachmentEvidenceKey?: string;
+  createdBy?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustReconciliationPacket {
+  id: string;
+  trustAccountId: string;
+  statementImportId?: string;
+  periodStart: string;
+  periodEnd: string;
+  statementEndingBalance: number;
+  adjustedBankBalance: number;
+  journalBalance: number;
+  clientLedgerBalance: number;
+  outstandingDepositsTotal: number;
+  outstandingChecksTotal: number;
+  otherAdjustmentsTotal: number;
+  exceptionCount: number;
+  matchedStatementLineCount?: number;
+  unmatchedStatementLineCount?: number;
+  versionNumber?: number;
+  isCanonical?: boolean;
+  status: string;
+  preparedBy?: string;
+  supersededByPacketId?: string;
+  supersededBy?: string;
+  supersedeReason?: string;
+  supersededAt?: string;
+  preparedAt: string;
+  notes?: string;
+  payloadJson?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustReconciliationSignoff {
+  id: string;
+  trustReconciliationPacketId: string;
+  signedBy: string;
+  signerRole?: string;
+  status: string;
+  notes?: string;
+  signedAt: string;
+  createdAt: string;
+}
+
+export interface TrustReconciliationPacketDetail {
+  packet: TrustReconciliationPacket;
+  statementImport?: TrustStatementImport;
+  signoffs: TrustReconciliationSignoff[];
+  outstandingItems: TrustOutstandingItem[];
+  statementLines: TrustStatementLine[];
+}
+
+export interface TrustOperationalAlertDto {
+  alertId?: string;
+  alertKey?: string;
+  alertType: string;
+  severity: string;
+  trustAccountId?: string;
+  trustAccountName?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  periodEnd?: string;
+  openedAt: string;
+  ageDays: number;
+  title: string;
+  summary: string;
+  status: string;
+  workflowStatus?: string;
+  assignedUserId?: string;
+  firstDetectedAt?: string;
+  lastDetectedAt?: string;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  escalatedBy?: string;
+  escalatedAt?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  notificationCount?: number;
+  actionHint?: string;
+}
+
+export interface TrustOperationalAlertSummary {
+  generatedAtUtc: string;
+  totalCount: number;
+  criticalCount: number;
+  warningCount: number;
+  accountsImpacted: number;
+  alerts: TrustOperationalAlertDto[];
+}
+
+export interface TrustOperationalAlertRecordDto {
+  id: string;
+  alertKey: string;
+  alertType: string;
+  severity: string;
+  trustAccountId?: string;
+  trustAccountName?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  periodEnd?: string;
+  title: string;
+  summary: string;
+  sourceStatus: string;
+  workflowStatus: string;
+  assignedUserId?: string;
+  actionHint?: string;
+  openedAt: string;
+  ageDays: number;
+  firstDetectedAt: string;
+  lastDetectedAt: string;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  escalatedBy?: string;
+  escalatedAt?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  notificationCount: number;
+}
+
+export interface TrustOpsInboxAssignDto {
+  assigneeUserId: string;
+  notes?: string;
+}
+
+export interface TrustOpsInboxDeferDto {
+  deferredUntilUtc: string;
+  notes?: string;
+}
+
+export interface TrustOpsInboxItemDto {
+  id: string;
+  trustOperationalAlertId?: string;
+  trustCloseForecastSnapshotId?: string;
+  itemType: string;
+  blockerGroup: string;
+  severity: string;
+  trustAccountId?: string;
+  trustAccountName?: string;
+  jurisdiction?: string;
+  officeId?: string;
+  assignedUserId?: string;
+  workflowStatus: string;
+  openedAt: string;
+  lastDetectedAt: string;
+  dueAt?: string;
+  deferredUntil?: string;
+  isSlaBreached: boolean;
+  title: string;
+  summary: string;
+  actionHint?: string;
+  suggestedExportType?: string;
+  suggestedRoute?: string;
+  ageDays: number;
+  linkedAlertWorkflowStatus?: string;
+}
+
+export interface TrustOpsInboxEventDto {
+  id: string;
+  eventType: string;
+  actorUserId?: string;
+  notes?: string;
+  metadataJson?: string;
+  createdAt: string;
+}
+
+export interface TrustOpsInboxSummaryDto {
+  generatedAtUtc: string;
+  totalCount: number;
+  breachedCount: number;
+  closeBlockerCount: number;
+  statementBlockerCount: number;
+  exceptionBlockerCount: number;
+  approvalBlockerCount: number;
+  items: TrustOpsInboxItemDto[];
+}
+
+export interface TrustOperationalAlertEventDto {
+  id: string;
+  eventType: string;
+  actorUserId?: string;
+  notes?: string;
+  metadataJson?: string;
+  createdAt: string;
+}
+
+export interface TrustRiskHold {
+  id: string;
+  trustRiskEventId?: string;
+  holdType?: string;
+  status?: string;
+  targetType?: string;
+  targetId?: string;
+  reason?: string;
+  placedAt?: string;
+  releasedAt?: string;
+  createdAt: string;
+}
+
+export interface TrustApprovalRequirementDto {
+  id: string;
+  trustTransactionId: string;
+  requirementType: string;
+  requiredCount: number;
+  satisfiedCount: number;
+  status: string;
+  summary?: string;
+}
+
+export interface TrustApprovalDecisionDto {
+  id: string;
+  requirementId: string;
+  actorUserId: string;
+  actorRole?: string;
+  decisionType: string;
+  notes?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface TrustTransactionApprovalStateDto {
+  trustTransactionId: string;
+  transactionStatus: string;
+  approvalStatus: string;
+  isReadyToPost: boolean;
+  hasOverride: boolean;
+  requirements: TrustApprovalRequirementDto[];
+  decisions: TrustApprovalDecisionDto[];
+}
+
+export interface TrustApprovalQueueItemDto {
+  trustTransactionId: string;
+  trustAccountId: string;
+  transactionType: string;
+  disbursementClass?: string;
+  amount: number;
+  approvalStatus: string;
+  createdBy?: string;
+  createdAt: string;
+  matterId?: string;
+  policySummary?: string;
+  requirements: TrustApprovalRequirementDto[];
+}
+
+export interface TrustMonthCloseStepDto {
+  stepKey: string;
+  status: string;
+  notes?: string;
+  completedBy?: string;
+  completedAt?: string;
+}
+
+export interface TrustPacketTemplateAttestationDto {
+  key: string;
+  label: string;
+  role: string;
+  helpText?: string;
+  required: boolean;
+}
+
+export interface TrustMonthCloseAttestationDto {
+  key: string;
+  label?: string;
+  role?: string;
+  accepted: boolean;
+  notes?: string;
+  signedBy?: string;
+  signedAt?: string;
+}
+
+export interface TrustJurisdictionPacketTemplateUpsertDto {
+  policyKey: string;
+  jurisdiction: string;
+  accountType: string;
+  templateKey: string;
+  name?: string;
+  versionNumber: number;
+  isActive: boolean;
+  requiredSections: string[];
+  requiredAttestations: TrustPacketTemplateAttestationDto[];
+  disclosureBlocks: string[];
+  renderingProfileJson?: string;
+  metadataJson?: string;
+}
+
+export interface TrustMonthCloseDto {
+  id: string;
+  trustAccountId: string;
+  policyKey: string;
+  periodStart: string;
+  periodEnd: string;
+  reconciliationPacketId?: string;
+  versionNumber: number;
+  isCanonical: boolean;
+  status: string;
+  openExceptionCount: number;
+  preparedBy?: string;
+  preparedAt: string;
+  reviewerSignedBy?: string;
+  reviewerSignedAt?: string;
+  responsibleLawyerSignedBy?: string;
+  responsibleLawyerSignedAt?: string;
+  reopenedFromMonthCloseId?: string;
+  supersededByMonthCloseId?: string;
+  reopenedBy?: string;
+  reopenedAt?: string;
+  reopenReason?: string;
+  supersededBy?: string;
+  supersededAt?: string;
+  supersedeReason?: string;
+  packetTemplateKey?: string;
+  packetTemplateName?: string;
+  packetTemplateVersionNumber?: number;
+  missingRequiredSections: string[];
+  disclosureBlocks: string[];
+  requiredAttestations: TrustPacketTemplateAttestationDto[];
+  completedAttestations: TrustMonthCloseAttestationDto[];
+  steps: TrustMonthCloseStepDto[];
+}
+
+export interface TrustComplianceExportRequest {
+  exportType: 'account_journal' | 'client_ledger' | 'approval_register' | 'month_close_packet' | 'compliance_bundle_manifest';
+  format: 'json' | 'csv' | 'pdf';
+  trustAccountId?: string;
+  clientTrustLedgerId?: string;
+  trustMonthCloseId?: string;
+  trustReconciliationPacketId?: string;
+  periodStart?: string;
+  periodEnd?: string;
+}
+
+export interface TrustComplianceExportListItemDto {
+  id: string;
+  exportType: string;
+  format: string;
+  status: string;
+  trustAccountId?: string;
+  clientTrustLedgerId?: string;
+  trustMonthCloseId?: string;
+  trustReconciliationPacketId?: string;
+  fileName: string;
+  contentType: string;
+  summaryJson?: string;
+  generatedBy?: string;
+  parentExportId?: string;
+  integrityStatus: string;
+  retentionPolicyTag?: string;
+  redactionProfile?: string;
+  generatedAt: string;
+}
+
+export interface TrustComplianceExportDto extends TrustComplianceExportListItemDto {
+  payloadJson?: string;
+  provenanceJson?: string;
+}
+
+export interface TrustAsOfProjectionRecoveryLedgerDto {
+  ledgerId: string;
+  clientId?: string;
+  matterId?: string;
+  persistedRunningBalance: number;
+  persistedClearedBalance: number;
+  persistedUnclearedBalance: number;
+  persistedAvailableToDisburse: number;
+  asOfRunningBalance: number;
+  asOfClearedBalance: number;
+  asOfUnclearedBalance: number;
+  asOfAvailableToDisburse: number;
+  hasCurrentProjectionDrift: boolean;
+}
+
+export interface TrustAsOfProjectionRecoveryAccountDto {
+  trustAccountId: string;
+  trustAccountName?: string;
+  persistedCurrentBalance: number;
+  persistedClearedBalance: number;
+  persistedUnclearedBalance: number;
+  persistedAvailableDisbursementCapacity: number;
+  asOfCurrentBalance: number;
+  asOfClearedBalance: number;
+  asOfUnclearedBalance: number;
+  asOfAvailableDisbursementCapacity: number;
+  hasCurrentProjectionDrift: boolean;
+  ledgers: TrustAsOfProjectionRecoveryLedgerDto[];
+}
+
+export interface TrustAsOfProjectionRecoveryResult {
+  generatedAtUtc: string;
+  effectiveAsOfUtc: string;
+  commitProjectionRepair: boolean;
+  historicalPreviewOnly: boolean;
+  accountCount: number;
+  ledgerCount: number;
+  driftedAccountCount: number;
+  driftedLedgerCount: number;
+  repairedTrustAccountIds: string[];
+  accounts: TrustAsOfProjectionRecoveryAccountDto[];
+}
+
+export interface TrustPacketRegenerationResult {
+  sourcePacketId?: string;
+  packetId: string;
+  packetVersionNumber: number;
+  packetStatus: string;
+  trustAccountId?: string;
+  trustMonthCloseId?: string;
+  trustMonthCloseStatus?: string;
+  generatedAtUtc: string;
+}
+
+export interface TrustComplianceBundleResult {
+  generatedAtUtc: string;
+  manifestExportId: string;
+  manifestFileName: string;
+  trustAccountId?: string;
+  trustMonthCloseId?: string;
+  trustReconciliationPacketId?: string;
+  exportCount: number;
+  exports: TrustComplianceExportListItemDto[];
+  integrity?: TrustBundleIntegrityDto;
+}
+
+export interface TrustCloseForecastSnapshotDto {
+  id: string;
+  trustAccountId: string;
+  trustAccountName?: string;
+  jurisdiction?: string;
+  officeId?: string;
+  statementCadence: string;
+  periodStart: string;
+  periodEnd: string;
+  closeDueAt: string;
+  readinessStatus: string;
+  severity: string;
+  missingStatementImport: boolean;
+  latestStatementImportId?: string;
+  statementImportedAt?: string;
+  hasCanonicalPacket: boolean;
+  canonicalPacketId?: string;
+  packetStatus?: string;
+  hasCanonicalMonthClose: boolean;
+  canonicalMonthCloseId?: string;
+  monthCloseStatus?: string;
+  openExceptionCount: number;
+  outstandingItemCount: number;
+  missingRequiredSectionCount: number;
+  missingAttestationCount: number;
+  unclearedBalance: number;
+  unclearedEntryCount: number;
+  oldestOutstandingAgeDays?: number;
+  oldestUnclearedAgeDays?: number;
+  draftBundleEligible: boolean;
+  draftBundleManifestExportId?: string;
+  draftBundleGeneratedAt?: string;
+  recommendedAction?: string;
+  reminderCount: number;
+  lastReminderAt?: string;
+  nextReminderAt?: string;
+  escalatedAt?: string;
+  lastAutomationRunAt?: string;
+  daysUntilDue: number;
+  isOverdue: boolean;
+}
+
+export interface TrustCloseForecastSummaryDto {
+  generatedAtUtc: string;
+  totalCount: number;
+  readyCount: number;
+  atRiskCount: number;
+  blockedCount: number;
+  overdueCount: number;
+  draftBundleEligibleCount: number;
+  reminderDueCount: number;
+  snapshots: TrustCloseForecastSnapshotDto[];
+}
+
+export interface TrustCloseForecastSyncResultDto {
+  generatedAtUtc: string;
+  snapshotCount: number;
+  createdCount: number;
+  updatedCount: number;
+  reminderCount: number;
+  escalatedCount: number;
+  draftBundleCount: number;
+  resolvedInboxCount: number;
+}
+
+export interface TrustBundleSignRequest {
+  retentionPolicyTag?: string;
+  redactionProfile?: string;
+  notes?: string;
+}
+
+export interface TrustBundleIntegrityDto {
+  manifestExportId: string;
+  manifestFileName: string;
+  integrityStatus: string;
+  signatureAlgorithm: string;
+  signatureDigest?: string;
+  signedBy?: string;
+  signedAt?: string;
+  verificationStatus: string;
+  verifiedAt?: string;
+  retentionPolicyTag?: string;
+  redactionProfile?: string;
+  parentManifestExportId?: string;
+  evidenceReferenceCount: number;
+  exportCount: number;
+  provenanceJson?: string;
 }
 
 export interface ReplayIntegrationOutboxEventResponse {

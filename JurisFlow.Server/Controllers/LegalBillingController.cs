@@ -586,6 +586,23 @@ namespace JurisFlow.Server.Controllers
             }
         }
 
+        [HttpPost("allocations/{allocationId}/finalize-trust")]
+        public async Task<ActionResult<BillingPaymentAllocation>> FinalizePendingTrustAllocation(string allocationId, CancellationToken ct)
+        {
+            try
+            {
+                var allocation = await _billingEngine.FinalizePendingTrustAllocationAsync(allocationId, GetUserId(), ct);
+                if (allocation == null) return NotFound();
+                await _auditLogger.LogAsync(HttpContext, "billing.allocation.finalize_trust", nameof(BillingPaymentAllocation), allocation.Id, $"Status={allocation.Status}");
+                await TryTriggerOutcomeFeePlannerAsync(allocation.MatterId, "payment_allocation_finalize_trust", nameof(BillingPaymentAllocation), allocation.Id, ct);
+                return Ok(allocation);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
         [HttpGet("invoices/{invoiceId}/payor-statements")]
         public async Task<IActionResult> GetInvoicePayorStatements(string invoiceId, [FromQuery] string? payorClientId = null, CancellationToken ct = default)
         {

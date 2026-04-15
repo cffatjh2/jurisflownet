@@ -1,3 +1,4 @@
+using JurisFlow.Server.Contracts;
 using JurisFlow.Server.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -61,6 +62,9 @@ namespace JurisFlow.Server.Services
                 var signatureLifecycleService = sp.GetRequiredService<SignatureLifecycleService>();
                 var integrationSyncRunner = sp.GetRequiredService<IntegrationSyncRunner>();
                 var integrationWebhookService = sp.GetRequiredService<IntegrationWebhookService>();
+                var trustComplianceService = sp.GetRequiredService<TrustComplianceService>();
+                var trustOpsInboxService = sp.GetRequiredService<TrustOpsInboxService>();
+                var trustCloseAutomationService = sp.GetRequiredService<TrustCloseAutomationService>();
 
                 var now = DateTime.UtcNow;
                 var planBatchSize = _configuration.GetValue("Operations:PaymentPlanBatchSize", 25);
@@ -117,6 +121,8 @@ namespace JurisFlow.Server.Services
 
                 var integrationSynced = 0;
                 var integrationFailed = 0;
+                TrustOperationalAlertSyncResultDto? trustAlertSync = null;
+                TrustCloseForecastSyncResultDto? trustCloseForecastSync = null;
                 var syncBucket = now.Ticks / TimeSpan.FromMinutes(integrationSyncIntervalMinutes).Ticks;
                 foreach (var connection in integrationConnections)
                 {
@@ -149,15 +155,34 @@ namespace JurisFlow.Server.Services
                     await context.SaveChangesAsync(stoppingToken);
                 }
 
+                var trustAlertSyncEnabled = _configuration.GetValue("Operations:TrustOperationalAlertSyncEnabled", true);
+                if (trustAlertSyncEnabled)
+                {
+                    trustAlertSync = await trustComplianceService.SyncOperationalAlertsAsync(stoppingToken);
+                    await trustOpsInboxService.SyncInboxAsync(false, stoppingToken);
+                }
+
+                var trustCloseForecastEnabled = _configuration.GetValue("Operations:TrustCloseForecastSyncEnabled", true);
+                if (trustCloseForecastEnabled)
+                {
+                    trustCloseForecastSync = await trustCloseAutomationService.SyncCloseForecastsAsync(true, stoppingToken);
+                }
+
                 _logger.LogInformation(
-                    "Operations jobs completed. PaymentPlans={ProcessedPlans} SmsSent={SmsSent} EmailSent={EmailSent} SignatureReminders={SignatureReminders} SignatureExpired={SignatureExpired} IntegrationSynced={IntegrationSynced} IntegrationFailed={IntegrationFailed}",
+                    "Operations jobs completed. PaymentPlans={ProcessedPlans} SmsSent={SmsSent} EmailSent={EmailSent} SignatureReminders={SignatureReminders} SignatureExpired={SignatureExpired} IntegrationSynced={IntegrationSynced} IntegrationFailed={IntegrationFailed} TrustAlertsActive={TrustAlertsActive} TrustAlertsCreated={TrustAlertsCreated} TrustAlertsAutoResolved={TrustAlertsAutoResolved} TrustCloseForecasts={TrustCloseForecasts} TrustCloseReminders={TrustCloseReminders} TrustCloseDrafts={TrustCloseDrafts}",
                     processedPlans,
                     smsSent,
                     emailSent,
                     signatureResult.RemindersQueued,
                     signatureResult.Expired,
                     integrationSynced,
-                    integrationFailed);
+                    integrationFailed,
+                    trustAlertSync?.ActiveAlertCount ?? 0,
+                    trustAlertSync?.CreatedCount ?? 0,
+                    trustAlertSync?.AutoResolvedCount ?? 0,
+                    trustCloseForecastSync?.SnapshotCount ?? 0,
+                    trustCloseForecastSync?.ReminderCount ?? 0,
+                    trustCloseForecastSync?.DraftBundleCount ?? 0);
             }, stoppingToken);
         }
 

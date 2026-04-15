@@ -1626,7 +1626,7 @@ namespace JurisFlow.Server.Services
 
             var ts = transaction.UpdatedAt == default ? transaction.CreatedAt : transaction.UpdatedAt;
             var score = baseEvaluation.Score;
-            var absoluteAmount = NormalizeMoney(Math.Abs((decimal)transaction.Amount));
+            var absoluteAmount = NormalizeMoney(Math.Abs(transaction.Amount));
             score += ApplyRoundDollarRule(absoluteAmount, reasons, weights);
             if (IsOffHours(ts) && absoluteAmount >= 2500m)
             {
@@ -1781,7 +1781,7 @@ namespace JurisFlow.Server.Services
 
         private TrustRiskEvaluation EvaluateTrustTransaction(TrustTransaction transaction)
         {
-            var amount = NormalizeMoney((decimal)Math.Abs(transaction.Amount));
+            var amount = NormalizeMoney(Math.Abs(transaction.Amount));
             var score = 0m;
             var reasons = new List<object>();
             var evidence = new Dictionary<string, object?>
@@ -2805,8 +2805,8 @@ namespace JurisFlow.Server.Services
                 q = q.Where(l => l.TrustAccountId == trustAccountId);
             }
 
-            var balance = await q.SumAsync(l => (double?)l.RunningBalance, ct) ?? 0d;
-            return NormalizeMoney((decimal)balance);
+            var balance = await q.SumAsync(l => (decimal?)l.AvailableToDisburse, ct) ?? 0m;
+            return NormalizeMoney(balance);
         }
 
         private async Task<bool> IsDateInLockedPeriodAsync(DateOnly day, CancellationToken ct)

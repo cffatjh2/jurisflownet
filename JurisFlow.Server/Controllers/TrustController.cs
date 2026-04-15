@@ -1,11 +1,10 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
-using System.Text.Json;
+using JurisFlow.Server.Contracts;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Controllers
@@ -16,151 +15,39 @@ namespace JurisFlow.Server.Controllers
     public class TrustController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly AuditLogger _auditLogger;
-        private readonly BillingPeriodLockService _billingPeriodLockService;
-        private readonly FirmStructureService _firmStructure;
+        private readonly LegalBillingEngineService _billingEngine;
+        private readonly TrustComplianceExportService _trustExportService;
         private readonly TrustComplianceService _trustComplianceService;
+        private readonly TrustAccountingService _trustAccountingService;
+        private readonly TrustStatementIngestionService _trustStatementIngestionService;
+        private readonly TrustOpsInboxService _trustOpsInboxService;
+        private readonly TrustCloseAutomationService _trustCloseAutomationService;
+        private readonly TrustRecoveryService _trustRecoveryService;
+        private readonly TrustBundleIntegrityService _trustBundleIntegrityService;
 
         public TrustController(
             JurisFlowDbContext context,
-            AuditLogger auditLogger,
-            BillingPeriodLockService billingPeriodLockService,
-            FirmStructureService firmStructure,
-            TrustComplianceService trustComplianceService)
+            LegalBillingEngineService billingEngine,
+            TrustComplianceExportService trustExportService,
+            TrustComplianceService trustComplianceService,
+            TrustAccountingService trustAccountingService,
+            TrustStatementIngestionService trustStatementIngestionService,
+            TrustOpsInboxService trustOpsInboxService,
+            TrustCloseAutomationService trustCloseAutomationService,
+            TrustRecoveryService trustRecoveryService,
+            TrustBundleIntegrityService trustBundleIntegrityService)
         {
             _context = context;
-            _auditLogger = auditLogger;
-            _billingPeriodLockService = billingPeriodLockService;
-            _firmStructure = firmStructure;
+            _billingEngine = billingEngine;
+            _trustExportService = trustExportService;
             _trustComplianceService = trustComplianceService;
+            _trustAccountingService = trustAccountingService;
+            _trustStatementIngestionService = trustStatementIngestionService;
+            _trustOpsInboxService = trustOpsInboxService;
+            _trustCloseAutomationService = trustCloseAutomationService;
+            _trustRecoveryService = trustRecoveryService;
+            _trustBundleIntegrityService = trustBundleIntegrityService;
         }
-
-        private string? GetUserId()
-        {
-            return User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
-        }
-
-        private bool IsApprover()
-        {
-            var role = User.FindFirst(ClaimTypes.Role)?.Value ?? User.FindFirst("role")?.Value ?? string.Empty;
-            return role.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Partner", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Associate", StringComparison.OrdinalIgnoreCase)
-                || role.Equals("Accountant", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private List<AllocationDto> ParseAllocations(string? allocationsJson)
-        {
-            if (string.IsNullOrWhiteSpace(allocationsJson)) return new List<AllocationDto>();
-            try
-            {
-                return JsonSerializer.Deserialize<List<AllocationDto>>(allocationsJson) ?? new List<AllocationDto>();
-            }
-            catch
-            {
-                return new List<AllocationDto>();
-            }
-        }
-
-        private async Task<bool> ApplyDepositAsync(TrustTransaction tx, TrustBankAccount account, List<AllocationDto> allocations)
-        {
-            if (tx.Amount <= 0) return false;
-            if (account.Status != TrustAccountStatus.ACTIVE) return false;
-
-            var balanceBefore = account.CurrentBalance;
-            account.CurrentBalance += tx.Amount;
-            account.UpdatedAt = DateTime.UtcNow;
-
-            if (allocations.Count > 0)
-            {
-                var ledgerIds = allocations.Select(a => a.LedgerId).Distinct().ToList();
-                var ledgers = await _context.ClientTrustLedgers
-                    .Where(l => ledgerIds.Contains(l.Id))
-                    .ToListAsync();
-                if (ledgers.Count != ledgerIds.Count) return false;
-                if (ledgers.Any(l => l.TrustAccountId != account.Id)) return false;
-                if (ledgers.Any(l => l.Status != LedgerStatus.ACTIVE)) return false;
-
-                foreach (var allocation in allocations)
-                {
-                    if (allocation.Amount <= 0) return false;
-                    var ledger = ledgers.First(l => l.Id == allocation.LedgerId);
-                    ledger.RunningBalance += allocation.Amount;
-                    ledger.UpdatedAt = DateTime.UtcNow;
-                }
-            }
-
-            tx.BalanceBefore = balanceBefore;
-            tx.BalanceAfter = account.CurrentBalance;
-            tx.UpdatedAt = DateTime.UtcNow;
-            return true;
-        }
-
-        private async Task<bool> ApplyWithdrawalAsync(TrustTransaction tx, TrustBankAccount account, ClientTrustLedger ledger)
-        {
-            if (tx.Amount <= 0) return false;
-            if (account.Status != TrustAccountStatus.ACTIVE) return false;
-            if (ledger.Status != LedgerStatus.ACTIVE) return false;
-            if (ledger.TrustAccountId != account.Id) return false;
-            if (ledger.RunningBalance < tx.Amount) return false;
-            if (account.CurrentBalance < tx.Amount) return false;
-
-            var balanceBefore = account.CurrentBalance;
-            account.CurrentBalance -= tx.Amount;
-            ledger.RunningBalance -= tx.Amount;
-            account.UpdatedAt = DateTime.UtcNow;
-            ledger.UpdatedAt = DateTime.UtcNow;
-
-            tx.BalanceBefore = balanceBefore;
-            tx.BalanceAfter = account.CurrentBalance;
-            tx.UpdatedAt = DateTime.UtcNow;
-            return true;
-        }
-
-        private async Task<bool> ReverseDepositAsync(TrustTransaction tx, TrustBankAccount account, List<AllocationDto> allocations)
-        {
-            if (tx.Amount <= 0) return false;
-            if (account.CurrentBalance < tx.Amount) return false;
-
-            if (allocations.Count > 0)
-            {
-                var ledgerIds = allocations.Select(a => a.LedgerId).Distinct().ToList();
-                var ledgers = await _context.ClientTrustLedgers
-                    .Where(l => ledgerIds.Contains(l.Id))
-                    .ToListAsync();
-                if (ledgers.Count != ledgerIds.Count) return false;
-                if (ledgers.Any(l => l.TrustAccountId != account.Id)) return false;
-                foreach (var allocation in allocations)
-                {
-                    var ledger = ledgers.First(l => l.Id == allocation.LedgerId);
-                    if (ledger.RunningBalance < allocation.Amount) return false;
-                }
-                foreach (var allocation in allocations)
-                {
-                    var ledger = ledgers.First(l => l.Id == allocation.LedgerId);
-                    ledger.RunningBalance -= allocation.Amount;
-                    ledger.UpdatedAt = DateTime.UtcNow;
-                }
-            }
-
-            account.CurrentBalance -= tx.Amount;
-            account.UpdatedAt = DateTime.UtcNow;
-            return true;
-        }
-
-        private async Task<bool> ReverseWithdrawalAsync(TrustTransaction tx, TrustBankAccount account, ClientTrustLedger ledger)
-        {
-            if (tx.Amount <= 0) return false;
-            if (ledger.TrustAccountId != account.Id) return false;
-
-            ledger.RunningBalance += tx.Amount;
-            account.CurrentBalance += tx.Amount;
-            ledger.UpdatedAt = DateTime.UtcNow;
-            account.UpdatedAt = DateTime.UtcNow;
-            return true;
-        }
-
-        // --- ACCOUNTS ---
 
         [HttpGet("accounts")]
         public async Task<ActionResult<IEnumerable<TrustBankAccount>>> GetTrustAccounts([FromQuery] string? entityId, [FromQuery] string? officeId)
@@ -170,56 +57,54 @@ namespace JurisFlow.Server.Controllers
             {
                 query = query.Where(a => a.EntityId == entityId);
             }
+
             if (!string.IsNullOrWhiteSpace(officeId))
             {
                 query = query.Where(a => a.OfficeId == officeId);
             }
+
             return await query.ToListAsync();
         }
 
         [HttpPost("accounts")]
-        public async Task<ActionResult<TrustBankAccount>> CreateTrustAccount([FromBody] CreateTrustAccountRequest request)
+        public Task<ActionResult<TrustBankAccount>> CreateTrustAccount([FromBody] CreateTrustAccountRequest request)
         {
-            var accountNumber = string.IsNullOrWhiteSpace(request.AccountNumberEnc)
-                ? request.AccountNumber?.Trim()
-                : request.AccountNumberEnc.Trim();
-
-            if (string.IsNullOrWhiteSpace(request.Name) ||
-                string.IsNullOrWhiteSpace(request.BankName) ||
-                string.IsNullOrWhiteSpace(request.RoutingNumber) ||
-                string.IsNullOrWhiteSpace(accountNumber) ||
-                string.IsNullOrWhiteSpace(request.Jurisdiction))
-            {
-                return BadRequest("Name, bank, routing number, account number, and jurisdiction are required.");
-            }
-
-            if (request.RoutingNumber.Trim().Length != 9 || !request.RoutingNumber.Trim().All(char.IsDigit))
-            {
-                return BadRequest("Routing number must be exactly 9 digits.");
-            }
-
-            var account = new TrustBankAccount
-            {
-                Name = request.Name.Trim(),
-                BankName = request.BankName.Trim(),
-                RoutingNumber = request.RoutingNumber.Trim(),
-                AccountNumberEnc = accountNumber,
-                Jurisdiction = request.Jurisdiction.Trim().ToUpperInvariant()
-            };
-
-            var resolved = await _firmStructure.ResolveEntityOfficeAsync(request.EntityId, request.OfficeId);
-            account.EntityId = resolved.entityId;
-            account.OfficeId = resolved.officeId;
-            account.Id = Guid.NewGuid().ToString();
-            account.CreatedAt = DateTime.UtcNow;
-            account.UpdatedAt = DateTime.UtcNow;
-            _context.TrustBankAccounts.Add(account);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.account.create", "TrustBankAccount", account.Id, $"Name={account.Name}, Balance={account.CurrentBalance}");
-            return CreatedAtAction(nameof(GetTrustAccounts), new { id = account.Id }, account);
+            return ExecuteAsync(
+                () => _trustAccountingService.CreateTrustAccountAsync(request, HttpContext.RequestAborted),
+                account => CreatedAtAction(nameof(GetTrustAccounts), new { id = account.Id }, account));
         }
 
-        // --- LEDGERS ---
+        [HttpGet("accounts/{id}/governance")]
+        public Task<ActionResult<TrustAccountGovernanceDto>> GetAccountGovernance(string id)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetAccountGovernanceAsync(id, HttpContext.RequestAborted),
+                dto => Ok(dto));
+        }
+
+        [HttpPost("accounts/{id}/governance")]
+        public Task<ActionResult<TrustAccountGovernanceDto>> UpdateAccountGovernance(string id, [FromBody] TrustAccountGovernanceDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.UpdateAccountGovernanceAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("policies")]
+        public Task<ActionResult<IReadOnlyList<TrustJurisdictionPolicyUpsertDto>>> GetPolicies([FromQuery] string? jurisdiction = null, [FromQuery] string? accountType = null)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetJurisdictionPoliciesAsync(jurisdiction, accountType, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("policies")]
+        public Task<ActionResult<TrustJurisdictionPolicyUpsertDto>> UpsertPolicy([FromBody] TrustJurisdictionPolicyUpsertDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.UpsertJurisdictionPolicyAsync(dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
 
         [HttpGet("ledgers")]
         public async Task<ActionResult<IEnumerable<ClientTrustLedger>>> GetLedgers([FromQuery] string? entityId, [FromQuery] string? officeId)
@@ -229,6 +114,7 @@ namespace JurisFlow.Server.Controllers
             {
                 query = query.Where(l => l.EntityId == entityId);
             }
+
             if (!string.IsNullOrWhiteSpace(officeId))
             {
                 query = query.Where(l => l.OfficeId == officeId);
@@ -241,40 +127,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ledgers")]
-        public async Task<ActionResult<ClientTrustLedger>> CreateLedger(ClientTrustLedger ledger)
+        public Task<ActionResult<ClientTrustLedger>> CreateLedger([FromBody] ClientTrustLedger ledger)
         {
-            var account = await _context.TrustBankAccounts.FindAsync(ledger.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
-            if (account.Status != TrustAccountStatus.ACTIVE)
-            {
-                return BadRequest("Trust account is not active.");
-            }
-
-            var client = await _context.Clients.FindAsync(ledger.ClientId);
-            if (client == null) return BadRequest("Client not found");
-
-            if (!string.IsNullOrWhiteSpace(ledger.MatterId))
-            {
-                var matter = await _context.Matters.FindAsync(ledger.MatterId);
-                if (matter == null) return BadRequest("Matter not found");
-                if (!string.Equals(matter.ClientId, ledger.ClientId, StringComparison.Ordinal))
-                {
-                    return BadRequest("Selected matter does not belong to the selected client.");
-                }
-            }
-
-            ledger.EntityId = account.EntityId;
-            ledger.OfficeId = account.OfficeId;
-            ledger.Id = Guid.NewGuid().ToString();
-            ledger.CreatedAt = DateTime.UtcNow;
-            ledger.UpdatedAt = DateTime.UtcNow;
-            _context.ClientTrustLedgers.Add(ledger);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.ledger.create", "ClientTrustLedger", ledger.Id, $"ClientId={ledger.ClientId}, Account={ledger.TrustAccountId}");
-            return CreatedAtAction(nameof(GetLedgers), new { id = ledger.Id }, ledger);
+            return ExecuteAsync(
+                () => _trustAccountingService.CreateLedgerAsync(ledger, HttpContext.RequestAborted),
+                created => CreatedAtAction(nameof(GetLedgers), new { id = created.Id }, created));
         }
-
-        // --- TRANSACTIONS ---
 
         [HttpGet("transactions")]
         public async Task<ActionResult<IEnumerable<TrustTransaction>>> GetTransactions([FromQuery] int limit = 50, [FromQuery] string? entityId = null, [FromQuery] string? officeId = null)
@@ -284,6 +142,7 @@ namespace JurisFlow.Server.Controllers
             {
                 query = query.Where(t => t.EntityId == entityId);
             }
+
             if (!string.IsNullOrWhiteSpace(officeId))
             {
                 query = query.Where(t => t.OfficeId == officeId);
@@ -297,318 +156,473 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("deposit")]
-        public async Task<ActionResult<TrustTransaction>> Deposit(DepositRequest request)
+        public Task<ActionResult<TrustTransaction>> Deposit([FromBody] DepositRequest request)
         {
-            var account = await _context.TrustBankAccounts.FindAsync(request.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
-            if (account.Status != TrustAccountStatus.ACTIVE)
-            {
-                return BadRequest("Trust account is not active.");
-            }
-
-            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
-            {
-                return BadRequest("Billing period is locked. Cannot post deposit.");
-            }
-
-            if (request.Amount <= 0) return BadRequest("Deposit amount must be positive");
-
-            var allocations = request.Allocations ?? new List<AllocationDto>();
-            if (allocations.Count == 0)
-            {
-                return BadRequest("At least one allocation is required.");
-            }
-
-            if (allocations.Any(a => a.Amount <= 0))
-            {
-                return BadRequest("Allocation amounts must be positive.");
-            }
-
-            var totalAllocations = allocations.Sum(a => a.Amount);
-            if (Math.Abs(totalAllocations - request.Amount) > 0.01)
-            {
-                return BadRequest("Allocation total must match deposit amount.");
-            }
-
-            var ledgerIds = allocations.Select(a => a.LedgerId).Distinct().ToList();
-            var ledgers = await _context.ClientTrustLedgers
-                .Where(l => ledgerIds.Contains(l.Id))
-                .ToListAsync();
-            if (ledgers.Count != ledgerIds.Count)
-            {
-                return BadRequest("One or more client ledgers were not found.");
-            }
-
-            if (ledgers.Any(l => l.TrustAccountId != request.TrustAccountId))
-            {
-                return BadRequest("Ledger does not belong to the selected trust account.");
-            }
-
-            if (ledgers.Any(l => l.Status != LedgerStatus.ACTIVE))
-            {
-                return BadRequest("One or more ledgers are not active.");
-            }
-
-            var matterId = ledgers.FirstOrDefault()?.MatterId;
-            if (string.IsNullOrWhiteSpace(matterId) || ledgers.Any(l => l.MatterId != matterId))
-            {
-                matterId = null;
-            }
-
-            var userId = GetUserId();
-            var isApprover = IsApprover();
-
-            var tx = new TrustTransaction
-            {
-                Id = Guid.NewGuid().ToString(),
-                TrustAccountId = request.TrustAccountId,
-                MatterId = matterId,
-                LedgerId = allocations.Count == 1 ? allocations[0].LedgerId : null,
-                EntityId = account.EntityId,
-                OfficeId = account.OfficeId,
-                Type = "DEPOSIT",
-                Amount = request.Amount,
-                Description = request.Description,
-                Reference = request.CheckNumber,
-                PayorPayee = request.PayorPayee,
-                CheckNumber = request.CheckNumber,
-                AllocationsJson = JsonSerializer.Serialize(allocations),
-                Status = isApprover ? "APPROVED" : "PENDING",
-                CreatedBy = userId,
-                ApprovedBy = isApprover ? userId : null,
-                ApprovedAt = isApprover ? DateTime.UtcNow : null,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            if (isApprover)
-            {
-                var applied = await ApplyDepositAsync(tx, account, allocations);
-                if (!applied)
-                {
-                    return BadRequest("Failed to apply deposit.");
-                }
-            }
-
-            _context.TrustTransactions.Add(tx);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.deposit", "TrustTransaction", tx.Id, $"Amount={request.Amount}, Account={account.Id}, Status={tx.Status}");
-            return Ok(tx);
+            return ExecuteAsync(
+                () => _trustAccountingService.CreateDepositAsync(request, ResolveIdempotencyKey(request.IdempotencyKey), HttpContext.RequestAborted),
+                tx => Ok(tx));
         }
 
         [HttpPost("withdrawal")]
-        public async Task<ActionResult<TrustTransaction>> Withdrawal(WithdrawalRequest request)
+        public Task<ActionResult<TrustTransaction>> Withdrawal([FromBody] WithdrawalRequest request)
         {
-            var account = await _context.TrustBankAccounts.FindAsync(request.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
-            if (account.Status != TrustAccountStatus.ACTIVE)
-            {
-                return BadRequest("Trust account is not active.");
-            }
-            
-            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
-            {
-                return BadRequest("Billing period is locked. Cannot post withdrawal.");
-            }
-
-            if (request.Amount <= 0) return BadRequest("Withdrawal amount must be positive");
-
-            var ledger = await _context.ClientTrustLedgers.FindAsync(request.LedgerId);
-            if (ledger == null) return BadRequest("Client ledger not found");
-            if (ledger.TrustAccountId != request.TrustAccountId)
-            {
-                return BadRequest("Ledger does not belong to the selected trust account.");
-            }
-            if (ledger.Status != LedgerStatus.ACTIVE)
-            {
-                return BadRequest("Ledger is not active.");
-            }
-
-            var userId = GetUserId();
-            var isApprover = IsApprover();
-
-            var tx = new TrustTransaction
-            {
-                Id = Guid.NewGuid().ToString(),
-                TrustAccountId = request.TrustAccountId,
-                LedgerId = request.LedgerId,
-                MatterId = ledger.MatterId,
-                EntityId = account.EntityId,
-                OfficeId = account.OfficeId,
-                Type = "WITHDRAWAL",
-                Amount = request.Amount,
-                Description = request.Description,
-                Reference = request.CheckNumber,
-                PayorPayee = request.PayorPayee,
-                CheckNumber = request.CheckNumber,
-                Status = isApprover ? "APPROVED" : "PENDING",
-                CreatedBy = userId,
-                ApprovedBy = isApprover ? userId : null,
-                ApprovedAt = isApprover ? DateTime.UtcNow : null,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            if (isApprover)
-            {
-                var applied = await ApplyWithdrawalAsync(tx, account, ledger);
-                if (!applied)
-                {
-                    return BadRequest("Failed to apply withdrawal.");
-                }
-            }
-
-            _context.TrustTransactions.Add(tx);
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.withdrawal", "TrustTransaction", tx.Id, $"Amount={request.Amount}, Account={account.Id}, Status={tx.Status}");
-            return Ok(tx);
+            return ExecuteAsync(
+                () => _trustAccountingService.CreateWithdrawalAsync(request, ResolveIdempotencyKey(request.IdempotencyKey), HttpContext.RequestAborted),
+                tx => Ok(tx));
         }
 
         [HttpPost("transactions/{id}/approve")]
-        public async Task<IActionResult> ApproveTransaction(string id)
+        public Task<ActionResult<TrustTransaction>> ApproveTransaction(string id)
         {
-            if (!IsApprover()) return Forbid();
-
-            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
-            {
-                return BadRequest("Billing period is locked. Cannot approve transaction.");
-            }
-
-            var tx = await _context.TrustTransactions.FirstOrDefaultAsync(t => t.Id == id);
-            if (tx == null) return NotFound("Transaction not found");
-            if (tx.Status == "APPROVED") return BadRequest("Transaction already approved.");
-            if (tx.Status == "VOIDED") return BadRequest("Voided transactions cannot be approved.");
-            if (tx.Status == "REJECTED") return BadRequest("Rejected transactions cannot be approved.");
-
-            var account = await _context.TrustBankAccounts.FindAsync(tx.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
-
-            var applied = false;
-            if (tx.Type == "DEPOSIT")
-            {
-                var allocations = ParseAllocations(tx.AllocationsJson);
-                applied = await ApplyDepositAsync(tx, account, allocations);
-            }
-            else if (tx.Type == "WITHDRAWAL")
-            {
-                if (string.IsNullOrWhiteSpace(tx.LedgerId))
+            return ExecuteAsync(
+                async () =>
                 {
-                    return BadRequest("Ledger is required for withdrawals.");
-                }
-                var ledger = await _context.ClientTrustLedgers.FindAsync(tx.LedgerId);
-                if (ledger == null) return BadRequest("Client ledger not found");
-                applied = await ApplyWithdrawalAsync(tx, account, ledger);
-            }
-            else
-            {
-                return BadRequest("Unsupported transaction type.");
-            }
+                    var tx = await _trustAccountingService.ApproveTransactionAsync(id, null, ResolveIdempotencyKey(), HttpContext.RequestAborted);
+                    await SyncBillingAllocationAsync(tx, null);
+                    return tx;
+                },
+                tx => Ok(tx));
+        }
 
-            if (!applied)
-            {
-                return BadRequest("Failed to apply transaction.");
-            }
+        [HttpPost("transactions/{id}/approve-step")]
+        public Task<ActionResult<TrustTransaction>> ApproveTransactionStep(string id, [FromBody] TrustApproveStepDto dto)
+        {
+            return ExecuteAsync(
+                async () =>
+                {
+                    var tx = await _trustAccountingService.ApproveTransactionAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted);
+                    await SyncBillingAllocationAsync(tx, null);
+                    return tx;
+                },
+                tx => Ok(tx));
+        }
 
-            tx.Status = "APPROVED";
-            tx.ApprovedBy = GetUserId();
-            tx.ApprovedAt = DateTime.UtcNow;
-            tx.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.transaction.approve", "TrustTransaction", tx.Id, $"Amount={tx.Amount}, Account={tx.TrustAccountId}");
-
-            return Ok(tx);
+        [HttpPost("transactions/{id}/override")]
+        public Task<ActionResult<TrustTransaction>> OverrideTransaction(string id, [FromBody] TrustOverrideDto dto)
+        {
+            return ExecuteAsync(
+                async () =>
+                {
+                    var tx = await _trustAccountingService.OverrideTransactionAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted);
+                    await SyncBillingAllocationAsync(tx, dto?.Reason);
+                    return tx;
+                },
+                tx => Ok(tx));
         }
 
         [HttpPost("transactions/{id}/reject")]
-        public async Task<IActionResult> RejectTransaction(string id, [FromBody] TrustRejectDto dto)
+        public Task<ActionResult<TrustTransaction>> RejectTransaction(string id, [FromBody] TrustRejectDto dto)
         {
-            if (!IsApprover()) return Forbid();
-
-            var tx = await _context.TrustTransactions.FirstOrDefaultAsync(t => t.Id == id);
-            if (tx == null) return NotFound("Transaction not found");
-            if (tx.Status == "APPROVED") return BadRequest("Approved transactions cannot be rejected.");
-            if (tx.Status == "VOIDED") return BadRequest("Voided transactions cannot be rejected.");
-            if (tx.Status == "REJECTED") return BadRequest("Transaction already rejected.");
-
-            tx.Status = "REJECTED";
-            tx.RejectedBy = GetUserId();
-            tx.RejectedAt = DateTime.UtcNow;
-            tx.RejectionReason = dto?.Reason;
-            tx.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.transaction.reject", "TrustTransaction", tx.Id, $"Reason={dto?.Reason}");
-
-            return Ok(tx);
+            return ExecuteAsync(
+                async () =>
+                {
+                    var tx = await _trustAccountingService.RejectTransactionAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted);
+                    await SyncBillingAllocationAsync(tx, dto?.Reason);
+                    return tx;
+                },
+                tx => Ok(tx));
         }
 
         [HttpPost("transactions/{id}/void")]
-        public async Task<IActionResult> VoidTransaction(string id, [FromBody] TrustVoidDto dto)
+        public Task<ActionResult<TrustTransaction>> VoidTransaction(string id, [FromBody] TrustVoidDto dto)
         {
-            if (!IsApprover()) return Forbid();
-
-            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
-            {
-                return BadRequest("Billing period is locked. Cannot void transaction.");
-            }
-
-            var tx = await _context.TrustTransactions.FirstOrDefaultAsync(t => t.Id == id);
-            if (tx == null) return NotFound("Transaction not found");
-            if (tx.Status != "APPROVED") return BadRequest("Only approved transactions can be voided.");
-            if (tx.IsVoided || tx.Status == "VOIDED") return BadRequest("Transaction already voided.");
-
-            var account = await _context.TrustBankAccounts.FindAsync(tx.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
-
-            var reversed = false;
-            if (tx.Type == "DEPOSIT")
-            {
-                var allocations = ParseAllocations(tx.AllocationsJson);
-                reversed = await ReverseDepositAsync(tx, account, allocations);
-            }
-            else if (tx.Type == "WITHDRAWAL")
-            {
-                if (string.IsNullOrWhiteSpace(tx.LedgerId))
+            return ExecuteAsync(
+                async () =>
                 {
-                    return BadRequest("Ledger is required for withdrawals.");
-                }
-                var ledger = await _context.ClientTrustLedgers.FindAsync(tx.LedgerId);
-                if (ledger == null) return BadRequest("Client ledger not found");
-                reversed = await ReverseWithdrawalAsync(tx, account, ledger);
-            }
-            else
-            {
-                return BadRequest("Unsupported transaction type.");
-            }
-
-            if (!reversed)
-            {
-                return BadRequest("Failed to void transaction.");
-            }
-
-            tx.IsVoided = true;
-            tx.Status = "VOIDED";
-            tx.VoidReason = dto?.Reason;
-            tx.VoidedAt = DateTime.UtcNow;
-            tx.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            await _auditLogger.LogAsync(HttpContext, "trust.transaction.void", "TrustTransaction", tx.Id, $"Reason={dto?.Reason}");
-
-            return Ok(tx);
+                    var tx = await _trustAccountingService.VoidTransactionAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted);
+                    await SyncBillingAllocationAsync(tx, dto?.Reason);
+                    return tx;
+                },
+                tx => Ok(tx));
         }
 
-        // --- RECONCILIATIONS ---
+        [HttpPost("transactions/{id}/clear")]
+        public Task<ActionResult<TrustTransaction>> ClearDeposit(string id, [FromBody] TrustClearDepositDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ClearDepositAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted),
+                tx => Ok(tx));
+        }
+
+        [HttpPost("transactions/{id}/return")]
+        public Task<ActionResult<TrustTransaction>> ReturnDeposit(string id, [FromBody] TrustReturnDepositDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ReturnDepositAsync(id, dto, ResolveIdempotencyKey(dto?.IdempotencyKey), HttpContext.RequestAborted),
+                tx => Ok(tx));
+        }
+
+        [HttpGet("transactions/{id}/approval-state")]
+        public Task<ActionResult<TrustTransactionApprovalStateDto>> GetApprovalState(string id)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetTransactionApprovalStateAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("approvals")]
+        public Task<ActionResult<IReadOnlyList<TrustApprovalQueueItemDto>>> GetApprovalQueue([FromQuery] string? trustAccountId = null)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetApprovalQueueAsync(trustAccountId, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
 
         [HttpGet("reconciliations")]
         public async Task<ActionResult<IEnumerable<ReconciliationRecord>>> GetReconciliations()
         {
-            return await _context.ReconciliationRecords.Include(r => r.TrustAccount).OrderByDescending(r => r.PeriodEnd).ToListAsync();
+            return await _context.ReconciliationRecords
+                .Include(r => r.TrustAccount)
+                .OrderByDescending(r => r.PeriodEnd)
+                .ToListAsync();
+        }
+
+        [HttpGet("statements")]
+        public async Task<ActionResult<IEnumerable<TrustStatementImport>>> GetStatements([FromQuery] string? trustAccountId = null, [FromQuery] bool includeHistory = false)
+        {
+            var query = _context.TrustStatementImports.AsNoTracking().AsQueryable();
+            if (!string.IsNullOrWhiteSpace(trustAccountId))
+            {
+                query = query.Where(s => s.TrustAccountId == trustAccountId);
+            }
+
+            if (!includeHistory)
+            {
+                query = query.Where(s => s.Status != "superseded");
+            }
+
+            return await query
+                .OrderByDescending(s => s.PeriodEnd)
+                .ThenBy(s => s.Status == "duplicate" ? 1 : 0)
+                .ThenByDescending(s => s.ImportedAt)
+                .ToListAsync();
+        }
+
+        [HttpGet("evidence-files")]
+        public Task<ActionResult<IReadOnlyList<TrustEvidenceFile>>> GetEvidenceFiles([FromQuery] string? trustAccountId = null, [FromQuery] bool includeHistory = false)
+        {
+            return ExecuteAsync(
+                () => _trustStatementIngestionService.GetEvidenceFilesAsync(trustAccountId, includeHistory, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("evidence-files/register")]
+        public Task<ActionResult<TrustEvidenceFile>> RegisterEvidenceFile([FromBody] TrustEvidenceFileRegisterRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustStatementIngestionService.RegisterEvidenceFileAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("parser-runs")]
+        public Task<ActionResult<IReadOnlyList<TrustStatementParserRun>>> GetParserRuns([FromQuery] string? trustAccountId = null)
+        {
+            return ExecuteAsync(
+                () => _trustStatementIngestionService.GetParserRunsAsync(trustAccountId, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("parser-runs")]
+        public Task<ActionResult<TrustStatementParserRun>> CreateParserRun([FromBody] TrustStatementParserRunCreateDto request)
+        {
+            return ExecuteAsync(
+                () => _trustStatementIngestionService.CreateParserRunAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("statements/import")]
+        public Task<ActionResult<TrustStatementImport>> ImportStatement([FromBody] TrustStatementImportRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ImportStatementAsync(request, HttpContext.RequestAborted),
+                statement => Ok(statement));
+        }
+
+        [HttpGet("statements/{id}/lines")]
+        public Task<ActionResult<IReadOnlyList<TrustStatementLine>>> GetStatementLines(string id)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetStatementLinesAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("statements/{id}/match-run")]
+        public Task<ActionResult<TrustStatementMatchingRunResultDto>> RunStatementMatch(string id)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.RunStatementMatchingAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("statement-lines/{id}/resolve")]
+        public Task<ActionResult<TrustStatementLine>> ResolveStatementLine(string id, [FromBody] TrustStatementLineMatchDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ResolveStatementLineAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("outstanding-items")]
+        public async Task<ActionResult<IEnumerable<TrustOutstandingItem>>> GetOutstandingItems([FromQuery] string? trustAccountId = null, [FromQuery] string? status = null)
+        {
+            var query = _context.TrustOutstandingItems.AsNoTracking().AsQueryable();
+            if (!string.IsNullOrWhiteSpace(trustAccountId))
+            {
+                query = query.Where(i => i.TrustAccountId == trustAccountId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                query = query.Where(i => i.Status == status);
+            }
+
+            return await query
+                .OrderByDescending(i => i.PeriodEnd)
+                .ThenByDescending(i => i.OccurredAt)
+                .ToListAsync();
+        }
+
+        [HttpPost("outstanding-items")]
+        public Task<ActionResult<TrustOutstandingItem>> CreateOutstandingItem([FromBody] TrustOutstandingItemCreateDto request)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.CreateOutstandingItemAsync(request, HttpContext.RequestAborted),
+                item => Ok(item));
+        }
+
+        [HttpGet("reconciliation-packets")]
+        public async Task<ActionResult<IEnumerable<TrustReconciliationPacket>>> GetReconciliationPackets([FromQuery] string? trustAccountId = null, [FromQuery] bool includeHistory = false)
+        {
+            var query = _context.TrustReconciliationPackets.AsNoTracking().AsQueryable();
+            if (!string.IsNullOrWhiteSpace(trustAccountId))
+            {
+                query = query.Where(p => p.TrustAccountId == trustAccountId);
+            }
+
+            if (!includeHistory)
+            {
+                query = query.Where(p => p.IsCanonical);
+            }
+
+            return await query
+                .OrderByDescending(p => p.PeriodEnd)
+                .ThenByDescending(p => p.VersionNumber)
+                .ThenByDescending(p => p.PreparedAt)
+                .ToListAsync();
+        }
+
+        [HttpGet("reconciliation-packets/{id}")]
+        public async Task<ActionResult<object>> GetReconciliationPacketDetail(string id)
+        {
+            var packet = await _context.TrustReconciliationPackets.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
+            if (packet == null)
+            {
+                return NotFound();
+            }
+
+            var signoffs = await _context.TrustReconciliationSignoffs.AsNoTracking()
+                .Where(s => s.TrustReconciliationPacketId == id)
+                .OrderByDescending(s => s.SignedAt)
+                .ToListAsync();
+            var outstandingItems = await _context.TrustOutstandingItems.AsNoTracking()
+                .Where(i => i.TrustReconciliationPacketId == id)
+                .OrderByDescending(i => i.OccurredAt)
+                .ToListAsync();
+            var statementImport = string.IsNullOrWhiteSpace(packet.StatementImportId)
+                ? null
+                : await _context.TrustStatementImports.AsNoTracking()
+                    .FirstOrDefaultAsync(i => i.Id == packet.StatementImportId);
+            var statementLines = string.IsNullOrWhiteSpace(packet.StatementImportId)
+                ? new List<TrustStatementLine>()
+                : await _context.TrustStatementLines.AsNoTracking()
+                    .Where(l => l.TrustStatementImportId == packet.StatementImportId)
+                    .OrderBy(l => l.PostedAt)
+                    .ThenBy(l => l.Amount)
+                    .ToListAsync();
+
+            return Ok(new
+            {
+                packet,
+                statementImport,
+                signoffs,
+                outstandingItems,
+                statementLines
+            });
+        }
+
+        [HttpPost("reconciliation-packets")]
+        public Task<ActionResult<TrustReconciliationPacket>> CreateReconciliationPacket([FromBody] TrustReconciliationPacketCreateDto request)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GenerateReconciliationPacketAsync(request, HttpContext.RequestAborted),
+                packet => Ok(packet));
+        }
+
+        [HttpPost("reconciliation-packets/{id}/signoff")]
+        public Task<ActionResult<TrustReconciliationPacket>> SignoffReconciliationPacket(string id, [FromBody] TrustReconciliationPacketSignoffDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.SignoffReconciliationPacketAsync(id, dto, HttpContext.RequestAborted),
+                packet => Ok(packet));
+        }
+
+        [HttpPost("reconciliation-packets/{id}/supersede")]
+        public Task<ActionResult<TrustReconciliationPacket>> SupersedeReconciliationPacket(string id, [FromBody] TrustReconciliationPacketSupersedeDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.SupersedeReconciliationPacketAsync(id, dto, HttpContext.RequestAborted),
+                packet => Ok(packet));
+        }
+
+        [HttpGet("month-close")]
+        public Task<ActionResult<IReadOnlyList<TrustMonthCloseDto>>> GetMonthCloses([FromQuery] string? trustAccountId = null, [FromQuery] bool includeHistory = false)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetMonthClosesAsync(trustAccountId, includeHistory, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("month-close/prepare")]
+        public Task<ActionResult<TrustMonthCloseDto>> PrepareMonthClose([FromBody] TrustMonthClosePrepareDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.PrepareMonthCloseAsync(dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("month-close/{id}/signoff")]
+        public Task<ActionResult<TrustMonthCloseDto>> SignoffMonthClose(string id, [FromBody] TrustMonthCloseSignoffDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.SignoffMonthCloseAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("month-close/{id}/reopen")]
+        public Task<ActionResult<TrustMonthCloseDto>> ReopenMonthClose(string id, [FromBody] TrustMonthCloseReopenDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ReopenMonthCloseAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("packet-templates")]
+        public Task<ActionResult<IReadOnlyList<TrustJurisdictionPacketTemplateUpsertDto>>> GetPacketTemplates([FromQuery] string? jurisdiction = null, [FromQuery] string? accountType = null, [FromQuery] string? policyKey = null)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetPacketTemplatesAsync(jurisdiction, accountType, policyKey, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("packet-templates")]
+        public Task<ActionResult<TrustJurisdictionPacketTemplateUpsertDto>> UpsertPacketTemplate([FromBody] TrustJurisdictionPacketTemplateUpsertDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.UpsertPacketTemplateAsync(dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("exports")]
+        public Task<ActionResult<IReadOnlyList<TrustComplianceExportListItemDto>>> GetExports([FromQuery] string? trustAccountId = null, [FromQuery] string? exportType = null)
+        {
+            return ExecuteAsync(
+                () => _trustExportService.ListExportsAsync(trustAccountId, exportType, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("exports/{id}")]
+        public Task<ActionResult<TrustComplianceExportDto>> GetExport(string id)
+        {
+            return ExecuteAsync(
+                () => _trustExportService.GetExportAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("exports")]
+        public Task<ActionResult<TrustComplianceExportDto>> GenerateExport([FromBody] TrustComplianceExportRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustExportService.GenerateExportAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("projection-health")]
+        public Task<ActionResult<TrustProjectionHealthResponse>> GetProjectionHealth([FromQuery] string? trustAccountId = null)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.GetProjectionHealthAsync(trustAccountId, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("projection-rebuild")]
+        public Task<ActionResult<TrustProjectionRebuildResult>> RebuildProjections([FromBody] TrustProjectionRebuildRequest? request)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.RebuildProjectionsAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("recovery/as-of-rebuild")]
+        public Task<ActionResult<TrustAsOfProjectionRecoveryResult>> RunAsOfRecovery([FromBody] TrustAsOfProjectionRecoveryRequest? request)
+        {
+            return ExecuteAsync(
+                () => _trustRecoveryService.GenerateAsOfProjectionRecoveryAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("recovery/packet-regeneration")]
+        public Task<ActionResult<TrustPacketRegenerationResult>> RegeneratePacket([FromBody] TrustPacketRegenerationRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustRecoveryService.RegeneratePacketAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("recovery/compliance-bundle")]
+        public Task<ActionResult<TrustComplianceBundleResult>> GenerateComplianceBundle([FromBody] TrustComplianceBundleRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustRecoveryService.GenerateComplianceBundleAsync(request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("recovery/compliance-bundle/{id}/integrity")]
+        public Task<ActionResult<TrustBundleIntegrityDto>> GetComplianceBundleIntegrity(string id)
+        {
+            return ExecuteAsync(
+                () => _trustBundleIntegrityService.GetBundleIntegrityAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("recovery/compliance-bundle/{id}/sign")]
+        public Task<ActionResult<TrustBundleIntegrityDto>> SignComplianceBundle(string id, [FromBody] TrustBundleSignRequest? request)
+        {
+            return ExecuteAsync(
+                () => _trustBundleIntegrityService.SignBundleAsync(id, request, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("close-forecast")]
+        public Task<ActionResult<TrustCloseForecastSummaryDto>> GetCloseForecast(
+            [FromQuery] string? trustAccountId = null,
+            [FromQuery] string? readinessStatus = null,
+            [FromQuery] bool actionableOnly = false)
+        {
+            return ExecuteAsync(
+                () => _trustCloseAutomationService.GetCloseForecastsAsync(trustAccountId, readinessStatus, actionableOnly, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("close-forecast/sync")]
+        public Task<ActionResult<TrustCloseForecastSyncResultDto>> SyncCloseForecast([FromQuery] bool generateDraftBundles = true)
+        {
+            return ExecuteAsync(
+                () => _trustCloseAutomationService.SyncCloseForecastsAsync(generateDraftBundles, HttpContext.RequestAborted),
+                result => Ok(result));
         }
 
         [HttpGet("compliance")]
-        public async Task<ActionResult> GetCompliance([FromQuery] string trustAccountId, [FromQuery] double? bankStatementBalance = null)
+        public async Task<ActionResult> GetCompliance([FromQuery] string trustAccountId, [FromQuery] decimal? bankStatementBalance = null)
         {
             if (string.IsNullOrWhiteSpace(trustAccountId))
             {
@@ -616,106 +630,196 @@ namespace JurisFlow.Server.Controllers
             }
 
             var summary = await _trustComplianceService.EvaluateAsync(trustAccountId, bankStatementBalance);
-            if (summary == null) return NotFound("Trust account not found");
+            if (summary == null)
+            {
+                return NotFound("Trust account not found");
+            }
+
             return Ok(summary);
         }
 
-        [HttpPost("reconcile")]
-        public async Task<ActionResult<ReconciliationRecord>> Reconcile(ReconcileRequest request)
+        [HttpGet("operational-alerts")]
+        public async Task<ActionResult<TrustOperationalAlertSummary>> GetOperationalAlerts([FromQuery] string? trustAccountId = null, [FromQuery] string? severity = null, [FromQuery] string? alertType = null)
         {
-            var account = await _context.TrustBankAccounts.FindAsync(request.TrustAccountId);
-            if (account == null) return NotFound("Trust account not found");
+            var summary = await _trustComplianceService.GetOperationalAlertsAsync(trustAccountId, severity, alertType, ct: HttpContext.RequestAborted);
+            return Ok(summary);
+        }
 
-            if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
+        [HttpPost("operational-alerts/sync")]
+        public Task<ActionResult<TrustOperationalAlertSyncResultDto>> SyncOperationalAlerts()
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.SyncOperationalAlertsAsync(HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("operational-alert-records")]
+        public Task<ActionResult<IReadOnlyList<TrustOperationalAlertRecordDto>>> GetOperationalAlertRecords(
+            [FromQuery] string? trustAccountId = null,
+            [FromQuery] string? workflowStatus = null,
+            [FromQuery] string? severity = null,
+            [FromQuery] string? alertType = null)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.GetOperationalAlertRecordsAsync(trustAccountId, workflowStatus, severity, alertType, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("operational-alerts/{id}/history")]
+        public Task<ActionResult<IReadOnlyList<TrustOperationalAlertEventDto>>> GetOperationalAlertHistory(string id)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.GetOperationalAlertHistoryAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("operational-alerts/{id}/ack")]
+        public Task<ActionResult<TrustOperationalAlertRecordDto>> AcknowledgeOperationalAlert(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.AcknowledgeOperationalAlertAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("operational-alerts/{id}/assign")]
+        public Task<ActionResult<TrustOperationalAlertRecordDto>> AssignOperationalAlert(string id, [FromBody] TrustOperationalAlertAssignDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.AssignOperationalAlertAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("operational-alerts/{id}/escalate")]
+        public Task<ActionResult<TrustOperationalAlertRecordDto>> EscalateOperationalAlert(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.EscalateOperationalAlertAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("operational-alerts/{id}/resolve")]
+        public Task<ActionResult<TrustOperationalAlertRecordDto>> ResolveOperationalAlert(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustComplianceService.ResolveOperationalAlertAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/sync")]
+        public Task<ActionResult<TrustOpsInboxSummaryDto>> SyncOpsInbox()
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.SyncInboxAsync(ct: HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("ops-inbox")]
+        public Task<ActionResult<TrustOpsInboxSummaryDto>> GetOpsInbox(
+            [FromQuery] string? assignedUserId = null,
+            [FromQuery] string? officeId = null,
+            [FromQuery] string? jurisdiction = null,
+            [FromQuery] string? severity = null,
+            [FromQuery] string? blockerGroup = null,
+            [FromQuery] string? workflowStatus = null,
+            [FromQuery] bool breachedOnly = false)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.GetInboxAsync(assignedUserId, officeId, jurisdiction, severity, blockerGroup, workflowStatus, breachedOnly, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpGet("ops-inbox/{id}/history")]
+        public Task<ActionResult<IReadOnlyList<TrustOpsInboxEventDto>>> GetOpsInboxHistory(string id)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.GetInboxHistoryAsync(id, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/{id}/claim")]
+        public Task<ActionResult<TrustOpsInboxItemDto>> ClaimOpsInboxItem(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.ClaimAsync(id, dto?.Notes, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/{id}/assign")]
+        public Task<ActionResult<TrustOpsInboxItemDto>> AssignOpsInboxItem(string id, [FromBody] TrustOpsInboxAssignDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.AssignAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/{id}/defer")]
+        public Task<ActionResult<TrustOpsInboxItemDto>> DeferOpsInboxItem(string id, [FromBody] TrustOpsInboxDeferDto dto)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.DeferAsync(id, dto, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/{id}/escalate")]
+        public Task<ActionResult<TrustOpsInboxItemDto>> EscalateOpsInboxItem(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.EscalateAsync(id, dto?.Notes, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("ops-inbox/{id}/resolve")]
+        public Task<ActionResult<TrustOpsInboxItemDto>> ResolveOpsInboxItem(string id, [FromBody] TrustOperationalAlertActionDto? dto)
+        {
+            return ExecuteAsync(
+                () => _trustOpsInboxService.ResolveAsync(id, dto?.Notes, HttpContext.RequestAborted),
+                result => Ok(result));
+        }
+
+        [HttpPost("reconcile")]
+        public Task<ActionResult<ReconciliationRecord>> Reconcile([FromBody] ReconcileRequest request)
+        {
+            return ExecuteAsync(
+                () => _trustAccountingService.ReconcileAsync(request, HttpContext.RequestAborted),
+                rec => Ok(rec));
+        }
+
+        private async Task<ActionResult<T>> ExecuteAsync<T>(Func<Task<T>> action, Func<T, ActionResult<T>> onSuccess)
+        {
+            try
             {
-                return BadRequest("Billing period is locked. Cannot reconcile in locked period.");
+                var result = await action();
+                return onSuccess(result);
+            }
+            catch (TrustCommandException ex)
+            {
+                return StatusCode(ex.StatusCode, ex.Message);
+            }
+        }
+
+        private string? ResolveIdempotencyKey(string? requestValue = null)
+        {
+            if (!string.IsNullOrWhiteSpace(requestValue))
+            {
+                return requestValue;
             }
 
-            var clientLedgerSum = await _context.ClientTrustLedgers
-                .Where(l => l.TrustAccountId == request.TrustAccountId)
-                .SumAsync(l => l.RunningBalance);
-
-            var discrepancy = Math.Abs(account.CurrentBalance - request.BankStatementBalance);
-            bool isReconciled = discrepancy < 0.01 && Math.Abs(clientLedgerSum - account.CurrentBalance) < 0.01;
-
-            var rec = new ReconciliationRecord
-            {
-                Id = Guid.NewGuid().ToString(),
-                TrustAccountId = request.TrustAccountId,
-                PeriodEnd = DateTime.Parse(request.PeriodEnd),
-                BankStatementBalance = request.BankStatementBalance,
-                TrustLedgerBalance = account.CurrentBalance,
-                ClientLedgerSumBalance = clientLedgerSum,
-                IsReconciled = isReconciled,
-                DiscrepancyAmount = discrepancy,
-                Notes = request.Notes,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.ReconciliationRecords.Add(rec);
-            await _context.SaveChangesAsync();
-
-            await _auditLogger.LogAsync(HttpContext, "trust.reconcile", "ReconciliationRecord", rec.Id, $"IsReconciled={isReconciled}, Discrepancy={discrepancy}");
-
-            return Ok(rec);
+            return Request.Headers["Idempotency-Key"].FirstOrDefault();
         }
-    }
 
-    // DTOs
-    public class DepositRequest
-    {
-        public string TrustAccountId { get; set; }
-        public double Amount { get; set; }
-        public string Description { get; set; }
-        public string PayorPayee { get; set; }
-        public string? CheckNumber { get; set; }
-        public List<AllocationDto> Allocations { get; set; }
-    }
+        private async Task SyncBillingAllocationAsync(TrustTransaction tx, string? reason)
+        {
+            if (!string.Equals(tx.Type, "EARNED_FEE_TRANSFER", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
 
-    public class AllocationDto
-    {
-        public string LedgerId { get; set; }
-        public double Amount { get; set; }
-        public string? Description { get; set; }
-    }
-
-    public class WithdrawalRequest
-    {
-        public string TrustAccountId { get; set; }
-        public string LedgerId { get; set; }
-        public double Amount { get; set; }
-        public string Description { get; set; }
-        public string PayorPayee { get; set; }
-        public string? CheckNumber { get; set; }
-    }
-
-    public class ReconcileRequest
-    {
-        public string TrustAccountId { get; set; }
-        public string PeriodEnd { get; set; }
-        public double BankStatementBalance { get; set; }
-        public string Notes { get; set; }
-    }
-
-    public class TrustRejectDto
-    {
-        public string? Reason { get; set; }
-    }
-
-    public class TrustVoidDto
-    {
-        public string? Reason { get; set; }
-    }
-
-    public class CreateTrustAccountRequest
-    {
-        public string Name { get; set; } = string.Empty;
-        public string BankName { get; set; } = string.Empty;
-        public string RoutingNumber { get; set; } = string.Empty;
-        public string? AccountNumber { get; set; }
-        public string? AccountNumberEnc { get; set; }
-        public string Jurisdiction { get; set; } = string.Empty;
-        public string? EntityId { get; set; }
-        public string? OfficeId { get; set; }
+            await _billingEngine.SyncTrustAllocationAsync(
+                tx.Id,
+                tx.Status,
+                reason,
+                HttpContext.User?.Identity?.Name,
+                HttpContext.RequestAborted);
+        }
     }
 }

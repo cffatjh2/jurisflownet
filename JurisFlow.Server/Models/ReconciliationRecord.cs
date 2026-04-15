@@ -16,11 +16,11 @@ namespace JurisFlow.Server.Models
         public TrustBankAccount? TrustAccount { get; set; }
 
         public DateTime PeriodEnd { get; set; }
-        public double BankStatementBalance { get; set; }
-        public double TrustLedgerBalance { get; set; }
-        public double ClientLedgerSumBalance { get; set; }
+        public decimal BankStatementBalance { get; set; }
+        public decimal TrustLedgerBalance { get; set; }
+        public decimal ClientLedgerSumBalance { get; set; }
         public bool IsReconciled { get; set; }
-        public double DiscrepancyAmount { get; set; } = 0;
+        public decimal DiscrepancyAmount { get; set; } = 0m;
         public string? Notes { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

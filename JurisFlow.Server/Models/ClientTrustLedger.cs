@@ -36,7 +36,17 @@ namespace JurisFlow.Server.Models
 
         public string? OfficeId { get; set; }
 
-        public double RunningBalance { get; set; } = 0;
+        public decimal RunningBalance { get; set; } = 0m;
+        public decimal ClearedBalance { get; set; } = 0m;
+        public decimal UnclearedBalance { get; set; } = 0m;
+        public decimal AvailableToDisburse { get; set; } = 0m;
+        public decimal HoldAmount { get; set; } = 0m;
+
+        [Required]
+        [MaxLength(32)]
+        [ConcurrencyCheck]
+        public string RowVersion { get; set; } = Guid.NewGuid().ToString("N");
+
         public LedgerStatus Status { get; set; } = LedgerStatus.ACTIVE;
         public string? Notes { get; set; }
 

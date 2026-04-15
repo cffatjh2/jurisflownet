@@ -217,6 +217,7 @@ namespace JurisFlow.Server.Services
         public string? InvoicePayorAllocationId { get; set; }
         public string? TrustSourceClientId { get; set; }
         public string? TrustAccountId { get; set; }
+        public string? TrustLedgerId { get; set; }
         public decimal Amount { get; set; }
         public string? AllocationType { get; set; }
         public string? FundSource { get; set; }

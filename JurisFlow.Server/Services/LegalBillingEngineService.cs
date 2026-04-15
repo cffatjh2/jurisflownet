@@ -3,6 +3,7 @@ using System.Text.Json;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Task = System.Threading.Tasks.Task;
@@ -18,17 +19,26 @@ namespace JurisFlow.Server.Services
         private readonly JurisFlowDbContext _context;
         private readonly IntegrationPiiMinimizationService _piiMinimizer;
         private readonly TrustRiskRadarService _trustRiskRadarService;
+        private readonly TrustActionAuthorizationService _trustAuthorization;
+        private readonly TrustAccountingService _trustAccountingService;
+        private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly ILogger<LegalBillingEngineService> _logger;
 
         public LegalBillingEngineService(
             JurisFlowDbContext context,
             IntegrationPiiMinimizationService piiMinimizer,
             TrustRiskRadarService trustRiskRadarService,
+            TrustActionAuthorizationService trustAuthorization,
+            TrustAccountingService trustAccountingService,
+            IHttpContextAccessor httpContextAccessor,
             ILogger<LegalBillingEngineService> logger)
         {
             _context = context;
             _piiMinimizer = piiMinimizer;
             _trustRiskRadarService = trustRiskRadarService;
+            _trustAuthorization = trustAuthorization;
+            _trustAccountingService = trustAccountingService;
+            _httpContextAccessor = httpContextAccessor;
             _logger = logger;
         }
 
