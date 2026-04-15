@@ -261,7 +261,7 @@ const MainLayout = () => {
       return;
     }
 
-    const preloadTabs: ActiveTab[] = ['matters', 'tasks', 'calendar', 'communications'];
+    const preloadTabs: ActiveTab[] = ['matters', 'tasks', 'calendar', 'communications', 'trust'];
     let disposed = false;
     let timer: number | null = null;
     let idleId: number | null = null;

@@ -3,7 +3,7 @@
  * ABA Model Rule 1.15 Compliant
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import jsPDF from 'jspdf';
 import {
     AlertTriangle, DollarSign, Scale, RefreshCw,
@@ -144,8 +144,13 @@ export default function TrustAccounting() {
     const [lineMatchSelections, setLineMatchSelections] = useState<Record<string, string>>({});
     const [auditFilters, setAuditFilters] = useState({ entityType: 'all', query: '' });
     const [loading, setLoading] = useState(true);
+    const [secondaryDataLoading, setSecondaryDataLoading] = useState(false);
     const [entityFilter, setEntityFilter] = useState('');
     const [officeFilter, setOfficeFilter] = useState('');
+    const [showPacketTemplateAdvanced, setShowPacketTemplateAdvanced] = useState(false);
+    const [auditAccessDenied, setAuditAccessDenied] = useState(false);
+    const backgroundTrustRefreshTimerRef = useRef<number | null>(null);
+    const backgroundTrustRefreshStartedRef = useRef(false);
 
     // Modal states
     const [showDepositForm, setShowDepositForm] = useState(false);
@@ -323,9 +328,40 @@ export default function TrustAccounting() {
         'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
     ];
 
+    const canViewAdminAuditLogs = useMemo(() => {
+        const normalizedRole = String(user?.role || '').replace(/\s+/g, '').toLowerCase();
+        return normalizedRole === 'admin' || normalizedRole === 'securityadmin';
+    }, [user?.role]);
+
+    const canLoadAdvancedTrustWorkspace = canReconcile || canApprove || canExport;
+
+    const requiredAttestationPreview = useMemo(() => {
+        const rawValue = packetTemplateForm.requiredAttestationsText.trim();
+        if (!rawValue) {
+            return { items: [] as TrustPacketTemplateAttestationDto[], error: '' };
+        }
+
+        try {
+            const parsed = JSON.parse(rawValue);
+            if (!Array.isArray(parsed)) {
+                return { items: [] as TrustPacketTemplateAttestationDto[], error: 'Required attestations JSON must be an array.' };
+            }
+
+            return { items: parsed as TrustPacketTemplateAttestationDto[], error: '' };
+        } catch {
+            return { items: [] as TrustPacketTemplateAttestationDto[], error: 'Required attestations JSON is invalid.' };
+        }
+    }, [packetTemplateForm.requiredAttestationsText]);
+
     // Load data
     useEffect(() => {
-        loadData();
+        void loadData();
+
+        return () => {
+            if (backgroundTrustRefreshTimerRef.current !== null) {
+                window.clearTimeout(backgroundTrustRefreshTimerRef.current);
+            }
+        };
     }, []);
 
     const loadOperationalAlerts = async (sync = false) => {
@@ -359,24 +395,83 @@ export default function TrustAccounting() {
         }
     };
 
-    const loadData = async () => {
-        setLoading(true);
+    const applyDefaultTrustAccount = (accountsData: TrustBankAccount[]) => {
+        if (!accountsData || accountsData.length === 0) {
+            return;
+        }
+
+        setSelectedAccount(accountsData[0].id);
+        setDepositForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setWithdrawalForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setReconcileForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setStatementImportForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setEvidenceFileForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setParserRunForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setOutstandingItemForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setPacketForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setProjectionRecoveryForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setPacketRecoveryForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+        setBundleForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
+    };
+
+    const loadSecondaryTrustData = async () => {
+        if (!canLoadAdvancedTrustWorkspace) {
+            setSecondaryDataLoading(false);
+            return;
+        }
+
+        setSecondaryDataLoading(true);
         try {
-            const [accountsData, ledgersData, txData, reconData, statementsData, evidenceData, parserRunData, outstandingData, packetData, approvalData, monthCloseData, packetTemplateData, holdsData, exportData] = await Promise.all([
-                trustApi.get('/api/trust/accounts').catch(() => []),
-                trustApi.get('/api/trust/ledgers').catch(() => []),
-                trustApi.get('/api/trust/transactions?limit=50').catch(() => []),
-                trustApi.get('/api/trust/reconciliations').catch(() => []),
+            const [statementsData, evidenceData, parserRunData, outstandingData, packetData, approvalData, monthCloseData, packetTemplateData, exportData] = await Promise.all([
                 trustApi.get('/api/trust/statements').catch(() => []),
                 trustApi.get('/api/trust/evidence-files').catch(() => []),
                 trustApi.get('/api/trust/parser-runs').catch(() => []),
                 trustApi.get('/api/trust/outstanding-items').catch(() => []),
                 trustApi.get('/api/trust/reconciliation-packets').catch(() => []),
-                trustApi.get('/api/trust/approvals').catch(() => []),
+                canApprove ? trustApi.get('/api/trust/approvals').catch(() => []) : Promise.resolve([]),
                 trustApi.get('/api/trust/month-close').catch(() => []),
                 trustApi.get('/api/trust/packet-templates').catch(() => []),
-                trustApi.get('/api/legal-billing/trust-risk/holds?limit=50').catch(() => []),
                 canExport ? trustApi.get('/api/trust/exports').catch(() => []) : Promise.resolve([])
+            ]);
+
+            setStatementImports(statementsData || []);
+            setEvidenceFiles(evidenceData || []);
+            setParserRuns(parserRunData || []);
+            setOutstandingItems(outstandingData || []);
+            setReconciliationPackets(packetData || []);
+            setApprovalQueue(approvalData || []);
+            setMonthCloses(monthCloseData || []);
+            setPacketTemplates(packetTemplateData || []);
+            setExportHistory(exportData || []);
+        } finally {
+            setSecondaryDataLoading(false);
+        }
+    };
+
+    const scheduleBackgroundTrustRefresh = () => {
+        if (backgroundTrustRefreshStartedRef.current || typeof window === 'undefined') {
+            return;
+        }
+
+        backgroundTrustRefreshStartedRef.current = true;
+        backgroundTrustRefreshTimerRef.current = window.setTimeout(() => {
+            void Promise.all([
+                loadOperationalAlerts(true),
+                loadOpsInbox(true),
+                loadCloseForecast(true)
+            ]);
+        }, 1200);
+    };
+
+    const loadData = async () => {
+        setLoading(true);
+        try {
+            const [accountsData, ledgersData, txData, reconData, holdsData] = await Promise.all([
+                trustApi.get('/api/trust/accounts').catch(() => []),
+                trustApi.get('/api/trust/ledgers').catch(() => []),
+                trustApi.get('/api/trust/transactions?limit=50').catch(() => []),
+                trustApi.get('/api/trust/reconciliations').catch(() => []),
+                trustApi.get('/api/legal-billing/trust-risk/holds?limit=50').catch(() => [])
             ]);
             setAccounts(accountsData || []);
             setLedgers(ledgersData || []);
@@ -387,45 +482,28 @@ export default function TrustAccounting() {
             }));
             setTransactions(normalizedTx);
             setReconciliations(reconData || []);
-            setStatementImports(statementsData || []);
-            setEvidenceFiles(evidenceData || []);
-            setParserRuns(parserRunData || []);
-            setOutstandingItems(outstandingData || []);
-            setReconciliationPackets(packetData || []);
-            setApprovalQueue(approvalData || []);
-            setMonthCloses(monthCloseData || []);
-            setPacketTemplates(packetTemplateData || []);
-            setExportHistory(exportData || []);
             setOpenHolds((holdsData || []).filter((hold: TrustRiskHold) =>
                 ['placed', 'under_review', 'escalated'].includes((hold.status || '').toLowerCase())
             ));
-            if (accountsData && accountsData.length > 0) {
-                setSelectedAccount(accountsData[0].id);
-                setDepositForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setWithdrawalForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setReconcileForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setStatementImportForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setEvidenceFileForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setParserRunForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setOutstandingItemForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setPacketForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setProjectionRecoveryForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setPacketRecoveryForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-                setBundleForm(f => ({ ...f, trustAccountId: accountsData[0].id }));
-            }
+            applyDefaultTrustAccount(accountsData || []);
         } catch (err: any) {
             console.error('Failed to load trust data:', err);
             // Only show error toast for unexpected errors
             if (err.message && !err.message.includes('401')) {
                 toast.error('Failed to load trust data');
             }
+        } finally {
+            setLoading(false);
         }
-        await Promise.all([
-            loadOperationalAlerts(true),
-            loadOpsInbox(true),
-            loadCloseForecast(true)
+
+        void Promise.all([
+            loadOperationalAlerts(false),
+            loadOpsInbox(false),
+            loadCloseForecast(false)
         ]);
-        setLoading(false);
+
+        void loadSecondaryTrustData();
+        scheduleBackgroundTrustRefresh();
     };
 
     const loadOperationalAlertHistory = async (alertId: string) => {
@@ -542,15 +620,29 @@ export default function TrustAccounting() {
     };
 
     const loadAuditLogs = async () => {
+        if (!canViewAdminAuditLogs) {
+            setAuditAccessDenied(true);
+            setAuditLogs([]);
+            setAuditLoading(false);
+            return;
+        }
+
         setAuditLoading(true);
+        setAuditAccessDenied(false);
         try {
             const params: any = { limit: 100 };
             if (auditFilters.entityType !== 'all') params.entityType = auditFilters.entityType;
             if (auditFilters.query.trim()) params.q = auditFilters.query.trim();
             const result = await apiClient.admin.getAuditLogs(params);
-            setAuditLogs(result?.items || []);
+            setAuditLogs(result?.items || result?.logs || []);
         } catch (err: any) {
             console.error('Failed to load audit logs:', err);
+            const message = String(err?.message || '').toLowerCase();
+            if (message.includes('403') || message.includes('forbidden')) {
+                setAuditAccessDenied(true);
+                setAuditLogs([]);
+                return;
+            }
             toast.error('Failed to load audit logs');
         } finally {
             setAuditLoading(false);
@@ -560,7 +652,13 @@ export default function TrustAccounting() {
     useEffect(() => {
         if (activeTab !== 'audit') return;
         loadAuditLogs();
-    }, [activeTab, auditFilters.entityType, auditFilters.query]);
+    }, [activeTab, auditFilters.entityType, auditFilters.query, canViewAdminAuditLogs]);
+
+    useEffect(() => {
+        if (activeTab === 'audit' && !canViewAdminAuditLogs) {
+            setActiveTab('overview');
+        }
+    }, [activeTab, canViewAdminAuditLogs]);
 
     const accountMap = useMemo(() => {
         return new Map(accounts.map(a => [a.id, a]));
@@ -2281,6 +2379,14 @@ export default function TrustAccounting() {
     };
 
     const getCompletedCloseStepCount = (close: TrustMonthCloseDto) => close.steps.filter(step => step.status === 'completed').length;
+    const trustNavigationTabs = [
+        { id: 'overview', label: 'Overview', icon: Eye },
+        { id: 'accounts', label: 'Accounts', icon: Building2 },
+        { id: 'ledgers', label: 'Client Ledgers', icon: Users },
+        { id: 'transactions', label: 'Transactions', icon: History },
+        { id: 'reconciliation', label: 'Reconciliation', icon: FileCheck },
+        ...(canViewAdminAuditLogs ? [{ id: 'audit', label: 'Audit Log', icon: FileText }] : [])
+    ];
 
     if (loading) {
         return (
@@ -2747,14 +2853,7 @@ export default function TrustAccounting() {
             {/* Tabs */}
             <div className="border-b border-gray-200 dark:border-gray-700">
                 <nav className="flex flex-wrap gap-2 overflow-x-auto pb-1">
-                    {[
-                        { id: 'overview', label: 'Overview', icon: Eye },
-                        { id: 'accounts', label: 'Accounts', icon: Building2 },
-                        { id: 'ledgers', label: 'Client Ledgers', icon: Users },
-                        { id: 'transactions', label: 'Transactions', icon: History },
-                        { id: 'reconciliation', label: 'Reconciliation', icon: FileCheck },
-                        { id: 'audit', label: 'Audit Log', icon: FileText }
-                    ].map(tab => (
+                    {trustNavigationTabs.map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id as any)}
@@ -3182,6 +3281,9 @@ export default function TrustAccounting() {
                             <div>
                                 <h2 className="text-lg font-semibold">Three-Way Reconciliation Ops</h2>
                                 <p className="text-sm text-gray-500 mt-1">Import bank evidence, add manual adjustments, then prepare and sign off the monthly packet.</p>
+                                {secondaryDataLoading && (
+                                    <p className="mt-2 text-xs font-medium text-gray-500">Advanced reconciliation data is still loading in the background.</p>
+                                )}
                             </div>
                             <div className="flex gap-3 text-sm">
                                 <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
@@ -3586,9 +3688,51 @@ export default function TrustAccounting() {
                                 <input type="text" value={packetTemplateForm.name} onChange={e => setPacketTemplateForm(prev => ({ ...prev, name: e.target.value }))} className="input w-full" placeholder="Template display name" />
                                 <textarea value={packetTemplateForm.requiredSectionsText} onChange={e => setPacketTemplateForm(prev => ({ ...prev, requiredSectionsText: e.target.value }))} className="input w-full min-h-[72px]" placeholder="Required sections, comma separated" />
                                 <textarea value={packetTemplateForm.disclosureBlocksText} onChange={e => setPacketTemplateForm(prev => ({ ...prev, disclosureBlocksText: e.target.value }))} className="input w-full min-h-[72px]" placeholder="Disclosure blocks, comma separated" />
-                                <textarea value={packetTemplateForm.requiredAttestationsText} onChange={e => setPacketTemplateForm(prev => ({ ...prev, requiredAttestationsText: e.target.value }))} className="input w-full min-h-[120px] font-mono text-xs" placeholder='Required attestations JSON [{"key":"reviewed_three_way_reconciliation","label":"...","role":"reviewer","required":true}]' />
-                                <textarea value={packetTemplateForm.renderingProfileJson} onChange={e => setPacketTemplateForm(prev => ({ ...prev, renderingProfileJson: e.target.value }))} className="input w-full min-h-[72px] font-mono text-xs" placeholder="Optional rendering profile JSON" />
-                                <textarea value={packetTemplateForm.metadataJson} onChange={e => setPacketTemplateForm(prev => ({ ...prev, metadataJson: e.target.value }))} className="input w-full min-h-[72px] font-mono text-xs" placeholder="Optional template metadata JSON" />
+                                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="text-sm font-semibold text-gray-900">Required Attestations</div>
+                                            <p className="mt-1 text-xs text-gray-500">JSON tabanli alanlar varsayilan olarak gizli. Gerektiginde advanced editoru acabilirsiniz.</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPacketTemplateAdvanced(prev => !prev)}
+                                            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                                        >
+                                            {showPacketTemplateAdvanced ? 'Hide Advanced' : 'Edit JSON'}
+                                        </button>
+                                    </div>
+                                    {requiredAttestationPreview.error ? (
+                                        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                                            {requiredAttestationPreview.error}
+                                        </div>
+                                    ) : requiredAttestationPreview.items.length === 0 ? (
+                                        <div className="mt-3 text-sm text-gray-500">No required attestations configured.</div>
+                                    ) : (
+                                        <div className="mt-3 space-y-2">
+                                            {requiredAttestationPreview.items.map(attestation => (
+                                                <div key={attestation.key} className="rounded-lg border border-white bg-white px-3 py-2 text-sm">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="font-medium text-gray-900">{attestation.label}</span>
+                                                        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">
+                                                            {attestation.role.replace(/_/g, ' ')}
+                                                        </span>
+                                                    </div>
+                                                    <div className="mt-1 text-xs text-gray-500">
+                                                        Key: {attestation.key} {attestation.required ? '• required' : '• optional'}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                {showPacketTemplateAdvanced && (
+                                    <div className="space-y-3 rounded-xl border border-dashed border-gray-300 bg-gray-50/80 p-3">
+                                        <textarea value={packetTemplateForm.requiredAttestationsText} onChange={e => setPacketTemplateForm(prev => ({ ...prev, requiredAttestationsText: e.target.value }))} className="input w-full min-h-[120px] font-mono text-xs" placeholder='Required attestations JSON [{"key":"reviewed_three_way_reconciliation","label":"...","role":"reviewer","required":true}]' />
+                                        <textarea value={packetTemplateForm.renderingProfileJson} onChange={e => setPacketTemplateForm(prev => ({ ...prev, renderingProfileJson: e.target.value }))} className="input w-full min-h-[72px] font-mono text-xs" placeholder="Optional rendering profile JSON" />
+                                        <textarea value={packetTemplateForm.metadataJson} onChange={e => setPacketTemplateForm(prev => ({ ...prev, metadataJson: e.target.value }))} className="input w-full min-h-[72px] font-mono text-xs" placeholder="Optional template metadata JSON" />
+                                    </div>
+                                )}
                                 <button type="submit" className="btn-secondary w-full">Save Template</button>
                             </form>
 
@@ -4376,7 +4520,11 @@ export default function TrustAccounting() {
                             </div>
                         </div>
 
-                        {auditLoading ? (
+                        {auditAccessDenied ? (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+                                Audit log visibility is limited to `Admin` and `SecurityAdmin` users.
+                            </div>
+                        ) : auditLoading ? (
                             <div className="text-sm text-gray-500">Loading audit logs...</div>
                         ) : auditLogs.length === 0 ? (
                             <div className="text-sm text-gray-500">No audit log entries found.</div>
