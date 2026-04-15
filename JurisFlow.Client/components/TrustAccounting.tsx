@@ -2291,10 +2291,10 @@ export default function TrustAccounting() {
     }
 
     return (
-        <div className="p-6 space-y-6">
+        <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0">
                     <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
                         <Scale className="w-7 h-7 text-primary-600" />
                         IOLTA Trust Accounting
@@ -2303,7 +2303,7 @@ export default function TrustAccounting() {
                         ABA Model Rule 1.15 Compliant Trust Account Management
                     </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 xl:justify-end">
                     <EntityOfficeFilter
                         entityId={entityFilter}
                         officeId={officeFilter}
@@ -2441,22 +2441,22 @@ export default function TrustAccounting() {
                             Compliance watchlist for missing closes, aged exceptions, duplicate statement evidence, and uncleared funds.
                         </p>
                     </div>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Open</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Open</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">{filteredOperationalAlerts.length}</div>
                             </div>
                             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-red-600">Critical</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-red-600">Critical</div>
                                 <div className="mt-1 text-xl font-semibold text-red-700">{operationalCriticalCount}</div>
                             </div>
                             <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-yellow-700">Warning</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-yellow-700">Warning</div>
                                 <div className="mt-1 text-xl font-semibold text-yellow-800">{operationalWarningCount}</div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Accounts</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Accounts</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">
                                     {new Set(filteredOperationalAlerts.map(alert => alert.trustAccountId).filter(Boolean)).size}
                                 </div>
@@ -2598,26 +2598,26 @@ export default function TrustAccounting() {
                             Routed blocker queue with ownership, deferral, escalation, and SLA breach visibility.
                         </p>
                     </div>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Open</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Open</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">{filteredOpsInboxItems.length}</div>
                             </div>
                             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-red-600">Breached</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-red-600">Breached</div>
                                 <div className="mt-1 text-xl font-semibold text-red-700">{opsInboxBreachedCount}</div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Close</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Close</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">{filteredOpsInboxItems.filter(item => item.blockerGroup === 'close_blocker').length}</div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Statement</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Statement</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">{filteredOpsInboxItems.filter(item => item.blockerGroup === 'statement_blocker').length}</div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                                <div className="text-xs uppercase tracking-[0.24em] text-gray-500">Exception</div>
+                                <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">Exception</div>
                                 <div className="mt-1 text-xl font-semibold text-gray-900">{filteredOpsInboxItems.filter(item => item.blockerGroup === 'exception_blocker').length}</div>
                             </div>
                         </div>
@@ -2746,7 +2746,7 @@ export default function TrustAccounting() {
 
             {/* Tabs */}
             <div className="border-b border-gray-200 dark:border-gray-700">
-                <nav className="flex gap-4">
+                <nav className="flex flex-wrap gap-2 overflow-x-auto pb-1">
                     {[
                         { id: 'overview', label: 'Overview', icon: Eye },
                         { id: 'accounts', label: 'Accounts', icon: Building2 },
@@ -2758,7 +2758,7 @@ export default function TrustAccounting() {
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id as any)}
-                            className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${activeTab === tab.id
+                            className={`flex shrink-0 items-center gap-2 px-4 py-3 border-b-2 transition-colors ${activeTab === tab.id
                                 ? 'border-primary-500 text-primary-600'
                                 : 'border-transparent text-gray-500 hover:text-gray-700'
                                 }`}

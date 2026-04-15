@@ -1,6 +1,7 @@
 using JurisFlow.Server.Contracts;
 using JurisFlow.Server.Data;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace JurisFlow.Server.Services
 {
@@ -158,14 +159,34 @@ namespace JurisFlow.Server.Services
                 var trustAlertSyncEnabled = _configuration.GetValue("Operations:TrustOperationalAlertSyncEnabled", true);
                 if (trustAlertSyncEnabled)
                 {
-                    trustAlertSync = await trustComplianceService.SyncOperationalAlertsAsync(stoppingToken);
-                    await trustOpsInboxService.SyncInboxAsync(false, stoppingToken);
+                    try
+                    {
+                        trustAlertSync = await trustComplianceService.SyncOperationalAlertsAsync(stoppingToken);
+                        await trustOpsInboxService.SyncInboxAsync(false, stoppingToken);
+                    }
+                    catch (PostgresException ex) when (IsSchemaDriftException(ex))
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Skipping trust operational alert sync because the PostgreSQL schema is missing required legacy compatibility objects. SqlState={SqlState}",
+                            ex.SqlState);
+                    }
                 }
 
                 var trustCloseForecastEnabled = _configuration.GetValue("Operations:TrustCloseForecastSyncEnabled", true);
                 if (trustCloseForecastEnabled)
                 {
-                    trustCloseForecastSync = await trustCloseAutomationService.SyncCloseForecastsAsync(true, stoppingToken);
+                    try
+                    {
+                        trustCloseForecastSync = await trustCloseAutomationService.SyncCloseForecastsAsync(true, stoppingToken);
+                    }
+                    catch (PostgresException ex) when (IsSchemaDriftException(ex))
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Skipping trust close forecast sync because the PostgreSQL schema is missing required legacy compatibility objects. SqlState={SqlState}",
+                            ex.SqlState);
+                    }
                 }
 
                 _logger.LogInformation(
@@ -190,6 +211,12 @@ namespace JurisFlow.Server.Services
         {
             var dueBefore = now.AddMinutes(-Math.Clamp(pollingIntervalMinutes, 5, 24 * 60));
             return !connection.LastSyncAt.HasValue || connection.LastSyncAt <= dueBefore;
+        }
+
+        private static bool IsSchemaDriftException(PostgresException ex)
+        {
+            return string.Equals(ex.SqlState, PostgresErrorCodes.UndefinedTable, StringComparison.Ordinal) ||
+                   string.Equals(ex.SqlState, PostgresErrorCodes.UndefinedColumn, StringComparison.Ordinal);
         }
     }
 }

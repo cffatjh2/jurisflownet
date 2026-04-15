@@ -451,6 +451,7 @@ using (var scope = app.Services.CreateScope())
         var startupLogger = services.GetRequiredService<ILogger<Program>>();
         InitializeDatabase(context, databaseProvider, databaseBootstrapMode);
         await PostgresSchemaCompatibility.EnsureCriticalColumnsAsync(context, startupLogger);
+        await PostgresLegacyTrustSchemaCompatibility.EnsureAsync(context, startupLogger);
 
         var tenantContext = services.GetRequiredService<TenantContext>();
         var defaultTenantName = builder.Configuration["Tenancy:DefaultTenantName"] ?? "JurisFlow Legal";
@@ -728,6 +729,14 @@ static (string scheme, string baseServiceName)? ResolveRenderSiblingCorsRule(
         return renderRule;
     }
 
+    var renderServiceName = configuration["RENDER_SERVICE_NAME"]
+        ?? Environment.GetEnvironmentVariable("RENDER_SERVICE_NAME");
+
+    if (TryBuildRuleFromServiceName(renderServiceName, "https", out var renderServiceRule))
+    {
+        return renderServiceRule;
+    }
+
     foreach (var origin in allowedCorsOrigins)
     {
         if (TryBuildRuleFromOrigin(origin, out var fallbackRule))
@@ -737,6 +746,35 @@ static (string scheme, string baseServiceName)? ResolveRenderSiblingCorsRule(
     }
 
     return null;
+
+    static bool TryBuildRuleFromServiceName(string? rawServiceName, string scheme, out (string scheme, string baseServiceName) rule)
+    {
+        rule = default;
+
+        if (string.IsNullOrWhiteSpace(rawServiceName))
+        {
+            return false;
+        }
+
+        var serviceName = rawServiceName.Trim().ToLowerInvariant();
+        var lastDashIndex = serviceName.LastIndexOf('-');
+        if (lastDashIndex > 0 && lastDashIndex < serviceName.Length - 1)
+        {
+            var possibleNumericSuffix = serviceName[(lastDashIndex + 1)..];
+            if (possibleNumericSuffix.All(char.IsDigit))
+            {
+                serviceName = serviceName[..lastDashIndex];
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            return false;
+        }
+
+        rule = (scheme.ToLowerInvariant(), serviceName);
+        return true;
+    }
 }
 
 static bool IsCorsOriginAllowed(

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
+using Npgsql;
 using Task = System.Threading.Tasks.Task;
 
 namespace JurisFlow.Server.Services
@@ -58,15 +59,32 @@ namespace JurisFlow.Server.Services
                 return;
             }
 
+            var allTargetsApplied = true;
             foreach (var target in updateTargets)
             {
                 var quotedTable = QuoteIdentifier(target.TableName, target.Schema);
                 var quotedColumn = QuoteIdentifier(target.ColumnName);
                 var sql = $"UPDATE {quotedTable} SET {quotedColumn} = {{0}} WHERE {quotedColumn} IS NULL";
-                await context.Database.ExecuteSqlRawAsync(sql, tenantId);
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(sql, tenantId);
+                }
+                catch (PostgresException ex) when (IsMissingRelationOrColumn(ex))
+                {
+                    allTargetsApplied = false;
+                }
             }
 
-            await StartupTaskStateStore.SetValueAsync(context, taskKey, signature);
+            if (allTargetsApplied)
+            {
+                await StartupTaskStateStore.SetValueAsync(context, taskKey, signature);
+            }
+        }
+
+        private static bool IsMissingRelationOrColumn(PostgresException ex)
+        {
+            return string.Equals(ex.SqlState, PostgresErrorCodes.UndefinedTable, StringComparison.Ordinal) ||
+                   string.Equals(ex.SqlState, PostgresErrorCodes.UndefinedColumn, StringComparison.Ordinal);
         }
 
         private static string QuoteIdentifier(string identifier)
