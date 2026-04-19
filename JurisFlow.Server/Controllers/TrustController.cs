@@ -12,8 +12,12 @@ namespace JurisFlow.Server.Controllers
     [Route("api/[controller]")]
     [ApiController]
     [Authorize(Policy = "StaffOnly")]
+    [RequestSizeLimit(MaxTrustRequestBodyBytes)]
     public class TrustController : ControllerBase
     {
+        private const int MaxTrustRequestBodyBytes = 1024 * 1024;
+        private const int DefaultTrustPageSize = 50;
+        private const int MaxTrustPageSize = 200;
         private readonly JurisFlowDbContext _context;
         private readonly LegalBillingEngineService _billingEngine;
         private readonly TrustComplianceExportService _trustExportService;
@@ -50,9 +54,13 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("accounts")]
-        public async Task<ActionResult<IEnumerable<TrustBankAccount>>> GetTrustAccounts([FromQuery] string? entityId, [FromQuery] string? officeId)
+        public async Task<ActionResult<IEnumerable<TrustBankAccountListItemDto>>> GetTrustAccounts(
+            [FromQuery] string? entityId,
+            [FromQuery] string? officeId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultTrustPageSize)
         {
-            var query = _context.TrustBankAccounts.AsQueryable();
+            var query = _context.TrustBankAccounts.AsNoTracking().AsQueryable();
             if (!string.IsNullOrWhiteSpace(entityId))
             {
                 query = query.Where(a => a.EntityId == entityId);
@@ -63,7 +71,37 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(a => a.OfficeId == officeId);
             }
 
-            return await query.ToListAsync();
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
+            var accounts = await query
+                .OrderBy(a => a.Name)
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(a => new TrustBankAccountListItemDto
+                {
+                    Id = a.Id,
+                    Name = a.Name,
+                    BankName = a.BankName,
+                    Jurisdiction = a.Jurisdiction,
+                    AccountType = a.AccountType,
+                    ResponsibleLawyerUserId = a.ResponsibleLawyerUserId,
+                    StatementCadence = a.StatementCadence,
+                    OverdraftNotificationEnabled = a.OverdraftNotificationEnabled,
+                    CurrentBalance = a.CurrentBalance,
+                    ClearedBalance = a.ClearedBalance,
+                    UnclearedBalance = a.UnclearedBalance,
+                    AvailableDisbursementCapacity = a.AvailableDisbursementCapacity,
+                    Status = a.Status,
+                    EntityId = a.EntityId,
+                    OfficeId = a.OfficeId,
+                    CreatedAt = a.CreatedAt,
+                    UpdatedAt = a.UpdatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
+            return accounts;
         }
 
         [HttpPost("accounts")]
@@ -107,9 +145,13 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("ledgers")]
-        public async Task<ActionResult<IEnumerable<ClientTrustLedger>>> GetLedgers([FromQuery] string? entityId, [FromQuery] string? officeId)
+        public async Task<ActionResult<IEnumerable<ClientTrustLedgerListItemDto>>> GetLedgers(
+            [FromQuery] string? entityId,
+            [FromQuery] string? officeId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultTrustPageSize)
         {
-            var query = _context.ClientTrustLedgers.AsQueryable();
+            var query = _context.ClientTrustLedgers.AsNoTracking().AsQueryable();
             if (!string.IsNullOrWhiteSpace(entityId))
             {
                 query = query.Where(l => l.EntityId == entityId);
@@ -120,10 +162,38 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(l => l.OfficeId == officeId);
             }
 
-            return await query
-                .Include(l => l.Client)
-                .Include(l => l.TrustAccount)
-                .ToListAsync();
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
+
+            var ledgers = await query
+                .OrderByDescending(l => l.UpdatedAt)
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(l => new ClientTrustLedgerListItemDto
+                {
+                    Id = l.Id,
+                    ClientId = l.ClientId,
+                    ClientName = l.Client != null ? l.Client.Name : null,
+                    MatterId = l.MatterId,
+                    TrustAccountId = l.TrustAccountId,
+                    TrustAccountName = l.TrustAccount != null ? l.TrustAccount.Name : null,
+                    EntityId = l.EntityId,
+                    OfficeId = l.OfficeId,
+                    RunningBalance = l.RunningBalance,
+                    ClearedBalance = l.ClearedBalance,
+                    UnclearedBalance = l.UnclearedBalance,
+                    AvailableToDisburse = l.AvailableToDisburse,
+                    HoldAmount = l.HoldAmount,
+                    Status = l.Status,
+                    Notes = l.Notes,
+                    CreatedAt = l.CreatedAt,
+                    UpdatedAt = l.UpdatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
+            return ledgers;
         }
 
         [HttpPost("ledgers")]
@@ -135,9 +205,14 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("transactions")]
-        public async Task<ActionResult<IEnumerable<TrustTransaction>>> GetTransactions([FromQuery] int limit = 50, [FromQuery] string? entityId = null, [FromQuery] string? officeId = null)
+        public async Task<ActionResult<IEnumerable<TrustTransactionListItemDto>>> GetTransactions(
+            [FromQuery] int? limit = null,
+            [FromQuery] string? entityId = null,
+            [FromQuery] string? officeId = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultTrustPageSize)
         {
-            var query = _context.TrustTransactions.AsQueryable();
+            var query = _context.TrustTransactions.AsNoTracking().AsQueryable();
             if (!string.IsNullOrWhiteSpace(entityId))
             {
                 query = query.Where(t => t.EntityId == entityId);
@@ -148,11 +223,56 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(t => t.OfficeId == officeId);
             }
 
-            return await query
-                .Include(t => t.Matter)
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(limit ?? pageSize);
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
+
+            var transactions = await query
                 .OrderByDescending(t => t.CreatedAt)
-                .Take(limit)
-                .ToListAsync();
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(t => new TrustTransactionListItemDto
+                {
+                    Id = t.Id,
+                    TrustAccountId = t.TrustAccountId,
+                    MatterId = t.MatterId,
+                    MatterName = t.Matter != null ? t.Matter.Name : null,
+                    Type = t.Type,
+                    Amount = t.Amount,
+                    Description = t.Description,
+                    Reference = t.Reference,
+                    PayorPayee = t.PayorPayee,
+                    CheckNumber = t.CheckNumber,
+                    LedgerId = t.LedgerId,
+                    DisbursementClass = t.DisbursementClass,
+                    ApprovalStatus = t.ApprovalStatus,
+                    EntityId = t.EntityId,
+                    OfficeId = t.OfficeId,
+                    Status = t.Status,
+                    CreatedBy = t.CreatedBy,
+                    ApprovedBy = t.ApprovedBy,
+                    ApprovedAt = t.ApprovedAt,
+                    RejectedBy = t.RejectedBy,
+                    RejectedAt = t.RejectedAt,
+                    RejectionReason = t.RejectionReason,
+                    IsVoided = t.IsVoided,
+                    VoidedAt = t.VoidedAt,
+                    VoidReason = t.VoidReason,
+                    ClearingStatus = t.ClearingStatus,
+                    ClearedAt = t.ClearedAt,
+                    ReturnedAt = t.ReturnedAt,
+                    ReturnReason = t.ReturnReason,
+                    IsEarned = t.IsEarned,
+                    EarnedDate = t.EarnedDate,
+                    BalanceBefore = t.BalanceBefore,
+                    BalanceAfter = t.BalanceAfter,
+                    CreatedAt = t.CreatedAt,
+                    UpdatedAt = t.UpdatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
+            return transactions;
         }
 
         [HttpPost("deposit")]
@@ -269,12 +389,37 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("reconciliations")]
-        public async Task<ActionResult<IEnumerable<ReconciliationRecord>>> GetReconciliations()
+        public async Task<ActionResult<IEnumerable<ReconciliationRecordListItemDto>>> GetReconciliations(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultTrustPageSize)
         {
-            return await _context.ReconciliationRecords
-                .Include(r => r.TrustAccount)
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
+            var query = _context.ReconciliationRecords.AsNoTracking();
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
+
+            var reconciliations = await query
                 .OrderByDescending(r => r.PeriodEnd)
-                .ToListAsync();
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(r => new ReconciliationRecordListItemDto
+                {
+                    Id = r.Id,
+                    TrustAccountId = r.TrustAccountId,
+                    TrustAccountName = r.TrustAccount != null ? r.TrustAccount.Name : null,
+                    PeriodEnd = r.PeriodEnd,
+                    BankStatementBalance = r.BankStatementBalance,
+                    TrustLedgerBalance = r.TrustLedgerBalance,
+                    ClientLedgerSumBalance = r.ClientLedgerSumBalance,
+                    IsReconciled = r.IsReconciled,
+                    DiscrepancyAmount = r.DiscrepancyAmount,
+                    Notes = r.Notes,
+                    CreatedAt = r.CreatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
+            return reconciliations;
         }
 
         [HttpGet("statements")]
@@ -417,7 +562,7 @@ namespace JurisFlow.Server.Controllers
             var packet = await _context.TrustReconciliationPackets.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
             if (packet == null)
             {
-                return NotFound();
+                return Problem(statusCode: StatusCodes.Status404NotFound, title: "Reconciliation packet not found.", detail: $"Reconciliation packet '{id}' was not found.");
             }
 
             var signoffs = await _context.TrustReconciliationSignoffs.AsNoTracking()
@@ -626,13 +771,13 @@ namespace JurisFlow.Server.Controllers
         {
             if (string.IsNullOrWhiteSpace(trustAccountId))
             {
-                return BadRequest("Trust account id is required.");
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Trust account id is required.", detail: "trustAccountId query parameter is required.");
             }
 
             var summary = await _trustComplianceService.EvaluateAsync(trustAccountId, bankStatementBalance);
             if (summary == null)
             {
-                return NotFound("Trust account not found");
+                return Problem(statusCode: StatusCodes.Status404NotFound, title: "Trust account not found.", detail: $"Trust account '{trustAccountId}' was not found.");
             }
 
             return Ok(summary);
@@ -793,8 +938,32 @@ namespace JurisFlow.Server.Controllers
             }
             catch (TrustCommandException ex)
             {
-                return StatusCode(ex.StatusCode, ex.Message);
+                return StatusCode(ex.StatusCode, new ProblemDetails
+                {
+                    Status = ex.StatusCode,
+                    Title = "Trust command failed.",
+                    Detail = ex.Message
+                });
             }
+        }
+
+        private static int NormalizePage(int page) => page <= 0 ? 1 : page;
+
+        private static int NormalizePageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultTrustPageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxTrustPageSize);
+        }
+
+        private void AddPaginationHeaders(int totalCount, int page, int pageSize)
+        {
+            Response.Headers["X-Total-Count"] = totalCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page"] = page.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page-Size"] = pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private string? ResolveIdempotencyKey(string? requestValue = null)

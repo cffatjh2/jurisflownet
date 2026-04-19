@@ -19,6 +19,7 @@ using System.Threading.RateLimiting;
 using System.IO.Compression;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Authentication;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 const string CorsPolicyName = "AppCors";
@@ -68,6 +69,12 @@ var crmConflictSearchPermitLimit = Math.Clamp(builder.Configuration.GetValue("Ra
 var crmConflictSearchWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:WindowSeconds", 60), 1, 3600);
 var adminDangerousOpsPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:PermitLimit", 3), 1, 50);
 var adminDangerousOpsWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:WindowSeconds", 300), 1, 3600);
+var defaultMatterMutationPermitLimit = builder.Environment.IsDevelopment() ? 300 : 30;
+var defaultTrustMutationPermitLimit = builder.Environment.IsDevelopment() ? 600 : 20;
+var matterMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:MatterMutation:PermitLimit", defaultMatterMutationPermitLimit), 1, 2000);
+var matterMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:MatterMutation:WindowSeconds", 60), 1, 3600);
+var trustMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TrustMutation:PermitLimit", defaultTrustMutationPermitLimit), 1, 2000);
+var trustMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TrustMutation:WindowSeconds", 60), 1, 3600);
 var integrationWebhookPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:PermitLimit", 120), 1, 5000);
 var integrationWebhookWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:WindowSeconds", 60), 1, 3600);
 
@@ -89,6 +96,47 @@ builder.Services.AddRateLimiter(options =>
             },
             cancellationToken: token);
     };
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        var path = httpContext.Request.Path;
+        var method = httpContext.Request.Method;
+
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method))
+        {
+            return RateLimitPartition.GetNoLimiter("read-only");
+        }
+
+        if (path.StartsWithSegments("/api/trust", StringComparison.OrdinalIgnoreCase))
+        {
+            return RateLimitPartition.GetFixedWindowLimiter(
+                BuildRateLimitPartitionKey(httpContext, "trust-mutation-global", includePathBucket: true),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = trustMutationPermitLimit,
+                    Window = TimeSpan.FromSeconds(trustMutationWindowSeconds),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                });
+        }
+
+        if (path.StartsWithSegments("/api/matters", StringComparison.OrdinalIgnoreCase))
+        {
+            return RateLimitPartition.GetFixedWindowLimiter(
+                BuildRateLimitPartitionKey(httpContext, "matter-mutation-global", includePathBucket: true),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = matterMutationPermitLimit,
+                    Window = TimeSpan.FromSeconds(matterMutationWindowSeconds),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                });
+        }
+
+        return RateLimitPartition.GetNoLimiter("default");
+    });
 
     options.AddPolicy("AuthLogin", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
@@ -181,6 +229,30 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = adminDangerousOpsPermitLimit,
                 Window = TimeSpan.FromSeconds(adminDangerousOpsWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("MatterMutation", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "matter-mutation"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = matterMutationPermitLimit,
+                Window = TimeSpan.FromSeconds(matterMutationWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("TrustMutation", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "trust-mutation"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = trustMutationPermitLimit,
+                Window = TimeSpan.FromSeconds(trustMutationWindowSeconds),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 0,
                 AutoReplenishment = true
@@ -323,6 +395,7 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.Configure<TrustAccountingOptions>(builder.Configuration.GetSection("TrustAccounting"));
+builder.Services.Configure<RefactorWaveOptions>(builder.Configuration.GetSection("Features:RefactorWave"));
 builder.Services.AddTransient<IClaimsTransformation, RoleAliasClaimsTransformation>();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<AuditLogIntegrityService>();
@@ -330,6 +403,17 @@ builder.Services.AddSingleton<AuditLogWriteQueue>();
 builder.Services.AddHostedService<AuditLogWriteHostedService>();
 builder.Services.AddScoped<BillingPeriodLockService>();
 builder.Services.AddScoped<PasswordVerificationService>();
+builder.Services.AddScoped<BusinessSurfaceAuthorizationService>();
+builder.Services.AddScoped<ClientRequestValidator>();
+builder.Services.AddScoped<LeadRequestValidator>();
+builder.Services.AddScoped<TaskRequestValidator>();
+builder.Services.AddScoped<CalendarEventRequestValidator>();
+builder.Services.AddScoped<LegacyTaskAssignmentAdapter>();
+builder.Services.AddScoped<LegacyMatterResponsibilityAdapter>();
+builder.Services.AddScoped<ClientApplicationService>();
+builder.Services.AddScoped<LeadApplicationService>();
+builder.Services.AddScoped<TaskApplicationService>();
+builder.Services.AddScoped<CalendarEventApplicationService>();
 builder.Services.AddScoped<MatterAccessService>();
 builder.Services.AddScoped<MatterClientLinkService>();
 builder.Services.AddScoped<MatterWorkflowTriggerDispatcher>();
@@ -853,9 +937,11 @@ static bool TryNormalizeOrigin(string rawOrigin, out string normalizedOrigin)
     return true;
 }
 
-static string BuildRateLimitPartitionKey(HttpContext context, string policyName)
+static string BuildRateLimitPartitionKey(HttpContext context, string policyName, bool includePathBucket = false)
 {
     var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? context.User.FindFirst("sub")?.Value;
     var tenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
     var tenantSlug = context.Request.Headers["X-Tenant-Slug"].FirstOrDefault()
                      ?? context.Request.Query["tenantSlug"].FirstOrDefault()
@@ -867,7 +953,22 @@ static string BuildRateLimitPartitionKey(HttpContext context, string policyName)
             ? tenantSlug
             : "no-tenant";
 
-    return $"{policyName}:{tenant}:{ip}";
+    var actor = !string.IsNullOrWhiteSpace(userId)
+        ? $"user:{userId}"
+        : $"ip:{ip}";
+
+    if (!includePathBucket)
+    {
+        return $"{policyName}:{tenant}:{actor}";
+    }
+
+    var path = context.Request.Path.Value ?? "/";
+    var pathSegments = path
+        .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Take(4);
+    var normalizedPath = string.Join('/', pathSegments).ToLowerInvariant();
+
+    return $"{policyName}:{tenant}:{actor}:{context.Request.Method}:{normalizedPath}";
 }
 
 static void EnsureProductionSecurityRequirements(IConfiguration configuration)

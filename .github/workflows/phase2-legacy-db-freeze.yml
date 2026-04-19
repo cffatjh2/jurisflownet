@@ -1,0 +1,19 @@
+name: Phase 2 Legacy DB Freeze
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  guard:
+    name: Block DB Migration Changes During Freeze
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run DB freeze guard
+        shell: pwsh
+        run: ./scripts/check-phase2-db-freeze.ps1

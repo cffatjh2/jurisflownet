@@ -110,6 +110,9 @@ namespace JurisFlow.Server.Services
         }
 
         public bool CanSeeMatterNotes(Matter matter, ClaimsPrincipal user)
+            => CanReadMatterNotes(matter, user);
+
+        public bool CanReadMatterNotes(Matter matter, ClaimsPrincipal user)
         {
             if (matter == null)
             {
@@ -129,6 +132,80 @@ namespace JurisFlow.Server.Services
 
             return matter.CreatedByUserId == userId ||
                 (matter.ShareWithFirm && matter.ShareNotesWithFirm);
+        }
+
+        public async Task<bool> CanCreateMatterNoteAsync(Matter matter, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        {
+            if (matter == null)
+            {
+                return false;
+            }
+
+            if (IsPrivileged(user))
+            {
+                return true;
+            }
+
+            var userId = GetCurrentUserId(user);
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return false;
+            }
+
+            if (string.Equals(matter.CreatedByUserId, userId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return await CanManageMatterAsync(matter.Id, user, cancellationToken: cancellationToken);
+        }
+
+        public async Task<bool> CanEditMatterNoteAsync(Matter matter, MatterNote note, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        {
+            if (matter == null || note == null)
+            {
+                return false;
+            }
+
+            if (IsPrivileged(user))
+            {
+                return true;
+            }
+
+            var userId = GetCurrentUserId(user);
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return false;
+            }
+
+            if (string.Equals(note.CreatedByUserId, userId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return await CanManageMatterAsync(matter.Id, user, cancellationToken: cancellationToken);
+        }
+
+        public async Task<bool> CanDeleteMatterNoteAsync(Matter matter, MatterNote note, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        {
+            if (matter == null || note == null)
+            {
+                return false;
+            }
+
+            if (IsPrivileged(user))
+            {
+                return true;
+            }
+
+            var userId = GetCurrentUserId(user);
+            if (!string.IsNullOrWhiteSpace(userId) &&
+                string.Equals(note.CreatedByUserId, userId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return await CanManageMatterAsync(matter.Id, user, cancellationToken: cancellationToken);
         }
 
         private static bool HasRole(ClaimsPrincipal user, string role)

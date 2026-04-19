@@ -175,6 +175,57 @@ public class MatterCollaborationTests : IClassFixture<TestApplicationFactory>
     }
 
     [Fact]
+    public async Task MatterCreateRejectsUnsupportedFields()
+    {
+        var clientId = Guid.NewGuid().ToString();
+
+        await SeedAsync(async db =>
+        {
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Matter Validation Client",
+                Email = $"matter-validation-{Guid.NewGuid():N}@example.com",
+                NormalizedEmail = $"matter-validation-{Guid.NewGuid():N}@example.com",
+                Type = "Individual",
+                Status = "Active"
+            });
+
+            await db.SaveChangesAsync();
+        });
+
+        var payload = JsonContent.Create(new
+        {
+            caseNumber = "CASE-NEW-1002",
+            name = "Unsupported Field Matter",
+            practiceArea = "Civil Litigation",
+            status = "Open",
+            feeStructure = "Hourly",
+            responsibleAttorney = "Fatih Alpaslan",
+            clientId,
+            billableRate = 400,
+            trustBalance = 9999,
+            currentOutcomeFeePlanId = "plan-123"
+        });
+
+        var request = CreateRequest(HttpMethod.Post, "/api/matters", "attorney-create-2", "Attorney", payload);
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Unsupported fields", body, StringComparison.OrdinalIgnoreCase);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+        var tenantContext = scope.ServiceProvider.GetRequiredService<TenantContext>();
+        tenantContext.Set(TestApplicationFactory.TestTenantId, TestApplicationFactory.TestTenantSlug);
+
+        var matter = await db.Matters.AsNoTracking().FirstOrDefaultAsync(m => m.CaseNumber == "CASE-NEW-1002");
+        Assert.Null(matter);
+    }
+
+    [Fact]
     public async Task AttorneyCanCreateMatterEvenWhenLegacyMatterClientLinksSchemaCannotPersistSecondaryClients()
     {
         var primaryClientId = Guid.NewGuid().ToString();
@@ -424,5 +475,115 @@ public class MatterCollaborationTests : IClassFixture<TestApplicationFactory>
 
         var remainingNotes = await db.MatterNotes.AsNoTracking().Where(n => n.MatterId == matterId).ToListAsync();
         Assert.Empty(remainingNotes);
+    }
+
+    [Fact]
+    public async Task SharedNoteReaderCannotCreateOrEditMatterNotes()
+    {
+        var matterId = Guid.NewGuid().ToString();
+        var noteId = Guid.NewGuid().ToString();
+        const string ownerUserId = "attorney-owner-1";
+        const string sharedReaderUserId = "attorney-reader-1";
+
+        await SeedAsync(async db =>
+        {
+            var clientId = Guid.NewGuid().ToString();
+            db.Clients.Add(new Client
+            {
+                Id = clientId,
+                Name = "Shared Notes Client",
+                Email = $"shared-notes-{Guid.NewGuid():N}@example.com",
+                NormalizedEmail = $"shared-notes-{Guid.NewGuid():N}@example.com",
+                Type = "Individual",
+                Status = "Active"
+            });
+
+            db.Matters.Add(new Matter
+            {
+                Id = matterId,
+                CaseNumber = "CASE-2004",
+                Name = "Shared Notes Matter",
+                PracticeArea = "Civil Litigation",
+                Status = "Open",
+                FeeStructure = "Hourly",
+                ResponsibleAttorney = "Attorney User",
+                ClientId = clientId,
+                CreatedByUserId = ownerUserId,
+                ShareWithFirm = true,
+                ShareNotesWithFirm = true
+            });
+
+            db.MatterNotes.Add(new MatterNote
+            {
+                Id = noteId,
+                MatterId = matterId,
+                Title = "Shared strategy",
+                Body = "Read-only shared note.",
+                CreatedByUserId = ownerUserId,
+                UpdatedByUserId = ownerUserId,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+
+            await db.SaveChangesAsync();
+        });
+
+        var listRequest = CreateRequest(HttpMethod.Get, $"/api/matters/{matterId}/notes", sharedReaderUserId, "Attorney");
+        var listResponse = await _client.SendAsync(listRequest);
+        Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
+
+        var createPayload = JsonContent.Create(new
+        {
+            title = "Unauthorized create",
+            body = "This should not be allowed."
+        });
+        var createRequest = CreateRequest(HttpMethod.Post, $"/api/matters/{matterId}/notes", sharedReaderUserId, "Attorney", createPayload);
+        var createResponse = await _client.SendAsync(createRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, createResponse.StatusCode);
+
+        var updatePayload = JsonContent.Create(new
+        {
+            title = "Unauthorized edit",
+            body = "This should not be allowed either."
+        });
+        var updateRequest = CreateRequest(HttpMethod.Put, $"/api/matters/{matterId}/notes/{noteId}", sharedReaderUserId, "Attorney", updatePayload);
+        var updateResponse = await _client.SendAsync(updateRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, updateResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task TrustAccountsReadDoesNotExposeSensitiveBankFields()
+    {
+        var accountId = Guid.NewGuid().ToString();
+
+        await SeedAsync(async db =>
+        {
+            db.TrustBankAccounts.Add(new TrustBankAccount
+            {
+                Id = accountId,
+                Name = "Main Trust",
+                BankName = "Test Bank",
+                AccountNumberEnc = "enc-123456789",
+                RoutingNumber = "011000015",
+                Jurisdiction = "NY",
+                AccountType = "iolta"
+            });
+
+            await db.SaveChangesAsync();
+        });
+
+        var request = CreateRequest(HttpMethod.Get, "/api/trust/accounts", "trust-admin-1", "Admin");
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var accounts = document.RootElement.EnumerateArray().ToList();
+        Assert.Contains(accounts, element => element.GetProperty("id").GetString() == accountId);
+
+        var account = accounts.Single(element => element.GetProperty("id").GetString() == accountId);
+        Assert.False(account.TryGetProperty("accountNumberEnc", out _));
+        Assert.False(account.TryGetProperty("routingNumber", out _));
+        Assert.Equal("Main Trust", account.GetProperty("name").GetString());
     }
 }

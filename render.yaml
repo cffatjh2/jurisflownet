@@ -1,0 +1,78 @@
+services:
+  - type: web
+    name: jurisflow-staging
+    runtime: docker
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Staging
+      - key: Database__Provider
+        value: postgres
+      - key: Database__BootstrapMode
+        value: ensure-created
+      - key: Cors__AllowedOriginsCsv
+        sync: false
+      - key: ConnectionStrings__DefaultConnection
+        sync: false
+      - key: Storage__Provider
+        value: supabase
+      - key: Storage__Supabase__Url
+        sync: false
+      - key: Storage__Supabase__ServiceRoleKey
+        sync: false
+      - key: Storage__Supabase__Bucket
+        sync: false
+      - key: Jwt__Key
+        sync: false
+      - key: Jwt__Issuer
+        sync: false
+      - key: Jwt__Audience
+        sync: false
+      - key: Security__DocumentEncryptionKey
+        sync: false
+      - key: Security__DbEncryptionKey
+        sync: false
+      - key: Security__AuditLogKey
+        sync: false
+
+  - type: web
+    name: jurisflow-prod
+    runtime: docker
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Database__Provider
+        value: postgres
+      - key: Database__BootstrapMode
+        value: ensure-created
+      - key: Cors__AllowedOriginsCsv
+        sync: false
+      - key: ConnectionStrings__DefaultConnection
+        sync: false
+      - key: Storage__Provider
+        value: supabase
+      - key: Storage__Supabase__Url
+        sync: false
+      - key: Storage__Supabase__ServiceRoleKey
+        sync: false
+      - key: Storage__Supabase__Bucket
+        sync: false
+      - key: Jwt__Key
+        sync: false
+      - key: Jwt__Issuer
+        sync: false
+      - key: Jwt__Audience
+        sync: false
+      - key: Security__DocumentEncryptionKey
+        sync: false
+      - key: Security__DbEncryptionKey
+        sync: false
+      - key: Security__AuditLogKey
+        sync: false

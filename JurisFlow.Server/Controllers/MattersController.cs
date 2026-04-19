@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using JurisFlow.Server.Contracts;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
@@ -16,8 +17,12 @@ namespace JurisFlow.Server.Controllers
     [Route("api/[controller]")]
     [ApiController]
     [Authorize(Policy = "StaffOnly")]
+    [RequestSizeLimit(MaxMatterRequestBodyBytes)]
     public class MattersController : ControllerBase
     {
+        private const int MaxMatterRequestBodyBytes = 256 * 1024;
+        private const int DefaultMatterPageSize = 50;
+        private const int MaxMatterPageSize = 200;
         private const string DeletedMatterStatus = "Deleted";
         private static bool EnableSecondaryClientWrites => false;
         private readonly JurisFlowDbContext _context;
@@ -49,22 +54,29 @@ namespace JurisFlow.Server.Controllers
 
         // GET: api/Matters
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Matter>>> GetMatters([FromQuery] string? status, [FromQuery] string? entityId, [FromQuery] string? officeId)
+        public async Task<ActionResult<IEnumerable<MatterResponse>>> GetMatters(
+            [FromQuery] string? status,
+            [FromQuery] string? entityId,
+            [FromQuery] string? officeId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultMatterPageSize)
         {
             var query = _matterAccess.ApplyReadableScope(_context.Matters.AsNoTracking(), User);
+            var normalizedStatus = status?.Trim();
 
-            if (!string.IsNullOrEmpty(status))
+            if (!string.IsNullOrEmpty(normalizedStatus))
             {
-                // Frontend might send "Archive" or "Open"
-                // The Matter model has 'Status' field.
-                // Assuming "Archived" is the status for archive.
-                if (status.ToLower() == "archive" || status.ToLower() == "archived")
+                if (string.Equals(normalizedStatus, "archive", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(normalizedStatus, "archived", StringComparison.OrdinalIgnoreCase))
                 {
-                     query = query.Where(m => m.Status == "Archived");
+                    query = query.Where(m => m.Status == "Archived");
                 }
                 else
                 {
-                     query = query.Where(m => m.Status == status || (status == "Open" && m.Status != "Archived" && m.Status != "Closed"));
+                    query = query.Where(m => m.Status == normalizedStatus ||
+                                             (string.Equals(normalizedStatus, "Open", StringComparison.OrdinalIgnoreCase) &&
+                                              m.Status != "Archived" &&
+                                              m.Status != "Closed"));
                 }
             }
 
@@ -78,63 +90,69 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(m => m.OfficeId == officeId);
             }
 
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
             var matters = await query
                 .OrderByDescending(m => m.OpenDate)
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
                 .ToListAsync(HttpContext.RequestAborted);
 
             await TryPopulateRelatedClientsAsync(matters, HttpContext.RequestAborted);
-            return matters;
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
+            return matters.Select(MatterResponse.FromModel).ToList();
         }
 
         // GET: api/Matters/5
         [HttpGet("{id}")]
-        public async Task<ActionResult<Matter>> GetMatter(string id)
+        public async Task<ActionResult<MatterResponse>> GetMatter(string id)
         {
             var matter = await _matterAccess.ApplyReadableScope(_context.Matters.AsNoTracking(), User)
-                .FirstOrDefaultAsync(m => m.Id == id);
+                .FirstOrDefaultAsync(m => m.Id == id, HttpContext.RequestAborted);
 
             if (matter == null)
             {
-                return NotFound();
+                return NotFoundProblem("Matter not found.", $"Matter '{id}' was not found or is not accessible.");
             }
 
             await TryPopulateRelatedClientsAsync(matter, HttpContext.RequestAborted);
-            return matter;
+            return MatterResponse.FromModel(matter);
         }
 
         // POST: api/Matters
         [HttpPost]
-        public async Task<ActionResult<Matter>> PostMatter(Matter matter)
+        public async Task<ActionResult<MatterResponse>> PostMatter([FromBody] CreateMatterRequest request)
         {
-            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (!ModelState.IsValid)
+            {
+                return ValidationProblem(ModelState);
+            }
 
             try
             {
                 var currentUserId = GetUserId();
                 if (string.IsNullOrWhiteSpace(currentUserId))
                 {
-                    return Unauthorized();
+                    return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.", detail: "An authenticated user id is required to create a matter.");
                 }
-                if (string.IsNullOrWhiteSpace(matter.ClientId))
+                if (string.IsNullOrWhiteSpace(request.ClientId))
                 {
-                    return BadRequest(new { message = "ClientId is required." });
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Client id is required.", detail: "ClientId is required.");
                 }
 
-                var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+                var resolvedClientId = await ResolveValidClientIdAsync(request.ClientId);
                 if (resolvedClientId == null)
                 {
-                    return BadRequest(new { message = "Selected client was not found." });
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Client not found.", detail: "Selected client was not found in the active tenant scope.");
                 }
 
-                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, matter.RelatedClientIds);
+                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, request.RelatedClientIds);
+                var matter = MapCreateRequest(request, currentUserId, resolvedClientId);
 
-                matter.Id = Guid.NewGuid().ToString();
-                matter.OpenDate = DateTime.UtcNow;
-                matter.ClientId = resolvedClientId;
-                matter.CreatedByUserId = currentUserId;
                 NormalizeSharingSettings(matter);
 
-                var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+                var resolved = await _firmStructure.ResolveEntityOfficeAsync(request.EntityId, request.OfficeId);
                 matter.EntityId = resolved.entityId;
                 matter.OfficeId = resolved.officeId;
 
@@ -149,70 +167,63 @@ namespace JurisFlow.Server.Controllers
 
                 await TryAuditAsync("matter.create", "Matter", matter.Id, $"ClientId={matter.ClientId}, Name={matter.Name}");
 
-                return CreatedAtAction("GetMatter", new { id = matter.Id }, matter);
+                return CreatedAtAction(nameof(GetMatter), new { id = matter.Id }, MatterResponse.FromModel(matter));
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Matter create failed. RootCause={RootCause}", ex.GetBaseException().Message);
-                return StatusCode(500, new { message = "Failed to create matter." });
+                return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Matter create failed.", detail: "The server failed to create the matter.");
             }
         }
 
         // PUT: api/Matters/5
         [HttpPut("{id}")]
-        public async Task<IActionResult> PutMatter(string id, Matter matter)
+        public async Task<IActionResult> PutMatter(string id, [FromBody] UpdateMatterRequest request)
         {
-            if (id != matter.Id) return BadRequest();
-            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (!ModelState.IsValid)
+            {
+                return ValidationProblem(ModelState);
+            }
 
             try
             {
                 if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
                 {
-                    return Forbid();
+                    return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Matter update is forbidden.", detail: $"You are not allowed to update matter '{id}'.");
                 }
-                if (string.IsNullOrWhiteSpace(matter.ClientId))
+                if (string.IsNullOrWhiteSpace(request.ClientId))
                 {
-                    return BadRequest(new { message = "ClientId is required." });
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Client id is required.", detail: "ClientId is required.");
                 }
 
-                var existingMatter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
+                var existingMatter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id, HttpContext.RequestAborted);
                 if (existingMatter == null)
                 {
-                    return NotFound();
+                    return NotFoundProblem("Matter not found.", $"Matter '{id}' was not found.");
                 }
 
-                var resolvedClientId = await ResolveValidClientIdAsync(matter.ClientId);
+                var resolvedClientId = await ResolveValidClientIdAsync(request.ClientId);
                 if (resolvedClientId == null)
                 {
-                    return BadRequest(new { message = "Selected client was not found." });
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Client not found.", detail: "Selected client was not found in the active tenant scope.");
                 }
 
-                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, matter.RelatedClientIds);
+                var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, request.RelatedClientIds);
 
-                var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+                var resolved = await _firmStructure.ResolveEntityOfficeAsync(request.EntityId, request.OfficeId);
 
-                existingMatter.CaseNumber = matter.CaseNumber;
-                existingMatter.Name = matter.Name;
-                existingMatter.PracticeArea = matter.PracticeArea;
-                existingMatter.CourtType = matter.CourtType;
-                existingMatter.Outcome = matter.Outcome;
-                existingMatter.Status = matter.Status;
-                existingMatter.FeeStructure = matter.FeeStructure;
-                existingMatter.OpenDate = matter.OpenDate;
-                existingMatter.ResponsibleAttorney = matter.ResponsibleAttorney;
-                existingMatter.BillableRate = matter.BillableRate;
-                existingMatter.TrustBalance = matter.TrustBalance;
-                existingMatter.CurrentOutcomeFeePlanId = matter.CurrentOutcomeFeePlanId;
+                existingMatter.CaseNumber = request.CaseNumber;
+                existingMatter.Name = request.Name;
+                existingMatter.PracticeArea = request.PracticeArea ?? string.Empty;
+                existingMatter.CourtType = NormalizeOptionalText(request.CourtType);
+                existingMatter.Outcome = NormalizeOptionalText(request.Outcome);
+                existingMatter.Status = request.Status;
+                existingMatter.FeeStructure = request.FeeStructure;
+                existingMatter.ResponsibleAttorney = request.ResponsibleAttorney;
+                existingMatter.BillableRate = request.BillableRate;
                 existingMatter.EntityId = resolved.entityId;
                 existingMatter.OfficeId = resolved.officeId;
                 existingMatter.ClientId = resolvedClientId;
-                existingMatter.ConflictCheckDate = matter.ConflictCheckDate;
-                existingMatter.ConflictCheckCleared = matter.ConflictCheckCleared;
-                existingMatter.ConflictWaiverObtained = matter.ConflictWaiverObtained;
-                existingMatter.ShareWithFirm = matter.ShareWithFirm;
-                existingMatter.ShareBillingWithFirm = matter.ShareBillingWithFirm;
-                existingMatter.ShareNotesWithFirm = matter.ShareNotesWithFirm;
                 NormalizeSharingSettings(existingMatter);
 
                 await _context.SaveChangesAsync(HttpContext.RequestAborted);
@@ -229,7 +240,7 @@ namespace JurisFlow.Server.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Matter update failed for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
-                return StatusCode(500, new { message = "Failed to update matter." });
+                return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Matter update failed.", detail: "The server failed to update the matter.");
             }
         }
 
@@ -239,11 +250,11 @@ namespace JurisFlow.Server.Controllers
         {
             if (!await _matterAccess.CanManageMatterAsync(id, User, ignoreQueryFilters: true, cancellationToken: HttpContext.RequestAborted))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Matter delete is forbidden.", detail: $"You are not allowed to delete matter '{id}'.");
             }
 
             var matter = await _context.Matters.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == id);
-            if (matter == null) return NotFound();
+            if (matter == null) return NotFoundProblem("Matter not found.", $"Matter '{id}' was not found.");
             if (string.Equals(matter.Status, DeletedMatterStatus, StringComparison.OrdinalIgnoreCase)) return NoContent();
 
             var ct = HttpContext.RequestAborted;
@@ -359,7 +370,7 @@ namespace JurisFlow.Server.Controllers
             {
                 await tx.RollbackAsync(ct);
                 _logger.LogWarning(ex, "Matter delete blocked by related records for matter {MatterId}. RootCause={RootCause}", id, ex.GetBaseException().Message);
-                return Conflict(new { message = "Matter could not be deleted because related records are still linked." });
+                return Problem(statusCode: StatusCodes.Status409Conflict, title: "Matter delete blocked.", detail: "Matter could not be deleted because related records are still linked.");
             }
             catch (Exception ex)
             {
@@ -370,7 +381,7 @@ namespace JurisFlow.Server.Controllers
                     return NoContent();
                 }
 
-                return StatusCode(500, new { message = "Failed to delete matter." });
+                return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Matter delete failed.", detail: "The server failed to delete the matter.");
             }
         }
         
@@ -380,11 +391,11 @@ namespace JurisFlow.Server.Controllers
         {
             if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Matter archive is forbidden.", detail: $"You are not allowed to archive matter '{id}'.");
             }
 
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
-            if (matter == null) return NotFound();
+            if (matter == null) return NotFoundProblem("Matter not found.", $"Matter '{id}' was not found.");
 
             matter.Status = "Archived";
             await _context.SaveChangesAsync();
@@ -392,7 +403,7 @@ namespace JurisFlow.Server.Controllers
             await TryAuditAsync("matter.archive", "Matter", id, "Archived matter");
             await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_archive");
 
-            return Ok(matter);
+            return Ok(MatterResponse.FromModel(matter));
         }
 
         // POST: api/Matters/5/restore
@@ -401,11 +412,11 @@ namespace JurisFlow.Server.Controllers
         {
             if (!await _matterAccess.CanManageMatterAsync(id, User, cancellationToken: HttpContext.RequestAborted))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Matter restore is forbidden.", detail: $"You are not allowed to restore matter '{id}'.");
             }
 
             var matter = await _context.Matters.FirstOrDefaultAsync(m => m.Id == id);
-            if (matter == null) return NotFound();
+            if (matter == null) return NotFoundProblem("Matter not found.", $"Matter '{id}' was not found.");
 
             matter.Status = "Open"; // Restore to Open
             await _context.SaveChangesAsync();
@@ -413,7 +424,7 @@ namespace JurisFlow.Server.Controllers
             await TryAuditAsync("matter.restore", "Matter", id, "Restored matter");
             await TryTriggerOutcomeFeePlannerAsync(id, "matter_status_restore");
 
-            return Ok(matter);
+            return Ok(MatterResponse.FromModel(matter));
         }
 
         private async Task SafeClearMatterReferenceAsync(
@@ -646,6 +657,27 @@ namespace JurisFlow.Server.Controllers
             return clientExists ? normalizedClientId : null;
         }
 
+        private static Matter MapCreateRequest(CreateMatterRequest request, string currentUserId, string resolvedClientId)
+        {
+            return new Matter
+            {
+                Id = Guid.NewGuid().ToString(),
+                CaseNumber = request.CaseNumber,
+                Name = request.Name,
+                PracticeArea = request.PracticeArea ?? string.Empty,
+                CourtType = NormalizeOptionalText(request.CourtType),
+                Outcome = NormalizeOptionalText(request.Outcome),
+                Status = request.Status,
+                FeeStructure = request.FeeStructure,
+                OpenDate = DateTime.UtcNow,
+                ResponsibleAttorney = request.ResponsibleAttorney,
+                BillableRate = request.BillableRate,
+                ClientId = resolvedClientId,
+                CreatedByUserId = currentUserId,
+                RelatedClientIds = request.RelatedClientIds
+            };
+        }
+
         private Task<MatterRelatedClientResolution> ResolveRelatedClientsForWriteAsync(string primaryClientId, IEnumerable<string>? requestedClientIds)
         {
             if ((requestedClientIds?.Any(id => !string.IsNullOrWhiteSpace(id)) ?? false))
@@ -792,6 +824,36 @@ namespace JurisFlow.Server.Controllers
         private string? GetUserId()
         {
             return User.FindFirst("sub")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        }
+
+        private static string? NormalizeOptionalText(string? value)
+        {
+            var trimmed = value?.Trim();
+            return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        }
+
+        private static int NormalizePage(int page) => page <= 0 ? 1 : page;
+
+        private static int NormalizePageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultMatterPageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxMatterPageSize);
+        }
+
+        private void AddPaginationHeaders(int totalCount, int page, int pageSize)
+        {
+            Response.Headers["X-Total-Count"] = totalCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page"] = page.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page-Size"] = pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private ActionResult NotFoundProblem(string title, string detail)
+        {
+            return Problem(statusCode: StatusCodes.Status404NotFound, title: title, detail: detail);
         }
 
         private static void NormalizeSharingSettings(Matter matter)

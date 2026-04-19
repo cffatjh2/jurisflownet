@@ -1,0 +1,64 @@
+name: Supabase Migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target Supabase environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      apply:
+        description: Apply migrations after dry-run
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  validate:
+    name: Validate Supabase Migrations
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.92.1
+
+      - name: Select target credentials
+        shell: bash
+        run: |
+          if [ "${{ github.event.inputs.target }}" = "production" ]; then
+            echo "PROJECT_ID=${{ secrets.SUPABASE_PRODUCTION_PROJECT_REF }}" >> "$GITHUB_ENV"
+            echo "DB_PASSWORD=${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "PROJECT_ID=${{ secrets.SUPABASE_STAGING_PROJECT_REF }}" >> "$GITHUB_ENV"
+            echo "DB_PASSWORD=${{ secrets.SUPABASE_STAGING_DB_PASSWORD }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Guard missing secrets
+        shell: bash
+        run: |
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$PROJECT_ID"
+          test -n "$DB_PASSWORD"
+
+      - name: Link project
+        run: supabase link --project-ref "$PROJECT_ID" --password "$DB_PASSWORD"
+
+      - name: List migrations
+        run: supabase migration list
+
+      - name: Dry run remote push
+        run: supabase db push --linked --dry-run --password "$DB_PASSWORD"
+
+      - name: Apply remote push
+        if: ${{ github.event.inputs.apply == 'true' }}
+        run: supabase db push --linked --password "$DB_PASSWORD"

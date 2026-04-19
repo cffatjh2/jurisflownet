@@ -1,8 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using JurisFlow.Server.Data;
-using JurisFlow.Server.Models;
+using JurisFlow.Server.Contracts;
+using JurisFlow.Server.Services;
 
 namespace JurisFlow.Server.Controllers
 {
@@ -11,113 +10,68 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class LeadsController : ControllerBase
     {
-        private readonly JurisFlowDbContext _context;
+        private readonly LeadApplicationService _service;
 
-        public LeadsController(JurisFlowDbContext context)
+        public LeadsController(LeadApplicationService service)
         {
-            _context = context;
+            _service = service;
         }
 
-        // GET: api/leads
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Lead>>> GetLeads()
+        public async Task<ActionResult<IEnumerable<LeadResponse>>> GetLeads()
         {
-            return await _context.Leads.OrderByDescending(l => l.CreatedAt).ToListAsync();
+            return Ok(await _service.GetLeadsAsync());
         }
 
-        // GET: api/leads/{id}
         [HttpGet("{id}")]
-        public async Task<ActionResult<Lead>> GetLead(string id)
+        public async Task<ActionResult<LeadResponse>> GetLead(string id)
         {
-            var lead = await _context.Leads.FindAsync(id);
-            if (lead == null) return NotFound();
-            return lead;
+            var lead = await _service.GetLeadAsync(id);
+            return lead == null ? NotFound() : Ok(lead);
         }
 
-        // POST: api/leads
         [HttpPost]
-        public async Task<ActionResult<Lead>> CreateLead([FromBody] LeadDto dto)
+        public async Task<IActionResult> CreateLead([FromBody] LeadCreateRequest request)
         {
-            var lead = new Lead
+            if (!ModelState.IsValid)
             {
-                Id = string.IsNullOrEmpty(dto.Id) ? Guid.NewGuid().ToString() : dto.Id,
-                Name = dto.Name ?? "New Lead",
-                Email = dto.Email,
-                Phone = dto.Phone,
-                Source = dto.Source ?? "Referral",
-                EstimatedValue = dto.EstimatedValue,
-                Status = dto.Status ?? "New",
-                PracticeArea = dto.PracticeArea,
-                Notes = dto.Notes,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+                return ValidationProblem(ModelState);
+            }
 
-            _context.Leads.Add(lead);
-            await _context.SaveChangesAsync();
+            var result = await _service.CreateLeadAsync(request);
+            if (!result.Succeeded)
+            {
+                return ToProblem(result);
+            }
 
-            return CreatedAtAction(nameof(GetLead), new { id = lead.Id }, lead);
+            return CreatedAtAction(nameof(GetLead), new { id = result.Value!.Id }, result.Value);
         }
 
-        // PUT: api/leads/{id}
         [HttpPut("{id}")]
-        public async Task<ActionResult<Lead>> UpdateLead(string id, [FromBody] LeadUpdateDto dto)
+        public async Task<IActionResult> UpdateLead(string id, [FromBody] LeadUpdateRequest request)
         {
-            var lead = await _context.Leads.FindAsync(id);
-            if (lead == null) return NotFound();
+            if (!ModelState.IsValid)
+            {
+                return ValidationProblem(ModelState);
+            }
 
-            if (dto.Name != null) lead.Name = dto.Name;
-            if (dto.Email != null) lead.Email = dto.Email;
-            if (dto.Phone != null) lead.Phone = dto.Phone;
-            if (dto.Source != null) lead.Source = dto.Source;
-            if (dto.EstimatedValue.HasValue) lead.EstimatedValue = dto.EstimatedValue.Value;
-            if (dto.Status != null) lead.Status = dto.Status;
-            if (dto.PracticeArea != null) lead.PracticeArea = dto.PracticeArea;
-            if (dto.Notes != null) lead.Notes = dto.Notes;
-
-            lead.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            return lead;
+            var result = await _service.UpdateLeadAsync(id, request);
+            return result.Succeeded ? Ok(result.Value) : ToProblem(result);
         }
 
-        // DELETE: api/leads/{id}
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteLead(string id)
         {
-            var lead = await _context.Leads.FindAsync(id);
-            if (lead != null)
-            {
-                _context.Leads.Remove(lead);
-                await _context.SaveChangesAsync();
-            }
-            // Return 204 even if not found (idempotent)
-            return NoContent();
+            var result = await _service.DeleteLeadAsync(id);
+            return result.Succeeded ? NoContent() : ToProblem(result);
         }
-    }
 
-    public class LeadDto
-    {
-        public string? Id { get; set; }
-        public string? Name { get; set; }
-        public string? Email { get; set; }
-        public string? Phone { get; set; }
-        public string? Source { get; set; }
-        public decimal EstimatedValue { get; set; }
-        public string? Status { get; set; }
-        public string? PracticeArea { get; set; }
-        public string? Notes { get; set; }
-    }
-
-    public class LeadUpdateDto
-    {
-        public string? Name { get; set; }
-        public string? Email { get; set; }
-        public string? Phone { get; set; }
-        public string? Source { get; set; }
-        public decimal? EstimatedValue { get; set; }
-        public string? Status { get; set; }
-        public string? PracticeArea { get; set; }
-        public string? Notes { get; set; }
+        private ObjectResult ToProblem<T>(ApplicationServiceResult<T> result)
+        {
+            return Problem(
+                title: result.Title,
+                detail: result.Detail,
+                statusCode: result.StatusCode);
+        }
     }
 }

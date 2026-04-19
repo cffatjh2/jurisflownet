@@ -11,8 +11,13 @@ namespace JurisFlow.Server.Controllers
     [Route("api/matters/{matterId}/notes")]
     [ApiController]
     [Authorize(Policy = "StaffOnly")]
+    [RequestSizeLimit(MaxMatterNoteRequestBodyBytes)]
     public class MatterNotesController : ControllerBase
     {
+        private const int MaxMatterNoteRequestBodyBytes = 64 * 1024;
+        private const int DefaultMatterNotePageSize = 50;
+        private const int MaxMatterNotePageSize = 200;
+
         private readonly JurisFlowDbContext _context;
         private readonly MatterAccessService _matterAccess;
         private readonly AuditLogger _auditLogger;
@@ -28,27 +33,40 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<MatterNoteResponseDto>>> GetNotes(string matterId, CancellationToken cancellationToken)
+        public async Task<ActionResult<IEnumerable<MatterNoteResponseDto>>> GetNotes(
+            string matterId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultMatterNotePageSize,
+            CancellationToken cancellationToken = default)
         {
             var matter = await _context.Matters
                 .AsNoTracking()
                 .FirstOrDefaultAsync(m => m.Id == matterId, cancellationToken);
             if (matter == null)
             {
-                return NotFound();
+                return NotFoundProblem("Matter not found.", $"Matter '{matterId}' was not found.");
             }
 
-            if (!_matterAccess.CanSeeMatterNotes(matter, User))
+            if (!_matterAccess.CanReadMatterNotes(matter, User))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Notes read is forbidden.", detail: $"You are not allowed to read notes for matter '{matterId}'.");
             }
 
-            var notes = await _context.MatterNotes
+            var normalizedPage = NormalizePage(page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
+
+            var baseQuery = _context.MatterNotes
                 .AsNoTracking()
                 .Where(note => note.MatterId == matterId)
-                .OrderByDescending(note => note.UpdatedAt)
+                .OrderByDescending(note => note.UpdatedAt);
+
+            var totalCount = await baseQuery.CountAsync(cancellationToken);
+            var notes = await baseQuery
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
                 .ToListAsync(cancellationToken);
 
+            AddPaginationHeaders(totalCount, normalizedPage, normalizedPageSize);
             return Ok(await MapNotesAsync(notes, cancellationToken));
         }
 
@@ -60,18 +78,18 @@ namespace JurisFlow.Server.Controllers
                 .FirstOrDefaultAsync(m => m.Id == matterId, cancellationToken);
             if (matter == null)
             {
-                return NotFound();
+                return NotFoundProblem("Matter not found.", $"Matter '{matterId}' was not found.");
             }
 
-            if (!_matterAccess.CanSeeMatterNotes(matter, User))
+            if (!await _matterAccess.CanCreateMatterNoteAsync(matter, User, cancellationToken))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Note create is forbidden.", detail: $"You are not allowed to create notes for matter '{matterId}'.");
             }
 
             var body = NormalizeBody(dto.Body);
             if (body == null)
             {
-                return BadRequest(new { message = "Note body is required." });
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Note body is required.", detail: "Note body is required.");
             }
 
             var currentUserId = GetUserId();
@@ -106,7 +124,7 @@ namespace JurisFlow.Server.Controllers
             var note = await _context.MatterNotes.FirstOrDefaultAsync(n => n.Id == noteId && n.MatterId == matterId, cancellationToken);
             if (note == null)
             {
-                return NotFound();
+                return NotFoundProblem("Note not found.", $"Note '{noteId}' was not found.");
             }
 
             var matter = await _context.Matters
@@ -114,18 +132,18 @@ namespace JurisFlow.Server.Controllers
                 .FirstOrDefaultAsync(m => m.Id == matterId, cancellationToken);
             if (matter == null)
             {
-                return NotFound();
+                return NotFoundProblem("Matter not found.", $"Matter '{matterId}' was not found.");
             }
 
-            if (!_matterAccess.CanSeeMatterNotes(matter, User))
+            if (!await _matterAccess.CanEditMatterNoteAsync(matter, note, User, cancellationToken))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Note update is forbidden.", detail: $"You are not allowed to update note '{noteId}'.");
             }
 
             var body = NormalizeBody(dto.Body);
             if (body == null)
             {
-                return BadRequest(new { message = "Note body is required." });
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Note body is required.", detail: "Note body is required.");
             }
 
             note.Title = NormalizeTitle(dto.Title);
@@ -146,7 +164,7 @@ namespace JurisFlow.Server.Controllers
             var note = await _context.MatterNotes.FirstOrDefaultAsync(n => n.Id == noteId && n.MatterId == matterId, cancellationToken);
             if (note == null)
             {
-                return NotFound();
+                return NotFoundProblem("Note not found.", $"Note '{noteId}' was not found.");
             }
 
             var matter = await _context.Matters
@@ -154,35 +172,18 @@ namespace JurisFlow.Server.Controllers
                 .FirstOrDefaultAsync(m => m.Id == matterId, cancellationToken);
             if (matter == null)
             {
-                return NotFound();
+                return NotFoundProblem("Matter not found.", $"Matter '{matterId}' was not found.");
             }
 
-            if (!await CanDeleteNoteAsync(matter, note, cancellationToken))
+            if (!await _matterAccess.CanDeleteMatterNoteAsync(matter, note, User, cancellationToken))
             {
-                return Forbid();
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Note delete is forbidden.", detail: $"You are not allowed to delete note '{noteId}'.");
             }
 
             _context.MatterNotes.Remove(note);
             await _context.SaveChangesAsync(cancellationToken);
             await _auditLogger.LogAsync(HttpContext, "matter.note.delete", nameof(MatterNote), note.Id, $"MatterId={matterId}");
             return NoContent();
-        }
-
-        private async Task<bool> CanDeleteNoteAsync(Matter matter, MatterNote note, CancellationToken cancellationToken)
-        {
-            if (_matterAccess.IsPrivileged(User))
-            {
-                return true;
-            }
-
-            var currentUserId = GetUserId();
-            if (!string.IsNullOrWhiteSpace(currentUserId) &&
-                string.Equals(currentUserId, note.CreatedByUserId, StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            return await _matterAccess.CanManageMatterAsync(matter.Id, User, cancellationToken: cancellationToken);
         }
 
         private async Task<List<MatterNoteResponseDto>> MapNotesAsync(IReadOnlyCollection<MatterNote> notes, CancellationToken cancellationToken)
@@ -250,6 +251,30 @@ namespace JurisFlow.Server.Controllers
             }
 
             return "Staff";
+        }
+
+        private static int NormalizePage(int page) => page <= 0 ? 1 : page;
+
+        private static int NormalizePageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultMatterNotePageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxMatterNotePageSize);
+        }
+
+        private void AddPaginationHeaders(int totalCount, int page, int pageSize)
+        {
+            Response.Headers["X-Total-Count"] = totalCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page"] = page.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Response.Headers["X-Page-Size"] = pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private ActionResult NotFoundProblem(string title, string detail)
+        {
+            return Problem(statusCode: StatusCodes.Status404NotFound, title: title, detail: detail);
         }
 
         private string? GetUserId()

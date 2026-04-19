@@ -53,14 +53,21 @@ public class BackupRestoreE2eTests
         var createBackupResponse = await _client.SendAsync(createBackupRequest);
         var createBody = await createBackupResponse.Content.ReadAsStringAsync();
         Assert.True(
-            createBackupResponse.StatusCode == HttpStatusCode.OK,
+            createBackupResponse.StatusCode == HttpStatusCode.Accepted,
             $"Create backup failed ({(int)createBackupResponse.StatusCode}): {createBody}");
 
-        var createPayload = JsonSerializer.Deserialize<BackupCreateApiResponse>(
+        var createPayload = JsonSerializer.Deserialize<BackupJobApiResponse>(
             createBody,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         Assert.NotNull(createPayload);
-        Assert.False(string.IsNullOrWhiteSpace(createPayload!.FileName));
+        Assert.False(string.IsNullOrWhiteSpace(createPayload!.JobId));
+
+        var completedCreateJob = await WaitForBackupJobAsync(_client, createPayload.JobId);
+        Assert.Equal("succeeded", completedCreateJob.Status);
+        Assert.True(completedCreateJob.Result.HasValue);
+
+        var backupFileName = completedCreateJob.Result.Value.GetProperty("fileName").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(backupFileName));
 
         await UpdateClientNameAsync(clientId, mutatedName);
         Assert.Equal(mutatedName, await GetClientNameAsync(clientId));
@@ -70,22 +77,28 @@ public class BackupRestoreE2eTests
             "/api/admin/backups/restore",
             new
             {
-                fileName = createPayload.FileName,
+                fileName = backupFileName,
                 includeUploads = false,
                 dryRun = false
             });
+        restoreRequest.Headers.Add("X-Break-Glass-Confirm", "RESTORE");
 
         var restoreResponse = await _client.SendAsync(restoreRequest);
         var restoreBody = await restoreResponse.Content.ReadAsStringAsync();
         Assert.True(
-            restoreResponse.StatusCode == HttpStatusCode.OK,
+            restoreResponse.StatusCode == HttpStatusCode.Accepted,
             $"Restore backup failed ({(int)restoreResponse.StatusCode}): {restoreBody}");
 
-        var restorePayload = JsonSerializer.Deserialize<BackupRestoreApiResponse>(
+        var restorePayload = JsonSerializer.Deserialize<BackupJobApiResponse>(
             restoreBody,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         Assert.NotNull(restorePayload);
-        Assert.True(restorePayload!.Success);
+        Assert.False(string.IsNullOrWhiteSpace(restorePayload!.JobId));
+
+        var completedRestoreJob = await WaitForBackupJobAsync(_client, restorePayload.JobId);
+        Assert.Equal("succeeded", completedRestoreJob.Status);
+        Assert.True(completedRestoreJob.Result.HasValue);
+        Assert.True(completedRestoreJob.Result.Value.GetProperty("success").GetBoolean());
 
         var restoredName = await GetClientNameAsync(clientId);
         Assert.Equal(baselineName, restoredName);
@@ -102,17 +115,26 @@ public class BackupRestoreE2eTests
             Content = JsonContent.Create(new { includeUploads = false })
         };
         createBackupRequest.Headers.Add("X-Test-UserId", "backup-admin");
-        createBackupRequest.Headers.Add("X-Test-Role", "Admin");
+        createBackupRequest.Headers.Add("X-Test-Role", "SecurityAdmin");
 
         var createBackupResponse = await encryptedClient.SendAsync(createBackupRequest);
         var createBody = await createBackupResponse.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.BadRequest, createBackupResponse.StatusCode);
-        Assert.Contains("encryption key", createBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Accepted, createBackupResponse.StatusCode);
+
+        var createPayload = JsonSerializer.Deserialize<BackupJobApiResponse>(
+            createBody,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(createPayload);
+        Assert.False(string.IsNullOrWhiteSpace(createPayload!.JobId));
+
+        var completedCreateJob = await WaitForBackupJobAsync(encryptedClient, createPayload.JobId);
+        Assert.Equal("failed", completedCreateJob.Status);
+        Assert.Contains("could not be completed", completedCreateJob.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
         var listBackupsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/admin/backups");
         listBackupsRequest.Headers.Add("X-Test-UserId", "backup-admin");
-        listBackupsRequest.Headers.Add("X-Test-Role", "Admin");
+        listBackupsRequest.Headers.Add("X-Test-Role", "SecurityAdmin");
 
         var listBackupsResponse = await encryptedClient.SendAsync(listBackupsRequest);
         var listBody = await listBackupsResponse.Content.ReadAsStringAsync();
@@ -128,13 +150,42 @@ public class BackupRestoreE2eTests
     {
         var request = new HttpRequestMessage(method, url);
         request.Headers.Add("X-Test-UserId", "backup-admin");
-        request.Headers.Add("X-Test-Role", "Admin");
+        request.Headers.Add("X-Test-Role", "SecurityAdmin");
         if (payload != null)
         {
             request.Content = JsonContent.Create(payload);
         }
 
         return request;
+    }
+
+    private static async Task<BackupJobApiResponse> WaitForBackupJobAsync(HttpClient client, string jobId, int maxAttempts = 40)
+    {
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/admin/backups/jobs/{jobId}");
+            request.Headers.Add("X-Test-UserId", "backup-admin");
+            request.Headers.Add("X-Test-Role", "SecurityAdmin");
+
+            var response = await client.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var payload = JsonSerializer.Deserialize<BackupJobApiResponse>(
+                body,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.NotNull(payload);
+
+            if (string.Equals(payload!.Status, "succeeded", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(payload.Status, "failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return payload;
+            }
+
+            await Task.Delay(250);
+        }
+
+        throw new TimeoutException($"Backup job '{jobId}' did not complete in time.");
     }
 
     private async Task SeedClientAsync(string clientId, string name, string email)
@@ -195,14 +246,12 @@ public class BackupRestoreE2eTests
         return (tenant.Id, tenant.Slug);
     }
 
-    private sealed class BackupCreateApiResponse
+    private sealed class BackupJobApiResponse
     {
-        public string FileName { get; set; } = string.Empty;
-    }
-
-    private sealed class BackupRestoreApiResponse
-    {
-        public bool Success { get; set; }
+        public string JobId { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string? Message { get; set; }
+        public JsonElement? Result { get; set; }
     }
 
     private sealed class BackupListApiResponse

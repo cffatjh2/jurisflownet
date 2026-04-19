@@ -1,0 +1,27 @@
+{
+  "rules": [
+    { "wave": "etl-001", "entity": "User", "field": "Email", "transform": "trim|lower|normalize_email", "targetField": "normalized_email" },
+    { "wave": "etl-001", "entity": "User", "field": "Role", "transform": "map_role_string_to_role_assignment", "targetField": "user_role_assignments.role_id" },
+    { "wave": "etl-001", "entity": "User", "field": "EmployeeRole", "transform": "map_employee_role_to_staff_profile_job_title", "targetField": "staff_profiles.job_title" },
+    { "wave": "etl-002", "entity": "Client", "field": "Type", "transform": "map Individual->individual | Corporate->organization", "targetField": "clients.kind" },
+    { "wave": "etl-002", "entity": "Client", "field": "Status", "transform": "map Active->active | Inactive->inactive | else->prospect", "targetField": "clients.status" },
+    { "wave": "etl-002", "entity": "Matter", "field": "Status", "transform": "map Open->open | Closed->closed | Archived->archived | else->intake", "targetField": "matters.status" },
+    { "wave": "etl-002", "entity": "Matter", "field": "FeeStructure", "transform": "map Hourly->hourly | Fixed->fixed | Contingency->contingency | else->hybrid", "targetField": "matters.fee_model" },
+    { "wave": "etl-002", "entity": "Matter", "field": "ResponsibleAttorney", "transform": "resolve by normalized user display name; fallback to created_by_user_id; else issue_log", "targetField": "matters.responsible_user_id" },
+    { "wave": "etl-002", "entity": "Matter", "field": "BillableRate", "transform": "cast double_to_numeric_18_4", "targetField": "matters.billable_rate" },
+    { "wave": "etl-002", "entity": "Matter", "field": "TrustBalance", "transform": "drop_from_write_model", "targetField": null },
+    { "wave": "etl-002", "entity": "MatterNote", "field": "Body", "transform": "trim|normalize_newlines|preserve_plain_text", "targetField": "matter_notes.body_text" },
+    { "wave": "etl-002", "entity": "MatterNote", "field": "Visibility", "transform": "default internal", "targetField": "matter_notes.visibility" },
+    { "wave": "etl-003", "entity": "Task", "field": "AssignedTo", "transform": "resolve_assigned_user_from_display_name", "targetField": "tasks.assigned_user_id" },
+    { "wave": "etl-003", "entity": "Task", "field": "Status", "transform": "map To Do->todo | In Progress->in_progress | Done->completed | else->todo", "targetField": "tasks.status" },
+    { "wave": "etl-003", "entity": "CalendarEvent", "field": "Type", "transform": "map Court->court | Meeting->meeting | Deadline->deadline | else->general", "targetField": "calendar_events.event_type" },
+    { "wave": "etl-004", "entity": "TrustTransaction", "field": "AllocationsJson", "transform": "parse_json_array_to_child_rows", "targetField": "trust_transaction_allocations" },
+    { "wave": "etl-004", "entity": "TrustTransaction", "field": "Status", "transform": "map status_to_posting_state", "targetField": "trust_transactions.posting_state" },
+    { "wave": "etl-004", "entity": "TrustTransaction", "field": "ApprovalStatus", "transform": "map approval enum to canonical approval_status", "targetField": "trust_transactions.approval_status" },
+    { "wave": "etl-005", "entity": "Invoice", "field": "Number", "transform": "trim|dedupe_with_suffix_if_required", "targetField": "invoices.invoice_number" },
+    { "wave": "etl-005", "entity": "PaymentTransaction", "field": "Status", "transform": "map provider settlement status to payment_status", "targetField": "billing_payments.payment_status" },
+    { "wave": "etl-006", "entity": "Document", "field": "FilePath", "transform": "map_to_storage_object_key", "targetField": "document_versions.storage_object_key" },
+    { "wave": "etl-006", "entity": "Client", "field": "PortalEnabled|PasswordHash|Email", "transform": "split_client_portal_account", "targetField": "client_portal_accounts.*" },
+    { "wave": "etl-007", "entity": "IntegrationSecret", "field": "SecretValue", "transform": "do_not_copy_plaintext; map secret reference only", "targetField": "integration_secrets.secret_reference" }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "phase": "phase6",
+  "version": 1,
+  "scenarios": {
+    "A": {
+      "name": "legacy-to-canonical",
+      "description": "Legacy veri canonical bos veritabanina idempotent SQL ve id map katmani ile tasinacak.",
+      "requiredArtifacts": [
+        "manifest.phase6.json",
+        "transforms.phase6.json",
+        "id-maps.phase6.json",
+        "verification.phase6.json",
+        "sql/001_phase6_bootstrap.sql",
+        "sql/010_identity_and_org.sql",
+        "sql/020_clients_matters.sql",
+        "sql/030_workflow.sql",
+        "sql/040_trust.sql",
+        "sql/050_billing.sql",
+        "sql/060_documents_portal.sql",
+        "sql/070_integrations.sql",
+        "sql/090_verification.sql"
+      ]
+    },
+    "B": {
+      "name": "minimal-seed-onboarding",
+      "description": "Legacy veri alinmadan canonical DB yalnizca seed tenant, admin ve sistem lookup seti ile acilir.",
+      "requiredArtifacts": [
+        "sql/100_minimal_seed_and_onboarding.template.sql"
+      ]
+    }
+  },
+  "waves": [
+    {
+      "id": "etl-001",
+      "name": "Identity and organization",
+      "sourceTables": ["Tenant", "FirmEntity", "Office", "User", "AuthSession", "AuditLog", "RetentionPolicy"],
+      "targetTables": ["tenants", "firm_entities", "offices", "users", "staff_profiles", "user_role_assignments", "auth_sessions", "audit_logs", "retention_policies"],
+      "script": "supabase/etl/sql/010_identity_and_org.sql",
+      "idMapSet": "identity-core",
+      "verificationProfile": "identity-core"
+    },
+    {
+      "id": "etl-002",
+      "name": "Clients and matters",
+      "sourceTables": ["Client", "ClientStatusHistory", "Lead", "Matter", "MatterClientLink", "MatterNote", "OpposingParty", "ConflictCheck", "ConflictResult"],
+      "targetTables": ["clients", "client_contacts", "client_status_history", "leads", "matters", "matter_clients", "matter_staff_assignments", "matter_notes", "matter_note_revisions", "opposing_parties", "conflict_checks", "conflict_results"],
+      "script": "supabase/etl/sql/020_clients_matters.sql",
+      "idMapSet": "crm-matter-core",
+      "verificationProfile": "crm-matter-core"
+    },
+    {
+      "id": "etl-003",
+      "name": "Workflow",
+      "sourceTables": ["Task", "CalendarEvent", "Deadline", "Notification"],
+      "targetTables": ["tasks", "task_status_history", "calendar_events", "deadlines", "notifications"],
+      "script": "supabase/etl/sql/030_workflow.sql",
+      "idMapSet": "workflow-core",
+      "verificationProfile": "workflow-core"
+    },
+    {
+      "id": "etl-004",
+      "name": "Trust",
+      "sourceTables": ["TrustBankAccount", "ClientTrustLedger", "TrustPostingBatch", "TrustTransaction", "TrustJournalEntry", "TrustApproval*", "TrustMonthClose*", "TrustReconciliationSnapshot", "TrustReconciliationPacket", "TrustComplianceExport", "TrustOperationalAlert"],
+      "targetTables": ["trust_accounts", "trust_matter_ledgers", "trust_posting_batches", "trust_transactions", "trust_transaction_allocations", "trust_journal_entries", "trust_approval_requests", "trust_approval_decisions", "trust_month_closes", "trust_reconciliation_snapshots", "trust_reconciliation_packets", "trust_compliance_exports", "trust_operational_alerts"],
+      "script": "supabase/etl/sql/040_trust.sql",
+      "idMapSet": "trust-core",
+      "verificationProfile": "trust-core"
+    },
+    {
+      "id": "etl-005",
+      "name": "Billing",
+      "sourceTables": ["BillingRateCard", "BillingRateCardEntry", "MatterBillingPolicy", "TimeEntry", "Expense", "Invoice", "InvoiceLineItem", "InvoicePayorAllocation", "PaymentTransaction", "BillingPaymentAllocation", "PaymentPlan", "OutcomeFee*"],
+      "targetTables": ["billing_rate_cards", "billing_rate_card_entries", "matter_billing_policies", "time_entries", "expenses", "invoices", "invoice_line_items", "invoice_payor_allocations", "billing_payments", "billing_payment_allocations", "payment_plans", "outcome_fee_plans", "outcome_fee_plan_versions"],
+      "script": "supabase/etl/sql/050_billing.sql",
+      "idMapSet": "billing-core",
+      "verificationProfile": "billing-core"
+    },
+    {
+      "id": "etl-006",
+      "name": "Documents portal and communications",
+      "sourceTables": ["Document", "DocumentVersion", "DocumentShare", "DocumentComment", "DocumentContentIndex", "SignatureRequest", "SignatureAuditEntry", "ClientMessage", "EmailMessage", "OutboundEmail", "SmsMessage", "AppointmentRequest", "ClientTransparency*"],
+      "targetTables": ["documents", "document_versions", "document_shares", "document_comments", "document_content_indexes", "signature_requests", "signature_audit_entries", "client_portal_accounts", "client_messages", "email_messages", "outbound_emails", "sms_messages", "appointment_requests", "client_transparency_profiles", "client_transparency_snapshots", "client_transparency_timeline_items"],
+      "script": "supabase/etl/sql/060_documents_portal.sql",
+      "idMapSet": "documents-portal-core",
+      "verificationProfile": "documents-portal-core"
+    },
+    {
+      "id": "etl-007",
+      "name": "Integrations",
+      "sourceTables": ["IntegrationConnection", "IntegrationSecret", "IntegrationRun", "IntegrationEntityLink", "IntegrationMappingProfile", "IntegrationInboxEvent", "IntegrationOutboxEvent", "IntegrationReviewQueueItem", "IntegrationConflictQueueItem", "StripeWebhookEvent"],
+      "targetTables": ["integration_connections", "integration_secrets", "integration_runs", "integration_entity_links", "integration_mapping_profiles", "integration_inbox_events", "integration_outbox_events", "integration_review_queue_items", "integration_conflict_queue_items", "stripe_webhook_events"],
+      "script": "supabase/etl/sql/070_integrations.sql",
+      "idMapSet": "integration-core",
+      "verificationProfile": "integration-core"
+    }
+  ]
+}

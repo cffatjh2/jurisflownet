@@ -1,0 +1,116 @@
+{
+  "surfaces": [
+    {
+      "id": "health",
+      "surface": "platform",
+      "method": "GET",
+      "path": "/health",
+      "auth": "none",
+      "notes": "Liveness and readiness probe."
+    },
+    {
+      "id": "staff_login",
+      "surface": "auth",
+      "method": "POST",
+      "path": "/api/login",
+      "auth": "none",
+      "notes": "Requires tenant header and seeded staging staff account."
+    },
+    {
+      "id": "matters_list",
+      "surface": "matters",
+      "method": "GET",
+      "path": "/api/Matters?page=1&pageSize=10",
+      "auth": "staff",
+      "notes": "List matters and derive a matter id for note checks."
+    },
+    {
+      "id": "matter_notes_list",
+      "surface": "notes",
+      "method": "GET",
+      "path": "/api/matters/{matterId}/notes?page=1&pageSize=10",
+      "auth": "staff",
+      "notes": "Executed only when at least one matter id is available."
+    },
+    {
+      "id": "trust_accounts",
+      "surface": "trust",
+      "method": "GET",
+      "path": "/api/Trust/accounts?limit=5",
+      "auth": "staff",
+      "notes": "Trust read surface smoke probe."
+    },
+    {
+      "id": "invoices_list",
+      "surface": "billing",
+      "method": "GET",
+      "path": "/api/Invoices",
+      "auth": "staff",
+      "notes": "Billing read surface smoke probe."
+    },
+    {
+      "id": "documents_list",
+      "surface": "documents",
+      "method": "GET",
+      "path": "/api/Documents",
+      "auth": "staff",
+      "notes": "Documents read surface smoke probe."
+    },
+    {
+      "id": "integrations_contract",
+      "surface": "integrations",
+      "method": "GET",
+      "path": "/api/integrations/ops/contract",
+      "auth": "staff",
+      "notes": "Canonical contract probe."
+    },
+    {
+      "id": "integrations_capability_matrix",
+      "surface": "integrations",
+      "method": "GET",
+      "path": "/api/integrations/ops/capability-matrix",
+      "auth": "staff",
+      "notes": "Integration capability matrix smoke probe."
+    },
+    {
+      "id": "client_login",
+      "surface": "portal-auth",
+      "method": "POST",
+      "path": "/api/client/login",
+      "auth": "none",
+      "notes": "Requires tenant header and seeded client credentials."
+    },
+    {
+      "id": "client_profile",
+      "surface": "portal",
+      "method": "GET",
+      "path": "/api/client/profile",
+      "auth": "client",
+      "notes": "Portal identity probe."
+    },
+    {
+      "id": "client_matters",
+      "surface": "portal",
+      "method": "GET",
+      "path": "/api/client/matters",
+      "auth": "client",
+      "notes": "Portal matters probe."
+    },
+    {
+      "id": "client_invoices",
+      "surface": "portal-billing",
+      "method": "GET",
+      "path": "/api/client/invoices",
+      "auth": "client",
+      "notes": "Portal billing probe."
+    },
+    {
+      "id": "client_documents",
+      "surface": "portal-documents",
+      "method": "GET",
+      "path": "/api/client/documents",
+      "auth": "client",
+      "notes": "Portal documents probe."
+    }
+  ]
+}

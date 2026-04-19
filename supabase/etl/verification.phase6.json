@@ -1,0 +1,46 @@
+{
+  "profiles": [
+    {
+      "id": "identity-core",
+      "rowCountChecks": ["tenants", "firm_entities", "offices", "users", "staff_profiles"],
+      "orphanChecks": ["staff_profiles.user_id", "user_role_assignments.user_id", "auth_sessions.user_id"],
+      "sampleChecks": ["sample admin user role split", "tenant slug uniqueness"]
+    },
+    {
+      "id": "crm-matter-core",
+      "rowCountChecks": ["clients", "leads", "matters", "matter_clients", "matter_notes"],
+      "orphanChecks": ["matters.client_id", "matter_clients.client_id", "matter_notes.matter_id"],
+      "sampleChecks": ["sample matter responsible_user_id resolution", "sample note revision chain"]
+    },
+    {
+      "id": "workflow-core",
+      "rowCountChecks": ["tasks", "calendar_events", "deadlines", "notifications"],
+      "orphanChecks": ["tasks.assigned_user_id", "calendar_events.matter_id"],
+      "sampleChecks": ["sample task status history", "sample reminder carry-over"]
+    },
+    {
+      "id": "trust-core",
+      "rowCountChecks": ["trust_accounts", "trust_matter_ledgers", "trust_transactions", "trust_journal_entries"],
+      "orphanChecks": ["trust_transactions.trust_account_id", "trust_transaction_allocations.trust_matter_ledger_id"],
+      "sampleChecks": ["sample allocation expansion from json", "sample journal balance parity"]
+    },
+    {
+      "id": "billing-core",
+      "rowCountChecks": ["time_entries", "expenses", "invoices", "invoice_line_items", "billing_payments"],
+      "orphanChecks": ["invoices.client_id", "invoice_line_items.invoice_id", "billing_payment_allocations.invoice_id"],
+      "sampleChecks": ["sample invoice numbering dedupe", "sample payment allocation parity"]
+    },
+    {
+      "id": "documents-portal-core",
+      "rowCountChecks": ["documents", "document_versions", "client_portal_accounts", "client_messages"],
+      "orphanChecks": ["document_versions.document_id", "client_portal_accounts.client_id", "signature_requests.document_id"],
+      "sampleChecks": ["sample document version chain", "sample portal account split"]
+    },
+    {
+      "id": "integration-core",
+      "rowCountChecks": ["integration_connections", "integration_runs", "integration_outbox_events"],
+      "orphanChecks": ["integration_runs.connection_id", "integration_entity_links.connection_id"],
+      "sampleChecks": ["sample pending outbox replay candidate", "sample connection secret reference rewrite"]
+    }
+  ]
+}

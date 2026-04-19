@@ -34,15 +34,19 @@ The app normalizes the URI into an Npgsql connection string automatically.
 
 For Railway and similar IPv4-only platforms, prefer the Supabase `Session Pooler` connection instead of `Direct connection`.
 
-## Important Limitation
+## Migration Baseline Status
 
-PostgreSQL is currently bootstrapped with `EnsureCreated()` by default. That is intentional for now because the checked-in EF migrations were generated for SQLite.
+This repository now includes a dedicated `supabase/` workspace for PostgreSQL migration management.
 
-That means:
+Current operational stance:
 
-- use a **fresh** Supabase database when bootstrapping from this branch
-- do not point this at an existing production PostgreSQL schema that needs incremental EF migrations
-- if you want full PostgreSQL migration history later, create a PostgreSQL migration baseline before switching `Database__BootstrapMode` to `migrate`
+- `Database__BootstrapMode=ensure-created` is still acceptable only for fresh throwaway bootstraps
+- staging and production Supabase projects should move to `Database__BootstrapMode=migrate` after the remote baseline is captured
+- the PostgreSQL schema baseline must come from `supabase db pull`, not from replaying the existing SQLite-oriented EF migration chain
+
+For the step-by-step baseline and history alignment procedure, use:
+
+- [SUPABASE_PHASE2_BASELINE_RUNBOOK_TR.md](</C:/Users/cffat/OneDrive/Masaüstü/jurisflownet/documentation/SUPABASE_PHASE2_BASELINE_RUNBOOK_TR.md:1>)
 
 ## Storage Notes
 

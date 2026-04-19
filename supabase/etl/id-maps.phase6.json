@@ -1,0 +1,37 @@
+{
+  "mapTables": [
+    { "mapKey": "tenant", "sourceTable": "legacy_public.Tenant", "targetTable": "public.tenants", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "Slug" },
+    { "mapKey": "firm_entity", "sourceTable": "legacy_public.FirmEntity", "targetTable": "public.firm_entities", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Code" },
+    { "mapKey": "office", "sourceTable": "legacy_public.Office", "targetTable": "public.offices", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+FirmEntityId+Code" },
+    { "mapKey": "user", "sourceTable": "legacy_public.User", "targetTable": "public.users", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+NormalizedEmail" },
+    { "mapKey": "client", "sourceTable": "legacy_public.Client", "targetTable": "public.clients", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+NormalizedEmail" },
+    { "mapKey": "lead", "sourceTable": "legacy_public.Lead", "targetTable": "public.leads", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Email+CreatedAt" },
+    { "mapKey": "matter", "sourceTable": "legacy_public.Matter", "targetTable": "public.matters", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+CaseNumber" },
+    { "mapKey": "matter_note", "sourceTable": "legacy_public.MatterNote", "targetTable": "public.matter_notes", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+MatterId+CreatedAt" },
+    { "mapKey": "task", "sourceTable": "legacy_public.Task", "targetTable": "public.tasks", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Title+CreatedAt" },
+    { "mapKey": "calendar_event", "sourceTable": "legacy_public.CalendarEvent", "targetTable": "public.calendar_events", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Title+Date" },
+    { "mapKey": "trust_account", "sourceTable": "legacy_public.TrustBankAccount", "targetTable": "public.trust_accounts", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+BankName+MaskedNumber" },
+    { "mapKey": "trust_transaction", "sourceTable": "legacy_public.TrustTransaction", "targetTable": "public.trust_transactions", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+TrustAccountId+CreatedAt+Amount" },
+    { "mapKey": "invoice", "sourceTable": "legacy_public.Invoice", "targetTable": "public.invoices", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Number" },
+    { "mapKey": "document", "sourceTable": "legacy_public.Document", "targetTable": "public.documents", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+FilePath" },
+    { "mapKey": "integration_connection", "sourceTable": "legacy_public.IntegrationConnection", "targetTable": "public.integration_connections", "sourceIdColumn": "Id", "targetIdColumn": "id", "naturalKey": "TenantId+Provider+ProviderKey+ExternalAccountId" }
+  ],
+  "foreignKeyRewires": [
+    { "entity": "matters", "targetField": "client_id", "usesMapKey": "client" },
+    { "entity": "matters", "targetField": "responsible_user_id", "usesMapKey": "user" },
+    { "entity": "matter_clients", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "matter_clients", "targetField": "client_id", "usesMapKey": "client" },
+    { "entity": "matter_notes", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "tasks", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "tasks", "targetField": "assigned_user_id", "usesMapKey": "user" },
+    { "entity": "trust_matter_ledgers", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "trust_matter_ledgers", "targetField": "client_id", "usesMapKey": "client" },
+    { "entity": "trust_transactions", "targetField": "trust_account_id", "usesMapKey": "trust_account" },
+    { "entity": "trust_transactions", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "invoices", "targetField": "client_id", "usesMapKey": "client" },
+    { "entity": "invoices", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "documents", "targetField": "matter_id", "usesMapKey": "matter" },
+    { "entity": "client_portal_accounts", "targetField": "client_id", "usesMapKey": "client" },
+    { "entity": "integration_runs", "targetField": "connection_id", "usesMapKey": "integration_connection" }
+  ]
+}
