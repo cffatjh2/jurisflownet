@@ -34,7 +34,6 @@ namespace JurisFlow.Server.Contracts
         public string? RegisteredAgent { get; set; }
         public string? AuthorizedRepresentatives { get; set; }
         public string? Notes { get; set; }
-        public string? Password { get; set; }
     }
 
     public sealed class ClientReplaceRequest : RejectUnknownFieldsRequestBase
@@ -68,7 +67,6 @@ namespace JurisFlow.Server.Contracts
         public string? RegisteredAgent { get; set; }
         public string? AuthorizedRepresentatives { get; set; }
         public string? Notes { get; set; }
-        public string? Password { get; set; }
     }
 
     public sealed class ClientPatchRequest : RejectUnknownFieldsRequestBase
@@ -96,7 +94,6 @@ namespace JurisFlow.Server.Contracts
         public string? Notes { get; set; }
         public bool? PortalEnabled { get; set; }
         public string? StatusChangeNote { get; set; }
-        public string? Password { get; set; }
     }
 
     public sealed class ClientSetPortalPasswordRequest : RejectUnknownFieldsRequestBase
@@ -138,6 +135,15 @@ namespace JurisFlow.Server.Contracts
                 UpdatedAt = client.UpdatedAt
             };
         }
+    }
+
+    public sealed class ClientReadModelCollectionResponse
+    {
+        public IReadOnlyList<ClientListItemResponse> Items { get; set; } = Array.Empty<ClientListItemResponse>();
+        public int TotalCount { get; set; }
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public bool HasMore { get; set; }
     }
 
     public sealed class ClientDetailResponse

@@ -60,6 +60,7 @@ namespace JurisFlow.Server.Data
         public DbSet<TrustCloseForecastSnapshot> TrustCloseForecastSnapshots { get; set; }
         public DbSet<ReconciliationRecord> ReconciliationRecords { get; set; }
         public DbSet<Lead> Leads { get; set; }
+        public DbSet<LeadStatusHistory> LeadStatusHistories { get; set; }
         public DbSet<TimeEntry> TimeEntries { get; set; }
         public DbSet<Expense> Expenses { get; set; }
         public DbSet<OpposingParty> OpposingParties { get; set; }
@@ -178,6 +179,9 @@ namespace JurisFlow.Server.Data
                 (!RequireTenant || EF.Property<string>(m, "TenantId") == TenantId) &&
                 m.Status != "Deleted");
             var defaultFlagIndexFilter = Database.IsNpgsql() ? "\"IsDefault\" = TRUE" : "\"IsDefault\" = 1";
+            var activeLeadEmailIndexFilter = Database.IsNpgsql()
+                ? $"\"{nameof(Lead.NormalizedEmail)}\" IS NOT NULL AND NOT \"{nameof(Lead.IsArchived)}\""
+                : $"\"{nameof(Lead.NormalizedEmail)}\" IS NOT NULL AND \"{nameof(Lead.IsArchived)}\" = 0";
 
             modelBuilder.Entity<Tenant>()
                 .HasIndex(t => t.Slug)
@@ -221,7 +225,28 @@ namespace JurisFlow.Server.Data
             modelBuilder.Entity<CalendarEvent>()
                 .HasIndex("TenantId", nameof(CalendarEvent.MatterId), nameof(CalendarEvent.Date));
             modelBuilder.Entity<Lead>()
+                .HasIndex("TenantId", nameof(Lead.NormalizedEmail))
+                .IsUnique()
+                .HasFilter(activeLeadEmailIndexFilter);
+            modelBuilder.Entity<Lead>()
                 .HasIndex("TenantId", nameof(Lead.CreatedAt));
+            modelBuilder.Entity<Lead>()
+                .HasIndex("TenantId", nameof(Lead.Status), nameof(Lead.CreatedAt));
+            modelBuilder.Entity<IntakeForm>()
+                .HasIndex("TenantId", nameof(IntakeForm.Slug))
+                .IsUnique();
+            modelBuilder.Entity<IntakeForm>()
+                .HasIndex("TenantId", nameof(IntakeForm.CreatedAt));
+            modelBuilder.Entity<IntakeSubmission>()
+                .HasIndex("TenantId", nameof(IntakeSubmission.IntakeFormId), nameof(IntakeSubmission.CreatedAt));
+            modelBuilder.Entity<IntakeSubmission>()
+                .HasIndex("TenantId", nameof(IntakeSubmission.Status), nameof(IntakeSubmission.CreatedAt));
+            modelBuilder.Entity<ConflictCheck>()
+                .HasIndex("TenantId", nameof(ConflictCheck.CreatedAt));
+            modelBuilder.Entity<ConflictCheck>()
+                .HasIndex("TenantId", nameof(ConflictCheck.Status), nameof(ConflictCheck.CreatedAt));
+            modelBuilder.Entity<ConflictResult>()
+                .HasIndex("TenantId", nameof(ConflictResult.ConflictCheckId), nameof(ConflictResult.CreatedAt));
             modelBuilder.Entity<Document>()
                 .HasIndex("TenantId", nameof(Document.CreatedAt));
             modelBuilder.Entity<Document>()
@@ -946,6 +971,12 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<ClientStatusHistory>()
                 .HasIndex(h => new { h.ClientId, h.CreatedAt });
+            modelBuilder.Entity<LeadStatusHistory>()
+                .HasIndex(h => new { h.LeadId, h.CreatedAt });
+
+            modelBuilder.Entity<Lead>().HasQueryFilter(l =>
+                (!RequireTenant || EF.Property<string>(l, "TenantId") == TenantId) &&
+                !l.IsArchived);
 
             modelBuilder.Entity<Matter>()
                 .HasIndex(m => new { m.EntityId, m.OfficeId });
@@ -1187,6 +1218,25 @@ namespace JurisFlow.Server.Data
                     entry.Entity.NormalizedEmail = normalized;
                 }
             }
+
+            foreach (var entry in ChangeTracker.Entries<Lead>())
+            {
+                if (entry.State is not (EntityState.Added or EntityState.Modified))
+                {
+                    continue;
+                }
+
+                var normalized = EmailAddressNormalizer.Normalize(entry.Entity.Email);
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    entry.Entity.Email = entry.Entity.Email?.Trim();
+                    entry.Entity.NormalizedEmail = normalized;
+                    continue;
+                }
+
+                entry.Entity.Email = string.IsNullOrWhiteSpace(entry.Entity.Email) ? null : entry.Entity.Email.Trim();
+                entry.Entity.NormalizedEmail = null;
+            }
         }
 
         private void ApplyEncryption(ModelBuilder modelBuilder)
@@ -1230,6 +1280,57 @@ namespace JurisFlow.Server.Data
                 .HasConversion(converter);
             modelBuilder.Entity<Client>()
                 .Property(c => c.Notes)
+                .HasConversion(converter);
+            modelBuilder.Entity<Lead>()
+                .Property(l => l.Phone)
+                .HasConversion(converter);
+            modelBuilder.Entity<Lead>()
+                .Property(l => l.Notes)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.Description)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.FieldsJson)
+                .HasConversion(requiredConverter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.StyleJson)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.ThankYouMessage)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.RedirectUrl)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeForm>()
+                .Property(f => f.NotifyEmail)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeSubmission>()
+                .Property(s => s.DataJson)
+                .HasConversion(requiredConverter);
+            modelBuilder.Entity<IntakeSubmission>()
+                .Property(s => s.IpAddress)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeSubmission>()
+                .Property(s => s.UserAgent)
+                .HasConversion(converter);
+            modelBuilder.Entity<IntakeSubmission>()
+                .Property(s => s.ReviewNotes)
+                .HasConversion(converter);
+            modelBuilder.Entity<ConflictCheck>()
+                .Property(c => c.SearchQuery)
+                .HasConversion(requiredConverter);
+            modelBuilder.Entity<ConflictCheck>()
+                .Property(c => c.WaiverReason)
+                .HasConversion(converter);
+            modelBuilder.Entity<ConflictResult>()
+                .Property(r => r.MatchedEntityName)
+                .HasConversion(requiredConverter);
+            modelBuilder.Entity<ConflictResult>()
+                .Property(r => r.Details)
+                .HasConversion(converter);
+            modelBuilder.Entity<ConflictResult>()
+                .Property(r => r.RelatedMatterName)
                 .HasConversion(converter);
             modelBuilder.Entity<MatterNote>()
                 .Property(n => n.Title)
@@ -1780,6 +1881,12 @@ namespace JurisFlow.Server.Data
                 .HasConversion(requiredConverter);
 
             modelBuilder.Entity<ClientStatusHistory>()
+                .Property(h => h.Notes)
+                .HasConversion(converter);
+            modelBuilder.Entity<Lead>()
+                .Property(l => l.Notes)
+                .HasConversion(converter);
+            modelBuilder.Entity<LeadStatusHistory>()
                 .Property(h => h.Notes)
                 .HasConversion(converter);
 

@@ -16,26 +16,18 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class BootstrapController : ControllerBase
     {
-        private static readonly HashSet<string> ClientReaderRoles = new(StringComparer.Ordinal)
-        {
-            "Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager"
-        };
-
         private readonly JurisFlowDbContext _context;
-        private readonly IConfiguration _configuration;
         private readonly ILogger<BootstrapController> _logger;
         private readonly MatterAccessService _matterAccess;
         private readonly MatterClientLinkService _matterClientLinks;
 
         public BootstrapController(
             JurisFlowDbContext context,
-            IConfiguration configuration,
             ILogger<BootstrapController> logger,
             MatterAccessService matterAccess,
             MatterClientLinkService matterClientLinks)
         {
             _context = context;
-            _configuration = configuration;
             _logger = logger;
             _matterAccess = matterAccess;
             _matterClientLinks = matterClientLinks;
@@ -63,10 +55,11 @@ namespace JurisFlow.Server.Controllers
                 var totalStopwatch = Stopwatch.StartNew();
                 var response = new BootstrapResponse();
                 var isPrivileged = _matterAccess.IsPrivileged(User);
-                var readableMattersQuery = _matterAccess.ApplyReadableScope(_context.Matters.AsNoTracking(), User);
+                var scopedMatters = TenantScope(_context.Matters.AsNoTracking());
+                var readableMattersQuery = _matterAccess.ApplyReadableScope(scopedMatters, User);
                 var billingReadableMattersQuery = isPrivileged
                     ? readableMattersQuery
-                    : _matterAccess.ApplyBillingReadableScope(_context.Matters.AsNoTracking(), User);
+                    : _matterAccess.ApplyBillingReadableScope(scopedMatters, User);
                 var readableMatterIdsQuery = readableMattersQuery.Select(m => m.Id);
                 var billingReadableMatterIdsQuery = billingReadableMattersQuery.Select(m => m.Id);
                 List<Matter> readableMatters = new();
@@ -85,11 +78,11 @@ namespace JurisFlow.Server.Controllers
                     var tasksQuery = _context.Tasks.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        tasksQuery = tasksQuery.Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId));
+                        tasksQuery = TenantScope(tasksQuery).Where(t => t.MatterId == null || t.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == t.MatterId));
                     }
                     else
                     {
-                        tasksQuery = tasksQuery.Where(t => !string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIdsQuery.Contains(t.MatterId!));
+                        tasksQuery = TenantScope(tasksQuery).Where(t => !string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIdsQuery.Contains(t.MatterId!));
                     }
 
                     response.Tasks = await tasksQuery
@@ -115,11 +108,11 @@ namespace JurisFlow.Server.Controllers
                     var timeEntriesQuery = _context.TimeEntries.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        timeEntriesQuery = timeEntriesQuery.Where(t => t.MatterId == null || t.MatterId == "" || _context.Matters.Any(m => m.Id == t.MatterId));
+                        timeEntriesQuery = TenantScope(timeEntriesQuery).Where(t => t.MatterId == null || t.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == t.MatterId));
                     }
                     else
                     {
-                        timeEntriesQuery = timeEntriesQuery.Where(t =>
+                        timeEntriesQuery = TenantScope(timeEntriesQuery).Where(t =>
                             (!string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIdsQuery.Contains(t.MatterId!)) ||
                             ((t.MatterId == null || t.MatterId == "") && t.SubmittedBy == userId));
                     }
@@ -131,19 +124,18 @@ namespace JurisFlow.Server.Controllers
                     var eventsQuery = _context.CalendarEvents.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        eventsQuery = eventsQuery.Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId));
+                        eventsQuery = TenantScope(eventsQuery).Where(e => e.MatterId == null || e.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == e.MatterId));
                     }
                     else
                     {
-                        eventsQuery = eventsQuery.Where(e => !string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIdsQuery.Contains(e.MatterId!));
+                        eventsQuery = TenantScope(eventsQuery).Where(e => !string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIdsQuery.Contains(e.MatterId!));
                     }
 
                     response.Events = await eventsQuery
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
-                    response.Notifications = await _context.Notifications
-                        .AsNoTracking()
+                    response.Notifications = await TenantScope(_context.Notifications.AsNoTracking())
                         .Where(n => n.UserId == userId)
                         .OrderByDescending(n => n.CreatedAt)
                         .Take(100)
@@ -172,11 +164,11 @@ namespace JurisFlow.Server.Controllers
                     var expensesQuery = _context.Expenses.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        expensesQuery = expensesQuery.Where(e => e.MatterId == null || e.MatterId == "" || _context.Matters.Any(m => m.Id == e.MatterId));
+                        expensesQuery = TenantScope(expensesQuery).Where(e => e.MatterId == null || e.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == e.MatterId));
                     }
                     else
                     {
-                        expensesQuery = expensesQuery.Where(e =>
+                        expensesQuery = TenantScope(expensesQuery).Where(e =>
                             (!string.IsNullOrWhiteSpace(e.MatterId) && readableMatterIdsQuery.Contains(e.MatterId!)) ||
                             ((e.MatterId == null || e.MatterId == "") && e.SubmittedBy == userId));
                     }
@@ -185,19 +177,14 @@ namespace JurisFlow.Server.Controllers
                         .OrderByDescending(e => e.Date)
                         .ToListAsync();
 
-                    response.Leads = await _context.Leads
-                        .AsNoTracking()
-                        .OrderByDescending(l => l.CreatedAt)
-                        .ToListAsync();
-
                     var invoicesQuery = _context.Invoices.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        invoicesQuery = invoicesQuery.Where(i => i.MatterId == null || i.MatterId == "" || _context.Matters.Any(m => m.Id == i.MatterId));
+                        invoicesQuery = TenantScope(invoicesQuery).Where(i => i.MatterId == null || i.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == i.MatterId));
                     }
                     else
                     {
-                        invoicesQuery = invoicesQuery.Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && billingReadableMatterIdsQuery.Contains(i.MatterId!));
+                        invoicesQuery = TenantScope(invoicesQuery).Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && billingReadableMatterIdsQuery.Contains(i.MatterId!));
                     }
 
                     var invoices = await invoicesQuery
@@ -220,11 +207,11 @@ namespace JurisFlow.Server.Controllers
                     var documentsQuery = _context.Documents.AsNoTracking().AsQueryable();
                     if (isPrivileged)
                     {
-                        documentsQuery = documentsQuery.Where(d => d.MatterId == null || d.MatterId == "" || _context.Matters.Any(m => m.Id == d.MatterId));
+                        documentsQuery = TenantScope(documentsQuery).Where(d => d.MatterId == null || d.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == d.MatterId));
                     }
                     else
                     {
-                        documentsQuery = documentsQuery.Where(d =>
+                        documentsQuery = TenantScope(documentsQuery).Where(d =>
                             (!string.IsNullOrWhiteSpace(d.MatterId) && readableMatterIdsQuery.Contains(d.MatterId!)) ||
                             ((d.MatterId == null || d.MatterId == "") && d.UploadedBy == userId));
                     }
@@ -253,39 +240,6 @@ namespace JurisFlow.Server.Controllers
                         })
                         .ToListAsync();
 
-                    if (CanReadClients())
-                    {
-                        var clientsQuery = _context.Clients.AsNoTracking().AsQueryable();
-                        if (ShouldHideSeedClient())
-                        {
-                            var seedClientEmail = EmailAddressNormalizer.Normalize(GetSeedClientEmail());
-                            clientsQuery = clientsQuery.Where(c => c.NormalizedEmail != seedClientEmail);
-                        }
-
-                        response.Clients = await clientsQuery
-                            .OrderByDescending(c => c.CreatedAt)
-                            .Select(c => new
-                            {
-                                c.Id,
-                                c.ClientNumber,
-                                c.Name,
-                                c.Email,
-                                c.Phone,
-                                c.Mobile,
-                                c.Company,
-                                c.Type,
-                                c.Status,
-                                c.PortalEnabled,
-                                c.CreatedAt,
-                                c.UpdatedAt
-                            })
-                            .ToListAsync();
-                    }
-                    else
-                    {
-                        response.Clients = Array.Empty<object>();
-                    }
-
                     response.TaskTemplates = Array.Empty<object>();
                     _logger.LogInformation("Bootstrap deferred scope loaded in {ElapsedMs} ms for user {UserId}", deferredStopwatch.ElapsedMilliseconds, userId);
                 }
@@ -311,35 +265,20 @@ namespace JurisFlow.Server.Controllers
                 || normalizedScope == "full";
         }
 
-        private bool CanReadClients()
+        private IQueryable<TEntity> TenantScope<TEntity>(IQueryable<TEntity> query) where TEntity : class
         {
-            foreach (var role in ClientReaderRoles)
+            if (!_context.RequireTenant)
             {
-                if (User.IsInRole(role))
-                {
-                    return true;
-                }
+                return query;
             }
 
-            return false;
-        }
-
-        private bool ShouldHideSeedClient()
-        {
-            var explicitHide = _configuration.GetValue<bool?>("Seed:HidePortalClient");
-            if (explicitHide.HasValue)
+            if (string.IsNullOrWhiteSpace(_context.TenantId))
             {
-                return explicitHide.Value;
+                throw new InvalidOperationException("Tenant context is required.");
             }
 
-            return !_configuration.GetValue("Seed:PortalClientEnabled", false);
+            return query.Where(entity => EF.Property<string>(entity, "TenantId") == _context.TenantId);
         }
-
-        private string GetSeedClientEmail()
-        {
-            return _configuration["Seed:PortalClientEmail"] ?? "client.demo@jurisflow.local";
-        }
-
         private string? GetUserId()
         {
             return User.FindFirst(ClaimTypes.NameIdentifier)?.Value

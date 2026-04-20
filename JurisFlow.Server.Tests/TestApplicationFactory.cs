@@ -23,6 +23,8 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
 {
     public const string TestTenantId = "tenant-test-1";
     public const string TestTenantSlug = "test-firm";
+    public const string SecondaryTenantId = "tenant-test-2";
+    public const string SecondaryTenantSlug = "other-firm";
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -37,7 +39,8 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
                 ["Jwt:Issuer"] = "JurisFlowServer",
                 ["Jwt:Audience"] = "JurisFlowClient",
                 ["Security:DisableSessionValidation"] = "true",
-                ["Seed:Enabled"] = "false"
+                ["Seed:Enabled"] = "false",
+                ["Intake:AutoCreateLeadOnPublicSubmit"] = "true"
             };
             config.AddInMemoryCollection(settings);
         });
@@ -91,8 +94,20 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
                     Slug = TestTenantSlug,
                     IsActive = true
                 });
-                db.SaveChanges();
             }
+
+            if (!db.Tenants.Any(t => t.Id == SecondaryTenantId))
+            {
+                db.Tenants.Add(new Tenant
+                {
+                    Id = SecondaryTenantId,
+                    Name = "Other Firm",
+                    Slug = SecondaryTenantSlug,
+                    IsActive = true
+                });
+            }
+
+            db.SaveChanges();
         });
     }
 

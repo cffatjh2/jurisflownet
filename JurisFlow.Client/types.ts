@@ -113,14 +113,12 @@ export enum MatterPhase {
 
 // Lead Pipeline Status (8-Stage Funnel)
 export enum LeadStatus {
-  NewInquiry = 'New Inquiry',
-  InitialContact = 'Initial Contact',
-  Qualified = 'Qualified',
-  ConsultationScheduled = 'Consultation Scheduled',
-  ConsultationCompleted = 'Consultation Completed',
-  ProposalSent = 'Proposal Sent',
+  New = 'New',
+  Contacted = 'Contacted',
+  Scheduled = 'Scheduled',
+  Consulted = 'Consulted',
+  Proposal = 'Proposal',
   Retained = 'Retained',
-  Declined = 'Declined',
   Lost = 'Lost'
 }
 
@@ -435,15 +433,30 @@ export interface Client {
   updatedAt?: string;
 }
 
+export interface PaginatedResult<T> {
+  items: T[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export interface Lead {
   id: string;
   name: string;
   email?: string;
   phone?: string;
   source: string;
-  status: 'New' | 'Contacted' | 'Consultation' | 'Retained' | 'Lost';
+  status: LeadStatus;
   estimatedValue: number;
-  practiceArea: PracticeArea;
+  practiceArea?: PracticeArea | string;
+  notes?: string;
+  createdBySource?: string;
+  isArchived?: boolean;
+  archivedAt?: string;
+  archivedByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface OpposingParty {

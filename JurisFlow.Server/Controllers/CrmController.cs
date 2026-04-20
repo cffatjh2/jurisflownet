@@ -33,11 +33,11 @@ namespace JurisFlow.Server.Controllers
         /// Searches across Clients, Leads, and Matters to identify potential conflicts
         /// </summary>
         [EnableRateLimiting("CrmConflictSearch")]
-        [HttpGet("conflict-check")]
-        public async Task<ActionResult<IEnumerable<ConflictCheckResult>>> ConflictCheck([FromQuery] string q)
+        [HttpPost("conflict-check")]
+        public async Task<ActionResult<IEnumerable<ConflictCheckResult>>> ConflictCheck([FromBody] CrmConflictCheckRequest request)
         {
             var tenantId = RequireTenantId();
-            var normalizedQuery = NormalizeQuery(q);
+            var normalizedQuery = NormalizeQuery(request.SearchQuery);
             if (string.IsNullOrWhiteSpace(normalizedQuery) || normalizedQuery.Length < 3)
             {
                 return BadRequest(new { message = "Search query must be at least 3 characters" });
@@ -249,6 +249,11 @@ namespace JurisFlow.Server.Controllers
         public string Status { get; set; } = string.Empty;
         public string RiskLevel { get; set; } = "low"; // high, medium, low
         public string? ConflictReason { get; set; }
+    }
+
+    public sealed class CrmConflictCheckRequest
+    {
+        public string SearchQuery { get; set; } = string.Empty;
     }
 }
 

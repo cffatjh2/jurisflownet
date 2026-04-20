@@ -67,6 +67,8 @@ var clientMessagingSendPermitLimit = Math.Clamp(builder.Configuration.GetValue("
 var clientMessagingSendWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientMessagingSend:WindowSeconds", 60), 1, 3600);
 var crmConflictSearchPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:PermitLimit", 20), 1, 200);
 var crmConflictSearchWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:WindowSeconds", 60), 1, 3600);
+var publicIntakeSubmitPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:PublicIntakeSubmit:PermitLimit", 5), 1, 100);
+var publicIntakeSubmitWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:PublicIntakeSubmit:WindowSeconds", 300), 1, 3600);
 var adminDangerousOpsPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:PermitLimit", 3), 1, 50);
 var adminDangerousOpsWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:WindowSeconds", 300), 1, 3600);
 var defaultMatterMutationPermitLimit = builder.Environment.IsDevelopment() ? 300 : 30;
@@ -217,6 +219,18 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = crmConflictSearchPermitLimit,
                 Window = TimeSpan.FromSeconds(crmConflictSearchWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("PublicIntakeSubmit", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "public-intake-submit"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = publicIntakeSubmitPermitLimit,
+                Window = TimeSpan.FromSeconds(publicIntakeSubmitWindowSeconds),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 0,
                 AutoReplenishment = true
@@ -515,10 +529,9 @@ app.UseSerilogRequestLogging();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
 app.UseCors(CorsPolicyName);
-app.UseRateLimiter();
-
 app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
+app.UseRateLimiter();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseAuthorization();
 
@@ -942,16 +955,10 @@ static string BuildRateLimitPartitionKey(HttpContext context, string policyName,
     var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                  ?? context.User.FindFirst("sub")?.Value;
-    var tenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-    var tenantSlug = context.Request.Headers["X-Tenant-Slug"].FirstOrDefault()
-                     ?? context.Request.Query["tenantSlug"].FirstOrDefault()
-                     ?? context.Request.Query["tenant"].FirstOrDefault();
-
-    var tenant = !string.IsNullOrWhiteSpace(tenantId)
-        ? tenantId
-        : !string.IsNullOrWhiteSpace(tenantSlug)
-            ? tenantSlug
-            : "no-tenant";
+    var tenantContext = context.RequestServices.GetService<TenantContext>();
+    var tenant = !string.IsNullOrWhiteSpace(tenantContext?.TenantId)
+        ? tenantContext.TenantId!
+        : "no-tenant";
 
     var actor = !string.IsNullOrWhiteSpace(userId)
         ? $"user:{userId}"

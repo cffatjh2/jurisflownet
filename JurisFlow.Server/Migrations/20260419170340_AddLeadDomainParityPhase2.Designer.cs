@@ -3,6 +3,7 @@ using System;
 using JurisFlow.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace JurisFlow.Server.Migrations
 {
     [DbContext(typeof(JurisFlowDbContext))]
-    partial class JurisFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260419170340_AddLeadDomainParityPhase2")]
+    partial class AddLeadDomainParityPhase2
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.2");
@@ -2641,22 +2644,18 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CheckType")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CheckedBy")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("EntityId")
-                        .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("EntityType")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("MatchCount")
@@ -2664,12 +2663,10 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("SearchQuery")
                         .IsRequired()
-                        .HasMaxLength(120)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TenantId")
@@ -2680,7 +2677,6 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("WaivedBy")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("WaiverReason")
@@ -2689,10 +2685,6 @@ namespace JurisFlow.Server.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "CreatedAt");
-
-                    b.HasIndex("TenantId", "Status", "CreatedAt");
 
                     b.ToTable("ConflictChecks");
                 });
@@ -2704,7 +2696,6 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("ConflictCheckId")
                         .IsRequired()
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -2718,35 +2709,28 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("MatchType")
                         .IsRequired()
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("MatchedEntityId")
                         .IsRequired()
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("MatchedEntityName")
                         .IsRequired()
-                        .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("MatchedEntityType")
                         .IsRequired()
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RelatedMatterId")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RelatedMatterName")
-                        .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RiskLevel")
                         .IsRequired()
-                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TenantId")
@@ -2756,8 +2740,6 @@ namespace JurisFlow.Server.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "ConflictCheckId", "CreatedAt");
 
                     b.ToTable("ConflictResults");
                 });
@@ -3952,15 +3934,12 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("NotifyEmail")
-                        .HasMaxLength(320)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("PracticeArea")
-                        .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RedirectUrl")
@@ -3968,7 +3947,6 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("Slug")
                         .IsRequired()
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("StyleJson")
@@ -3991,11 +3969,6 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.HasIndex("TenantId", "CreatedAt");
-
-                    b.HasIndex("TenantId", "Slug")
-                        .IsUnique();
-
                     b.ToTable("IntakeForms");
                 });
 
@@ -4005,7 +3978,6 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ClientId")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -4020,11 +3992,9 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("IpAddress")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("LeadId")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ReviewNotes")
@@ -4034,12 +4004,10 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ReviewedBy")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TenantId")
@@ -4047,16 +4015,11 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("UserAgent")
-                        .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "IntakeFormId", "CreatedAt");
-
-                    b.HasIndex("TenantId", "Status", "CreatedAt");
 
                     b.ToTable("IntakeSubmissions");
                 });
@@ -5807,9 +5770,7 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId", "CreatedAt");
 
-                    b.HasIndex("TenantId", "NormalizedEmail")
-                        .IsUnique()
-                        .HasFilter("\"NormalizedEmail\" IS NOT NULL AND \"IsArchived\" = 0");
+                    b.HasIndex("TenantId", "NormalizedEmail");
 
                     b.HasIndex("TenantId", "Status", "CreatedAt");
 

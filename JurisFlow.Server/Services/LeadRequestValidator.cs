@@ -8,7 +8,9 @@ namespace JurisFlow.Server.Services
         {
             "New",
             "Contacted",
-            "Consultation",
+            "Scheduled",
+            "Consulted",
+            "Proposal",
             "Retained",
             "Lost"
         };
@@ -26,6 +28,7 @@ namespace JurisFlow.Server.Services
             {
                 Name = name,
                 Email = NormalizeOptional(request.Email, 320),
+                NormalizedEmail = NormalizeEmail(request.Email),
                 Phone = NormalizeOptional(request.Phone, 64),
                 Source = NormalizeOptional(request.Source, 128) ?? "Referral",
                 EstimatedValue = request.EstimatedValue,
@@ -47,10 +50,12 @@ namespace JurisFlow.Server.Services
             {
                 Name = NormalizeOptional(request.Name, 256),
                 Email = NormalizeOptional(request.Email, 320),
+                NormalizedEmail = request.Email == null ? null : NormalizeEmail(request.Email),
                 Phone = NormalizeOptional(request.Phone, 64),
                 Source = NormalizeOptional(request.Source, 128),
                 EstimatedValue = request.EstimatedValue,
                 Status = normalizedStatus,
+                StatusChangeNote = NormalizeOptional(request.StatusChangeNote, 512),
                 PracticeArea = NormalizeOptional(request.PracticeArea, 128),
                 Notes = NormalizeOptional(request.Notes, 4000)
             });
@@ -72,12 +77,19 @@ namespace JurisFlow.Server.Services
             var candidate = string.IsNullOrWhiteSpace(status) ? "New" : status.Trim();
             return AllowedLeadStatuses.FirstOrDefault(s => string.Equals(s, candidate, StringComparison.OrdinalIgnoreCase));
         }
+
+        private static string? NormalizeEmail(string? email)
+        {
+            var normalized = EmailAddressNormalizer.Normalize(email);
+            return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+        }
     }
 
     public sealed class LeadWriteModel
     {
         public string Name { get; init; } = string.Empty;
         public string? Email { get; init; }
+        public string? NormalizedEmail { get; init; }
         public string? Phone { get; init; }
         public string Source { get; init; } = "Referral";
         public decimal EstimatedValue { get; init; }
@@ -90,10 +102,12 @@ namespace JurisFlow.Server.Services
     {
         public string? Name { get; init; }
         public string? Email { get; init; }
+        public string? NormalizedEmail { get; init; }
         public string? Phone { get; init; }
         public string? Source { get; init; }
         public decimal? EstimatedValue { get; init; }
         public string? Status { get; init; }
+        public string? StatusChangeNote { get; init; }
         public string? PracticeArea { get; init; }
         public string? Notes { get; init; }
     }

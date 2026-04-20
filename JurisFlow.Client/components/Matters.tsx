@@ -273,7 +273,7 @@ const MatterAnalysisSection: React.FC<MatterAnalysisSectionProps> = ({
 const Matters: React.FC = () => {
   const matterSecondaryClientsEnabled = false;
   const { t, formatCurrency, formatDate } = useTranslation();
-  const { matters, clients, leads, addMatter, updateMatter, deleteMatter, addClient, timeEntries, documents, messages, tasks } = useData();
+  const { matters, clients, leads, addMatter, updateMatter, deleteMatter, addClient, setClientPortalPassword, timeEntries, documents, messages, tasks } = useData();
   const [showModal, setShowModal] = useState(false);
   const [selectedMatter, setSelectedMatter] = useState<Matter | null>(null);
   const [showDocs, setShowDocs] = useState(false);
@@ -1118,14 +1118,11 @@ const Matters: React.FC = () => {
         }
       }
 
-      const payload = trimmedPassword
-        ? { ...newClientData, password: trimmedPassword }
-        : (() => {
-            const { password, ...rest } = newClientData;
-            return rest;
-          })();
-
+      const { password, ...payload } = newClientData;
       const newClient = await addClient(payload);
+      if (trimmedPassword) {
+        await setClientPortalPassword(newClient.id, trimmedPassword);
+      }
       latestCreatedClientRef.current = newClient;
       setSelectedPartyName(newClient.name);
       setFormData(prev => ({
@@ -3142,7 +3139,7 @@ const Matters: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Portal Password</label>
                 <input type="password" name="client-portal-password" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm" placeholder="Optional: leave blank to keep portal access disabled" value={newClientData.password} onChange={e => setNewClientData(prev => ({ ...prev, password: e.target.value }))} />
-                <p className="mt-1 text-xs text-gray-500">Optional. If you set one, {passwordRequirementsText.toLowerCase()}</p>
+                <p className="mt-1 text-xs text-gray-500">Optional. If you set one, {passwordRequirementsText.toLowerCase()} The password is applied through the dedicated portal credential endpoint after the client is created.</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

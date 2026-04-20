@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using System.ComponentModel.DataAnnotations;
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Task = System.Threading.Tasks.Task;
@@ -41,6 +43,11 @@ namespace JurisFlow.Server.Controllers
         };
 
         private static readonly EmailAddressAttribute EmailValidator = new();
+        private const int MaxPublicSubmissionJsonChars = 32_768;
+        private const int MaxSlugLength = 64;
+        private const int MaxUserAgentSummaryLength = 256;
+        private static readonly Regex SlugInvalidCharacterRegex = new("[^a-z0-9-]+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex SlugSeparatorRegex = new("-{2,}", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private readonly JurisFlowDbContext _context;
         private readonly OutboundEmailService _outboundEmailService;
@@ -65,7 +72,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("forms")]
         public async Task<ActionResult<IEnumerable<IntakeForm>>> GetForms([FromQuery] bool activeOnly = true)
         {
-            var query = _context.IntakeForms.AsQueryable();
+            var query = TenantScope(_context.IntakeForms.AsQueryable());
 
             if (activeOnly)
             {
@@ -80,7 +87,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("forms/{id}")]
         public async Task<ActionResult<IntakeForm>> GetForm(string id)
         {
-            var form = await _context.IntakeForms.FindAsync(id);
+            var form = await FindIntakeFormAsync(id);
             if (form == null)
             {
                 return NotFound();
@@ -93,16 +100,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("forms")]
         public async Task<ActionResult<IntakeForm>> CreateForm([FromBody] CreateIntakeFormDto dto)
         {
-            // Generate unique slug
-            var baseSlug = GenerateSlug(dto.Name);
-            var slug = baseSlug;
-            var counter = 1;
-
-            while (await _context.IntakeForms.AnyAsync(f => f.Slug == slug))
-            {
-                slug = $"{baseSlug}-{counter}";
-                counter++;
-            }
+            var slug = await BuildUniqueSlugAsync(dto.Name);
 
             var form = new IntakeForm
             {
@@ -130,7 +128,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPut("forms/{id}")]
         public async Task<IActionResult> UpdateForm(string id, [FromBody] UpdateIntakeFormDto dto)
         {
-            var form = await _context.IntakeForms.FindAsync(id);
+            var form = await FindIntakeFormAsync(id);
             if (form == null)
             {
                 return NotFound();
@@ -159,7 +157,7 @@ namespace JurisFlow.Server.Controllers
         [HttpDelete("forms/{id}")]
         public async Task<IActionResult> DeleteForm(string id)
         {
-            var form = await _context.IntakeForms.FindAsync(id);
+            var form = await FindIntakeFormAsync(id);
             if (form == null)
             {
                 return NotFound();
@@ -181,7 +179,7 @@ namespace JurisFlow.Server.Controllers
         [AllowAnonymous]
         public async Task<ActionResult<IntakeForm>> GetPublicForm(string slug)
         {
-            var form = await _context.IntakeForms
+            var form = await TenantScope(_context.IntakeForms)
                 .FirstOrDefaultAsync(f => f.Slug == slug && f.IsActive && f.IsPublic);
 
             if (form == null)
@@ -204,9 +202,10 @@ namespace JurisFlow.Server.Controllers
         // POST: api/intake/public/{slug}/submit
         [HttpPost("public/{slug}/submit")]
         [AllowAnonymous]
+        [EnableRateLimiting("PublicIntakeSubmit")]
         public async Task<IActionResult> SubmitForm(string slug, [FromBody] SubmitFormDto dto)
         {
-            var form = await _context.IntakeForms
+            var form = await TenantScope(_context.IntakeForms)
                 .FirstOrDefaultAsync(f => f.Slug == slug && f.IsActive && f.IsPublic);
 
             if (form == null)
@@ -219,8 +218,8 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = validationError });
             }
 
-            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
-            var userAgent = Request.Headers["User-Agent"].FirstOrDefault();
+            var ipAddress = MinimizeIpAddress(HttpContext.Connection.RemoteIpAddress?.ToString());
+            var userAgent = SummarizeUserAgent(Request.Headers["User-Agent"].FirstOrDefault());
 
             var submission = new IntakeSubmission
             {
@@ -238,7 +237,7 @@ namespace JurisFlow.Server.Controllers
 
             await _context.SaveChangesAsync();
 
-            await QueueSubmissionNotificationAsync(form, submission, ipAddress, userAgent);
+            await QueueSubmissionNotificationAsync(form, submission);
             await AutoCreateLeadIfConfiguredAsync(form, submission);
 
             return Ok(new
@@ -258,7 +257,7 @@ namespace JurisFlow.Server.Controllers
             [FromQuery] string? status = null,
             [FromQuery] int limit = 50)
         {
-            var query = _context.IntakeSubmissions.AsQueryable();
+            var query = TenantScope(_context.IntakeSubmissions.AsQueryable());
 
             if (!string.IsNullOrEmpty(formId))
             {
@@ -282,7 +281,7 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("submissions/{id}")]
         public async Task<ActionResult<IntakeSubmission>> GetSubmission(string id)
         {
-            var submission = await _context.IntakeSubmissions.FindAsync(id);
+            var submission = await FindIntakeSubmissionAsync(id);
             if (submission == null)
             {
                 return NotFound();
@@ -295,7 +294,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("submissions/{id}/review")]
         public async Task<IActionResult> ReviewSubmission(string id, [FromBody] ReviewSubmissionDto dto)
         {
-            var submission = await _context.IntakeSubmissions.FindAsync(id);
+            var submission = await FindIntakeSubmissionAsync(id);
             if (submission == null)
             {
                 return NotFound();
@@ -317,7 +316,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("submissions/{id}/convert-to-lead")]
         public async Task<IActionResult> ConvertToLead(string id)
         {
-            var submission = await _context.IntakeSubmissions.FindAsync(id);
+            var submission = await FindIntakeSubmissionAsync(id);
             if (submission == null)
             {
                 return NotFound();
@@ -325,28 +324,34 @@ namespace JurisFlow.Server.Controllers
 
             try
             {
-                // Parse submission data
-                var data = JsonSerializer.Deserialize<Dictionary<string, object>>(submission.DataJson);
+                var data = DeserializeSubmissionPayload(submission.DataJson);
+                var form = await FindIntakeFormAsync(submission.IntakeFormId);
+                var email = GetSubmissionValue(data, "email");
 
                 // Create lead from submission
                 var lead = new Lead
                 {
-                    Name = data?.GetValueOrDefault("name")?.ToString() ?? data?.GetValueOrDefault("fullName")?.ToString() ?? "Unknown",
-                    Email = data?.GetValueOrDefault("email")?.ToString(),
-                    Phone = data?.GetValueOrDefault("phone")?.ToString(),
-                    Source = "Intake Form",
+                    Id = Guid.NewGuid().ToString(),
+                    Name = GetSubmissionValue(data, "name", "fullName", "clientName") ?? "Unknown",
+                    Email = email,
+                    NormalizedEmail = EmailAddressNormalizer.Normalize(email),
+                    Phone = GetSubmissionValue(data, "phone", "mobile"),
+                    Source = form == null ? "Intake Form" : $"Intake:{form.Slug}",
+                    CreatedBySource = "Intake",
                     Status = "New",
-                    Notes = $"Submitted via intake form. Original data: {submission.DataJson}"
+                    Notes = BuildLeadNotes(form, submission, data),
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
                 };
 
                 // Try to get practice area from form
-                var form = await _context.IntakeForms.FindAsync(submission.IntakeFormId);
                 if (form != null)
                 {
                     lead.PracticeArea = form.PracticeArea;
                 }
 
                 _context.Leads.Add(lead);
+                AddLeadStatusHistory(lead.Id, "New", lead.Status, "Created from intake submission conversion.");
 
                 submission.LeadId = lead.Id;
                 submission.Status = "Converted";
@@ -365,7 +370,7 @@ namespace JurisFlow.Server.Controllers
         [HttpDelete("submissions/{id}")]
         public async Task<IActionResult> DeleteSubmission(string id)
         {
-            var submission = await _context.IntakeSubmissions.FindAsync(id);
+            var submission = await FindIntakeSubmissionAsync(id);
             if (submission == null)
             {
                 return NotFound();
@@ -379,20 +384,147 @@ namespace JurisFlow.Server.Controllers
 
         // ========== HELPERS ==========
 
-        private string GenerateSlug(string name)
+        private IQueryable<TEntity> TenantScope<TEntity>(IQueryable<TEntity> query) where TEntity : class
         {
-            return name
-                .ToLowerInvariant()
-                .Replace(" ", "-")
-                .Replace("'", "")
-                .Replace("\"", "")
-                .Replace(".", "")
-                .Replace(",", "");
+            if (!_context.RequireTenant)
+            {
+                return query;
+            }
+
+            if (string.IsNullOrWhiteSpace(_context.TenantId))
+            {
+                throw new InvalidOperationException("Tenant context is required.");
+            }
+
+            return query.Where(entity => EF.Property<string>(entity, "TenantId") == _context.TenantId);
+        }
+
+        private Task<IntakeForm?> FindIntakeFormAsync(string id)
+        {
+            return TenantScope(_context.IntakeForms).FirstOrDefaultAsync(form => form.Id == id);
+        }
+
+        private Task<IntakeSubmission?> FindIntakeSubmissionAsync(string id)
+        {
+            return TenantScope(_context.IntakeSubmissions).FirstOrDefaultAsync(submission => submission.Id == id);
+        }
+
+        private Dictionary<string, JsonElement> DeserializeSubmissionPayload(string dataJson)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(dataJson, IntakeJsonOptions)
+                    ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Submission payload is invalid JSON.");
+                return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private static string BuildLeadNotes(IntakeForm? form, IntakeSubmission submission, IReadOnlyDictionary<string, JsonElement> payload)
+        {
+            var formName = string.IsNullOrWhiteSpace(form?.Name) ? "Intake Form" : form!.Name;
+            var summary = BuildSubmissionSummary(payload, maxFields: 5);
+            return $"Submitted via {formName} on {submission.CreatedAt:yyyy-MM-dd HH:mm:ss} UTC. Submission ID: {submission.Id}.{Environment.NewLine}Summary:{Environment.NewLine}{summary}";
+        }
+
+        private static string BuildSubmissionSummary(IReadOnlyDictionary<string, JsonElement> payload, int maxFields = 8)
+        {
+            var lines = payload
+                .Select(entry => new
+                {
+                    entry.Key,
+                    Value = SummarizeSubmissionValue(entry.Value)
+                })
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Value))
+                .Take(maxFields)
+                .Select(entry => $"{entry.Key}: {entry.Value}")
+                .ToList();
+
+            return lines.Count == 0
+                ? "No summarized fields available."
+                : string.Join(Environment.NewLine, lines);
+        }
+
+        private static string? SummarizeSubmissionValue(JsonElement value)
+        {
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => TrimSummary(value.GetString()),
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Array => $"[{value.GetArrayLength()} item(s)]",
+                JsonValueKind.Object => "[structured data]",
+                _ => null
+            };
+        }
+
+        private static string? TrimSummary(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            var normalized = Regex.Replace(value.Trim(), "\\s+", " ");
+            return normalized.Length <= 120 ? normalized : $"{normalized[..117]}...";
+        }
+
+        private async Task<string> BuildUniqueSlugAsync(string name)
+        {
+            var baseSlug = GenerateSlug(name);
+            var slug = baseSlug;
+            var counter = 1;
+
+            while (await TenantScope(_context.IntakeForms).AnyAsync(f => f.Slug == slug))
+            {
+                var suffix = $"-{counter}";
+                var maxBaseLength = Math.Max(1, MaxSlugLength - suffix.Length);
+                slug = $"{baseSlug[..Math.Min(baseSlug.Length, maxBaseLength)]}{suffix}";
+                counter++;
+            }
+
+            return slug;
+        }
+
+        private static string GenerateSlug(string? name)
+        {
+            var normalized = Regex.Replace(name?.Trim().ToLowerInvariant() ?? string.Empty, "\\s+", "-");
+            normalized = SlugInvalidCharacterRegex.Replace(normalized, "-");
+            normalized = SlugSeparatorRegex.Replace(normalized, "-").Trim('-');
+
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return "intake-form";
+            }
+
+            if (normalized.Length <= MaxSlugLength)
+            {
+                return normalized;
+            }
+
+            var truncated = normalized[..MaxSlugLength].Trim('-');
+            return string.IsNullOrWhiteSpace(truncated) ? "intake-form" : truncated;
         }
 
         private bool TryValidateSubmission(IntakeForm form, string dataJson, out string error)
         {
             error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(dataJson))
+            {
+                error = "Submitted form data is required.";
+                return false;
+            }
+
+            if (dataJson.Length > MaxPublicSubmissionJsonChars)
+            {
+                error = "Submitted form data exceeds the maximum allowed size.";
+                return false;
+            }
 
             List<IntakeFormField>? fields;
             try
@@ -787,7 +919,7 @@ namespace JurisFlow.Server.Controllers
             return digitCount >= 7;
         }
 
-        private async Task QueueSubmissionNotificationAsync(IntakeForm form, IntakeSubmission submission, string? ipAddress, string? userAgent)
+        private async Task QueueSubmissionNotificationAsync(IntakeForm form, IntakeSubmission submission)
         {
             if (string.IsNullOrWhiteSpace(form.NotifyEmail))
             {
@@ -801,11 +933,13 @@ namespace JurisFlow.Server.Controllers
 Submission ID: {submission.Id}
 Form: {form.Name}
 Created At (UTC): {submission.CreatedAt:O}
-IP Address: {ipAddress ?? "Unknown"}
-User Agent: {userAgent ?? "Unknown"}
+IP Address: {submission.IpAddress ?? "Unknown"}
+User Agent: {submission.UserAgent ?? "Unknown"}
 
-Payload:
-{submission.DataJson}
+Submission Summary:
+{BuildSubmissionSummary(DeserializeSubmissionPayload(submission.DataJson))}
+
+Review the full submission in JurisFlow for complete intake details.
 """;
 
                 await _outboundEmailService.QueueAsync(new OutboundEmail
@@ -832,26 +966,18 @@ Payload:
                 return;
             }
 
-            Dictionary<string, JsonElement>? payload;
-            try
-            {
-                payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(submission.DataJson);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex, "Submission payload is invalid JSON for auto lead conversion. Submission {SubmissionId}", submission.Id);
-                return;
-            }
+            var payload = DeserializeSubmissionPayload(submission.DataJson);
 
             var name = GetSubmissionValue(payload, "name", "fullName", "clientName") ?? "Website Intake Lead";
             var email = GetSubmissionValue(payload, "email");
             var phone = GetSubmissionValue(payload, "phone", "mobile");
 
             Lead? lead = null;
+            var normalizedEmail = EmailAddressNormalizer.Normalize(email);
             if (!string.IsNullOrWhiteSpace(email))
             {
-                lead = await _context.Leads
-                    .FirstOrDefaultAsync(l => l.Email != null && l.Email.ToLower() == email.ToLower());
+                lead = await TenantScope(_context.Leads)
+                    .FirstOrDefaultAsync(l => l.NormalizedEmail == normalizedEmail);
             }
 
             if (lead == null)
@@ -861,26 +987,105 @@ Payload:
                     Id = Guid.NewGuid().ToString(),
                     Name = name,
                     Email = email,
+                    NormalizedEmail = normalizedEmail,
                     Phone = phone,
                     Source = $"Intake:{form.Slug}",
+                    CreatedBySource = "Intake",
                     Status = "New",
                     PracticeArea = form.PracticeArea,
-                    Notes = $"Auto-created from intake submission {submission.Id}."
+                    Notes = BuildLeadNotes(form, submission, payload),
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
                 };
 
                 _context.Leads.Add(lead);
+                AddLeadStatusHistory(lead.Id, "New", lead.Status, "Auto-created from intake submission.");
             }
             else
             {
                 lead.Name = string.IsNullOrWhiteSpace(lead.Name) ? name : lead.Name;
+                if (string.IsNullOrWhiteSpace(lead.Email) && !string.IsNullOrWhiteSpace(email))
+                {
+                    lead.Email = email;
+                }
                 lead.Phone = string.IsNullOrWhiteSpace(lead.Phone) ? phone : lead.Phone;
                 lead.PracticeArea ??= form.PracticeArea;
+                lead.CreatedBySource = string.IsNullOrWhiteSpace(lead.CreatedBySource) ? "Intake" : lead.CreatedBySource;
                 lead.UpdatedAt = DateTime.UtcNow;
             }
 
             submission.LeadId = lead.Id;
             submission.Status = "Converted";
             await _context.SaveChangesAsync();
+        }
+
+        private static string? MinimizeIpAddress(string? rawIpAddress)
+        {
+            if (string.IsNullOrWhiteSpace(rawIpAddress))
+            {
+                return null;
+            }
+
+            if (!IPAddress.TryParse(rawIpAddress, out var ipAddress))
+            {
+                return TrimSummary(rawIpAddress);
+            }
+
+            var bytes = ipAddress.GetAddressBytes();
+            if (ipAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && bytes.Length == 4)
+            {
+                bytes[3] = 0;
+                return new IPAddress(bytes).ToString();
+            }
+
+            if (ipAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && bytes.Length == 16)
+            {
+                Array.Clear(bytes, 8, 8);
+                return new IPAddress(bytes).ToString();
+            }
+
+            return ipAddress.ToString();
+        }
+
+        private static string? SummarizeUserAgent(string? userAgent)
+        {
+            if (string.IsNullOrWhiteSpace(userAgent))
+            {
+                return null;
+            }
+
+            var allTokens = userAgent
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(token => token.Length <= 48 ? token : token[..48]);
+
+            var tokens = allTokens
+                .Where(token => token.Contains('/', StringComparison.Ordinal))
+                .Take(4)
+                .ToArray();
+
+            var summary = tokens.Length == 0
+                ? TrimSummary(userAgent)
+                : string.Join(' ', tokens);
+
+            if (string.IsNullOrWhiteSpace(summary))
+            {
+                return null;
+            }
+
+            return summary.Length <= MaxUserAgentSummaryLength ? summary : summary[..MaxUserAgentSummaryLength];
+        }
+
+        private void AddLeadStatusHistory(string leadId, string previousStatus, string newStatus, string? notes)
+        {
+            _context.LeadStatusHistories.Add(new LeadStatusHistory
+            {
+                LeadId = leadId,
+                PreviousStatus = previousStatus,
+                NewStatus = newStatus,
+                Notes = notes,
+                ChangedByName = "system@intake",
+                CreatedAt = DateTime.UtcNow
+            });
         }
 
         private static string? GetSubmissionValue(Dictionary<string, JsonElement>? payload, params string[] keys)

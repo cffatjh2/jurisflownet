@@ -10,6 +10,8 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class LeadsController : ControllerBase
     {
+        private const int DefaultReadModelPageSize = 100;
+        private const int MaxReadModelPageSize = 250;
         private readonly LeadApplicationService _service;
 
         public LeadsController(LeadApplicationService service)
@@ -23,11 +25,31 @@ namespace JurisFlow.Server.Controllers
             return Ok(await _service.GetLeadsAsync());
         }
 
+        [HttpGet("read-model")]
+        public async Task<ActionResult<LeadReadModelCollectionResponse>> GetLeadReadModel(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultReadModelPageSize,
+            [FromQuery] string? search = null,
+            [FromQuery] string? status = null)
+        {
+            var normalizedPage = Math.Max(1, page);
+            var normalizedPageSize = NormalizeReadModelPageSize(pageSize);
+            var result = await _service.GetLeadReadModelPageAsync(normalizedPage, normalizedPageSize, search, status);
+            return Ok(result);
+        }
+
         [HttpGet("{id}")]
         public async Task<ActionResult<LeadResponse>> GetLead(string id)
         {
             var lead = await _service.GetLeadAsync(id);
             return lead == null ? NotFound() : Ok(lead);
+        }
+
+        [HttpGet("{id}/status-history")]
+        public async Task<ActionResult<IEnumerable<LeadStatusHistoryResponse>>> GetStatusHistory(string id)
+        {
+            var history = await _service.GetStatusHistoryAsync(id);
+            return history == null ? NotFound() : Ok(history);
         }
 
         [HttpPost]
@@ -72,6 +94,16 @@ namespace JurisFlow.Server.Controllers
                 title: result.Title,
                 detail: result.Detail,
                 statusCode: result.StatusCode);
+        }
+
+        private static int NormalizeReadModelPageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultReadModelPageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxReadModelPageSize);
         }
     }
 }

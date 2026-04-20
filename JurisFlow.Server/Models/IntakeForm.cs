@@ -12,6 +12,7 @@ namespace JurisFlow.Server.Models
         public string Id { get; set; } = Guid.NewGuid().ToString();
 
         [Required]
+        [MaxLength(200)]
         public string Name { get; set; } = string.Empty;
 
         public string? Description { get; set; }
@@ -19,6 +20,7 @@ namespace JurisFlow.Server.Models
         /// <summary>
         /// Practice area this form is for
         /// </summary>
+        [MaxLength(100)]
         public string? PracticeArea { get; set; }
 
         /// <summary>
@@ -44,6 +46,8 @@ namespace JurisFlow.Server.Models
         /// <summary>
         /// Email to notify on submission
         /// </summary>
+        [EmailAddress]
+        [MaxLength(320)]
         public string? NotifyEmail { get; set; }
 
         /// <summary>
@@ -58,6 +62,7 @@ namespace JurisFlow.Server.Models
         /// <summary>
         /// Unique slug for public URL
         /// </summary>
+        [MaxLength(64)]
         public string Slug { get; set; } = string.Empty;
 
         public int SubmissionCount { get; set; } = 0;
@@ -86,26 +91,31 @@ namespace JurisFlow.Server.Models
         /// <summary>
         /// Submitter's IP address
         /// </summary>
+        [MaxLength(64)]
         public string? IpAddress { get; set; }
 
         /// <summary>
         /// User agent string
         /// </summary>
+        [MaxLength(256)]
         public string? UserAgent { get; set; }
 
         /// <summary>
         /// New, Reviewed, Converted, Rejected
         /// </summary>
+        [MaxLength(32)]
         public string Status { get; set; } = "New";
 
         /// <summary>
         /// If converted to a lead
         /// </summary>
+        [MaxLength(64)]
         public string? LeadId { get; set; }
 
         /// <summary>
         /// If converted to a client
         /// </summary>
+        [MaxLength(64)]
         public string? ClientId { get; set; }
 
         /// <summary>
@@ -113,6 +123,7 @@ namespace JurisFlow.Server.Models
         /// </summary>
         public string? ReviewNotes { get; set; }
 
+        [MaxLength(64)]
         public string? ReviewedBy { get; set; }
 
         public DateTime? ReviewedAt { get; set; }

@@ -16,6 +16,8 @@ interface DataContextType {
   tasks: Task[];
   taskTemplates: TaskTemplate[];
   notifications: AppNotification[];
+  crmReadModelsLoading: boolean;
+  crmReadModelsReady: boolean;
 
   // Timer Actions
   activeTimer: ActiveTimer | null;
@@ -50,7 +52,8 @@ interface DataContextType {
   recordInvoicePayment: (id: string, data: { amount: number; reference?: string }, invoiceHint?: Partial<Invoice>) => Promise<Invoice | null>;
   addClient: (item: any) => Promise<Client>;
   updateClient: (id: string, data: Partial<Client> & { statusChangeNote?: string }) => Promise<void>;
-  addLead: (item: any) => Promise<void>;
+  setClientPortalPassword: (id: string, password: string) => Promise<void>;
+  addLead: (item: any) => Promise<Lead>;
   updateLead: (id: string, data: Partial<Lead>) => Promise<void>;
   deleteLead: (id: string) => Promise<void>;
   addTask: (item: any) => Promise<void>;
@@ -65,12 +68,14 @@ interface DataContextType {
   markAllNotificationsRead: () => Promise<void>;
   updateUserProfile: (data: any) => Promise<void>;
   bulkAssignDocuments: (ids: string[], matterId?: string | null) => Promise<void>;
+  refreshCrmReadModels: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 type MatterWithClientId = Matter & { clientId?: string; relatedClientIds?: string[]; relatedClients?: Client[] };
 const DATA_BOOTSTRAP_CACHE_PREFIX = 'jf_bootstrap_cache';
 const DATA_BOOTSTRAP_CACHE_TTL_MS = 2 * 60 * 1000;
+const CRM_READ_MODEL_PAGE_SIZE = 100;
 
 type CachedBootstrapState = {
   matters: Matter[];
@@ -193,8 +198,12 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [crmReadModelsLoading, setCrmReadModelsLoading] = useState(false);
+  const [crmReadModelsReady, setCrmReadModelsReady] = useState(false);
   const clientsRef = useRef<Client[]>([]);
   const mattersRef = useRef<Matter[]>([]);
+  const crmReadModelsRequestIdRef = useRef(0);
+  const crmReadModelsPromiseRef = useRef<Promise<void> | null>(null);
 
   // Local-only state
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -321,6 +330,18 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   const sanitizeIdentifiableItems = <T extends { id?: unknown }>(items: T[] | null | undefined): T[] => {
     if (!Array.isArray(items) || items.length === 0) return [];
     return items.filter(hasStringId);
+  };
+
+  const mergeUniqueById = <T extends { id: string }>(existingItems: T[], incomingItems: T[]): T[] => {
+    const merged = new Map<string, T>();
+    for (const item of existingItems) {
+      merged.set(item.id, item);
+    }
+    for (const item of incomingItems) {
+      merged.set(item.id, item);
+    }
+
+    return Array.from(merged.values());
   };
 
 const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
@@ -734,7 +755,107 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     return safeItems.filter((item) => !item.matterId || visibleMatterIds.has(item.matterId));
   };
 
+  const applyClientReadModels = (clientItems: Client[]) => {
+    const safeClients = sanitizeClients(clientItems);
+    setClients(safeClients);
+    setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
+    setInvoices((prev) => hydrateInvoicesWithClients(prev, safeClients));
+  };
+
+  const fetchAllCrmClients = async (requestId: number): Promise<Client[]> => {
+    let page = 1;
+    let hasMore = true;
+    let aggregated: Client[] = [];
+
+    while (hasMore && crmReadModelsRequestIdRef.current === requestId) {
+      const response = await api.getCrmClients({ page, pageSize: CRM_READ_MODEL_PAGE_SIZE }).catch(() => null);
+      if (!response) {
+        if (page === 1) {
+          throw new Error('Client read model request failed.');
+        }
+        break;
+      }
+
+      aggregated = mergeUniqueById(aggregated, sanitizeClients(response.items));
+      hasMore = Boolean(response.hasMore);
+      page += 1;
+    }
+
+    return aggregated;
+  };
+
+  const fetchAllCrmLeads = async (requestId: number): Promise<Lead[]> => {
+    let page = 1;
+    let hasMore = true;
+    let aggregated: Lead[] = [];
+
+    while (hasMore && crmReadModelsRequestIdRef.current === requestId) {
+      const response = await api.getCrmLeads({ page, pageSize: CRM_READ_MODEL_PAGE_SIZE }).catch(() => null);
+      if (!response) {
+        if (page === 1) {
+          throw new Error('Lead read model request failed.');
+        }
+        break;
+      }
+
+      aggregated = mergeUniqueById(aggregated, sanitizeLeads(response.items));
+      hasMore = Boolean(response.hasMore);
+      page += 1;
+    }
+
+    return aggregated;
+  };
+
+  const loadCrmReadModels = async ({ force = false }: { force?: boolean } = {}) => {
+    if (!force && crmReadModelsReady) {
+      return;
+    }
+
+    if (crmReadModelsPromiseRef.current) {
+      return crmReadModelsPromiseRef.current;
+    }
+
+    const requestId = crmReadModelsRequestIdRef.current + 1;
+    crmReadModelsRequestIdRef.current = requestId;
+
+    const loadPromise = (async () => {
+      setCrmReadModelsLoading(true);
+
+      try {
+        const [nextClients, nextLeads] = await Promise.all([
+          fetchAllCrmClients(requestId),
+          fetchAllCrmLeads(requestId)
+        ]);
+
+        if (crmReadModelsRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        applyClientReadModels(nextClients);
+        setLeads(sanitizeLeads(nextLeads));
+        setCrmReadModelsReady(true);
+      } catch (error) {
+        if (crmReadModelsRequestIdRef.current === requestId) {
+          setCrmReadModelsReady(false);
+          console.warn('Failed to hydrate CRM read models.', error);
+        }
+      } finally {
+        if (crmReadModelsRequestIdRef.current === requestId) {
+          setCrmReadModelsLoading(false);
+          crmReadModelsPromiseRef.current = null;
+        }
+      }
+    })();
+
+    crmReadModelsPromiseRef.current = loadPromise;
+    return loadPromise;
+  };
+
   const clearLoadedData = () => {
+    crmReadModelsRequestIdRef.current += 1;
+    crmReadModelsPromiseRef.current = null;
+    setCrmReadModelsLoading(false);
+    setCrmReadModelsReady(false);
     setMatters([]);
     setClients([]);
     setTasks([]);
@@ -820,10 +941,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     };
 
     const loadDeferredFallback = async () => {
-      const [ex, c, l, i, docs, templates] = await Promise.all([
+      const [ex, i, docs, templates] = await Promise.all([
         api.getExpenses().catch(() => null),
-        api.getClients().catch(() => null),
-        api.getLeads().catch(() => null),
         api.getInvoices().catch(() => null),
         api.getDocuments().catch(() => []),
         api.getTaskTemplates().catch(() => [])
@@ -834,17 +953,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const visibleMatters = mattersRef.current;
 
       if (Array.isArray(ex)) setExpenses(filterByVisibleMatter(ex, visibleMatters));
-      if (Array.isArray(c)) {
-        const safeClients = sanitizeClients(c);
-        setClients(safeClients);
-        setMatters((prev) => filterVisibleMatters(hydrateMattersWithClients(prev, safeClients)));
-        setInvoices((prev) => hydrateInvoicesWithClients(prev, safeClients));
-      }
-      if (Array.isArray(l)) setLeads(sanitizeLeads(l));
       if (Array.isArray(i)) {
         const normalizedInvoices = sanitizeInvoices(i).map((invoice) => normalizeInvoice(invoice));
-        const clientPool = Array.isArray(c) ? sanitizeClients(c) : clientsRef.current;
-        setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(normalizedInvoices, visibleMatters), clientPool));
+        setInvoices(hydrateInvoicesWithClients(filterByVisibleMatter(normalizedInvoices, visibleMatters), clientsRef.current));
       }
       if (Array.isArray(docs)) setDocuments(filterByVisibleMatter(docs.map(normalizeDocument), visibleMatters));
       if (Array.isArray(templates)) setTaskTemplates(templates);
@@ -913,6 +1024,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
           if (!deferredLoaded) {
             await loadDeferredFallback();
+          }
+
+          if (!disposed) {
+            void loadCrmReadModels().catch((error) => {
+              console.warn('Failed to load CRM read models.', error);
+            });
           }
         };
 
@@ -1501,7 +1618,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     }
   };
 
-  const addLead = async (leadData: any) => {
+  const setClientPortalPassword = async (id: string, password: string) => {
+    await api.setClientPassword(id, password);
+    setClients(prevClients => {
+      const next = sanitizeClients(prevClients).map(client =>
+        client.id === id ? { ...client, portalEnabled: true } : client
+      );
+      setMatters(prevMatters => hydrateMattersWithClients(prevMatters, next));
+      return next;
+    });
+  };
+
+  const addLead = async (leadData: any): Promise<Lead> => {
     const temp = { ...leadData, id: `l-${Date.now()}` };
     setLeads(prev => [temp, ...sanitizeLeads(prev)]);
     try {
@@ -1510,20 +1638,27 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         throw new Error('Lead API returned an empty response.');
       }
       setLeads(prev => [newLead, ...sanitizeLeads(prev).filter(l => l.id !== temp.id)]);
+      return newLead;
     } catch (e) {
       console.error("API Error", e);
       setLeads(prev => sanitizeLeads(prev).filter(l => l.id !== temp.id));
+      throw e;
     }
   };
 
   const updateLead = async (id: string, data: Partial<Lead>) => {
-    setLeads(prev => sanitizeLeads(prev).map(l => l.id === id ? { ...l, ...data } : l));
+    const prev = sanitizeLeads(leads);
+    setLeads(items => sanitizeLeads(items).map(l => l.id === id ? { ...l, ...data } : l));
     try {
       const updated = await api.updateLead(id, data);
       if (hasStringId(updated)) {
-        setLeads(prev => sanitizeLeads(prev).map(l => l.id === id ? updated : l));
+        setLeads(items => sanitizeLeads(items).map(l => l.id === id ? updated : l));
       }
-    } catch (e) { console.error("API Error (updateLead)", e); }
+    } catch (e) {
+      console.error("API Error (updateLead)", e);
+      setLeads(prev);
+      throw e;
+    }
   };
 
   const deleteLead = async (id: string) => {
@@ -1534,6 +1669,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     } catch (e) {
       console.error("API Error (deleteLead)", e);
       setLeads(prev);
+      throw e;
     }
   };
 
@@ -1928,12 +2064,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   return (
     <DataContext.Provider value={{
-      matters, clients, timeEntries, expenses, messages, events, documents, invoices, leads, tasks, taskTemplates, notifications,
+      matters, clients, timeEntries, expenses, messages, events, documents, invoices, leads, tasks, taskTemplates, notifications, crmReadModelsLoading, crmReadModelsReady,
       activeTimer, startTimer, stopTimer, updateTimer, pauseTimer, resumeTimer,
       addMatter, updateMatter, deleteMatter,
-      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, recordInvoicePayment, addClient, addLead, updateLead, deleteLead, addTask,
-      updateTaskStatus, updateTask, deleteTask, archiveTask, createTasksFromTemplate, markAsBilled, markNotificationRead, markNotificationUnread, markAllNotificationsRead, updateUserProfile, updateClient,
-      bulkAssignDocuments
+        addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, approveInvoice, sendInvoice, recordInvoicePayment, addClient, updateClient, setClientPortalPassword, addLead, updateLead, deleteLead, addTask,
+        updateTaskStatus, updateTask, deleteTask, archiveTask, createTasksFromTemplate, markAsBilled, markNotificationRead, markNotificationUnread, markAllNotificationsRead, updateUserProfile,
+      bulkAssignDocuments, refreshCrmReadModels: () => loadCrmReadModels({ force: true })
     }}>
       {children}
     </DataContext.Provider>

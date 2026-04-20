@@ -58,6 +58,70 @@ namespace JurisFlow.Server.Services
             return clients.Select(ClientListItemResponse.FromModel).ToList();
         }
 
+        public async Task<ClientReadModelCollectionResponse> GetClientReadModelPageAsync(
+            int page,
+            int pageSize,
+            string? search = null,
+            string? status = null)
+        {
+            IQueryable<Client> query = TenantScope(_context.Clients).AsNoTracking();
+            if (ShouldHideSeedClient())
+            {
+                var demoEmail = NormalizeEmail(GetSeedClientEmail());
+                query = query.Where(c => c.NormalizedEmail != demoEmail);
+            }
+
+            var normalizedSearch = search?.Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(normalizedSearch))
+            {
+                query = query.Where(c =>
+                    c.Name.ToLower().Contains(normalizedSearch) ||
+                    c.Email.ToLower().Contains(normalizedSearch) ||
+                    (c.Phone != null && c.Phone.ToLower().Contains(normalizedSearch)) ||
+                    (c.Mobile != null && c.Mobile.ToLower().Contains(normalizedSearch)) ||
+                    (c.Company != null && c.Company.ToLower().Contains(normalizedSearch)) ||
+                    (c.ClientNumber != null && c.ClientNumber.ToLower().Contains(normalizedSearch)));
+            }
+
+            var normalizedStatus = status?.Trim();
+            if (!string.IsNullOrWhiteSpace(normalizedStatus) &&
+                !string.Equals(normalizedStatus, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(c => c.Status == normalizedStatus);
+            }
+
+            var totalCount = await query.CountAsync();
+            var items = await query
+                .OrderByDescending(c => c.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(c => new ClientListItemResponse
+                {
+                    Id = c.Id,
+                    ClientNumber = c.ClientNumber,
+                    Name = c.Name,
+                    Email = c.Email,
+                    Phone = c.Phone,
+                    Mobile = c.Mobile,
+                    Company = c.Company,
+                    Type = c.Type,
+                    Status = c.Status,
+                    PortalEnabled = c.PortalEnabled,
+                    CreatedAt = c.CreatedAt,
+                    UpdatedAt = c.UpdatedAt
+                })
+                .ToListAsync();
+
+            return new ClientReadModelCollectionResponse
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize,
+                HasMore = (page * pageSize) < totalCount
+            };
+        }
+
         public async Task<ClientDetailResponse?> GetClientAsync(string id)
         {
             var client = await TenantScope(_context.Clients)
@@ -111,12 +175,6 @@ namespace JurisFlow.Server.Services
                 return ApplicationServiceResult<ClientDetailResponse>.Failure(StatusCodes.Status400BadRequest, "Duplicate client", "Email already exists.");
             }
 
-            var passwordResult = ValidatePasswordIfProvided(validation.Value.Password, validation.Value.Email, validation.Value.Name);
-            if (!passwordResult.Succeeded)
-            {
-                return ApplicationServiceResult<ClientDetailResponse>.Failure(passwordResult.StatusCode, passwordResult.Title!, passwordResult.Detail!);
-            }
-
             var synchronizedCompany = await ResolveTenantCompanyNameAsync(validation.Value.Company);
             var client = new Client
             {
@@ -143,12 +201,6 @@ namespace JurisFlow.Server.Services
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-
-            if (!string.IsNullOrWhiteSpace(validation.Value.Password))
-            {
-                client.PasswordHash = PasswordHashingHelper.HashPassword(validation.Value.Password, _configuration);
-                client.PortalEnabled = true;
-            }
 
             _context.Clients.Add(client);
             _context.ClientStatusHistories.Add(new ClientStatusHistory
@@ -194,8 +246,7 @@ namespace JurisFlow.Server.Services
                 IncorporationState = request.IncorporationState,
                 RegisteredAgent = request.RegisteredAgent,
                 AuthorizedRepresentatives = request.AuthorizedRepresentatives,
-                Notes = request.Notes,
-                Password = request.Password
+                Notes = request.Notes
             });
             if (!validation.Succeeded || validation.Value == null)
             {
@@ -209,20 +260,8 @@ namespace JurisFlow.Server.Services
                 return ApplicationServiceResult<ClientDetailResponse>.Failure(StatusCodes.Status400BadRequest, "Duplicate client", "Email already exists.");
             }
 
-            var passwordResult = ValidatePasswordIfProvided(validation.Value.Password, validation.Value.Email, validation.Value.Name);
-            if (!passwordResult.Succeeded)
-            {
-                return ApplicationServiceResult<ClientDetailResponse>.Failure(passwordResult.StatusCode, passwordResult.Title!, passwordResult.Detail!);
-            }
-
             var previousStatus = existing.Status;
             ApplyWriteModel(existing, validation.Value, await ResolveTenantCompanyNameAsync(validation.Value.Company));
-
-            if (!string.IsNullOrWhiteSpace(validation.Value.Password))
-            {
-                existing.PasswordHash = PasswordHashingHelper.HashPassword(validation.Value.Password, _configuration);
-                existing.PortalEnabled = true;
-            }
 
             if (!string.Equals(previousStatus, existing.Status, StringComparison.OrdinalIgnoreCase))
             {
@@ -259,14 +298,6 @@ namespace JurisFlow.Server.Services
                 }
             }
 
-            var effectiveEmail = validation.Value.Email ?? client.Email;
-            var effectiveName = validation.Value.Name ?? client.Name;
-            var passwordResult = ValidatePasswordIfProvided(validation.Value.Password, effectiveEmail, effectiveName);
-            if (!passwordResult.Succeeded)
-            {
-                return ApplicationServiceResult<ClientDetailResponse>.Failure(passwordResult.StatusCode, passwordResult.Title!, passwordResult.Detail!);
-            }
-
             var previousStatus = client.Status;
 
             if (validation.Value.ClientNumber != null) client.ClientNumber = validation.Value.ClientNumber;
@@ -295,15 +326,9 @@ namespace JurisFlow.Server.Services
                 client.Company = await ResolveTenantCompanyNameAsync(validation.Value.Company);
             }
 
-            if (!string.IsNullOrWhiteSpace(validation.Value.Password))
-            {
-                client.PasswordHash = PasswordHashingHelper.HashPassword(validation.Value.Password, _configuration);
-                client.PortalEnabled = true;
-            }
-
             if (validation.Value.PortalEnabled.HasValue)
             {
-                if (validation.Value.PortalEnabled.Value && string.IsNullOrWhiteSpace(validation.Value.Password) && string.IsNullOrWhiteSpace(client.PasswordHash))
+                if (validation.Value.PortalEnabled.Value && string.IsNullOrWhiteSpace(client.PasswordHash))
                 {
                     return ApplicationServiceResult<ClientDetailResponse>.Failure(StatusCodes.Status400BadRequest, "Invalid client update", "Password is required before enabling portal access.");
                 }
@@ -414,19 +439,6 @@ namespace JurisFlow.Server.Services
         private string? GetUserEmail()
         {
             return CurrentUser.FindFirst(ClaimTypes.Email)?.Value ?? CurrentUser.FindFirst("email")?.Value;
-        }
-
-        private ApplicationServiceResult<object> ValidatePasswordIfProvided(string? password, string email, string name)
-        {
-            if (string.IsNullOrWhiteSpace(password))
-            {
-                return ApplicationServiceResult<object>.Success(new object());
-            }
-
-            var passwordResult = _passwordPolicy.Validate(password, email, name);
-            return passwordResult.IsValid
-                ? ApplicationServiceResult<object>.Success(new object())
-                : ApplicationServiceResult<object>.Failure(StatusCodes.Status400BadRequest, "Invalid password", passwordResult.Message);
         }
 
         private void ApplyWriteModel(Client client, ClientWriteModel model, string? company)

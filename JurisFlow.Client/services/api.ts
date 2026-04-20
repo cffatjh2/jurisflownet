@@ -3,6 +3,7 @@ import {
     MatterNote,
     Task,
     TimeEntry,
+    Client,
     Lead,
     CalendarEvent,
     Invoice,
@@ -49,7 +50,8 @@ import {
     OutcomeFeeCalibrationSnapshotsListResult,
     OutcomeFeeCalibrationEffectiveResult,
     OutcomeFeeCalibrationJobRunResult,
-    OutcomeFeeOutcomeFeedbackResult
+    OutcomeFeeOutcomeFeedbackResult,
+    PaginatedResult
 } from "../types";
 
 // Use relative path when in browser (proxy will handle it), fallback to full URL for SSR
@@ -770,12 +772,30 @@ export const api = {
 
     // CRM
     getClients: () => fetchJson('/clients'),
+    getCrmClients: (params?: { page?: number; pageSize?: number; search?: string; status?: string }) => {
+        const query = new URLSearchParams();
+        if (typeof params?.page === 'number') query.set('page', String(params.page));
+        if (typeof params?.pageSize === 'number') query.set('pageSize', String(params.pageSize));
+        if (params?.search) query.set('search', params.search);
+        if (params?.status) query.set('status', params.status);
+        return fetchJson(`/clients/read-model${query.toString() ? `?${query.toString()}` : ''}`) as Promise<PaginatedResult<Client> | null>;
+    },
     getClientStatusHistory: (id: string) => fetchJson(`/clients/${id}/status-history`),
     createClient: (data: any) => fetchJson('/clients', { method: 'POST', body: JSON.stringify(data) }),
     updateClient: (id: string, data: any) => fetchJson(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     setClientPassword: (id: string, password: string) =>
         fetchJson(`/clients/${id}/set-password`, { method: 'POST', body: JSON.stringify({ password }) }),
+    crmConflictCheck: (searchQuery: string) =>
+        fetchJson('/crm/conflict-check', { method: 'POST', body: JSON.stringify({ searchQuery }) }),
     getLeads: () => fetchJson('/leads'),
+    getCrmLeads: (params?: { page?: number; pageSize?: number; search?: string; status?: string }) => {
+        const query = new URLSearchParams();
+        if (typeof params?.page === 'number') query.set('page', String(params.page));
+        if (typeof params?.pageSize === 'number') query.set('pageSize', String(params.pageSize));
+        if (params?.search) query.set('search', params.search);
+        if (params?.status) query.set('status', params.status);
+        return fetchJson(`/leads/read-model${query.toString() ? `?${query.toString()}` : ''}`) as Promise<PaginatedResult<Lead> | null>;
+    },
     createLead: (data: Partial<Lead>) => fetchJson('/leads', { method: 'POST', body: JSON.stringify(data) }),
     updateLead: (id: string, data: Partial<Lead>) => fetchJson(`/leads/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteLead: (id: string) => fetchJson(`/leads/${id}`, { method: 'DELETE' }),

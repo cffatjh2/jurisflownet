@@ -59,8 +59,7 @@ namespace JurisFlow.Server.Enums
     // Lead Pipeline Status
     public enum LeadStatus
     {
-        NewInquiry, InitialContact, Qualified, ConsultationScheduled,
-        ConsultationCompleted, ProposalSent, Retained, Declined, Lost
+        New, Contacted, Scheduled, Consulted, Proposal, Retained, Lost
     }
 
     // Lead Source Tracking

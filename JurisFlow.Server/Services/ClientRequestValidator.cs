@@ -37,7 +37,6 @@ namespace JurisFlow.Server.Services
                 request.RegisteredAgent,
                 request.AuthorizedRepresentatives,
                 request.Notes,
-                request.Password,
                 portalEnabled: null,
                 statusChangeNote: null);
         }
@@ -63,7 +62,6 @@ namespace JurisFlow.Server.Services
                 request.RegisteredAgent,
                 request.AuthorizedRepresentatives,
                 request.Notes,
-                request.Password,
                 portalEnabled: null,
                 statusChangeNote: null);
         }
@@ -72,11 +70,6 @@ namespace JurisFlow.Server.Services
         {
             string? normalizedType = null;
             string? normalizedStatus = null;
-
-            if (request.PortalEnabled == true && string.IsNullOrWhiteSpace(request.Password))
-            {
-                return ApplicationServiceResult<ClientPatchModel>.Failure(StatusCodes.Status400BadRequest, "Invalid client update", "Password is required before enabling portal access.");
-            }
 
             if (!string.IsNullOrWhiteSpace(request.Type) && !TryNormalizeClientType(request.Type, out normalizedType))
             {
@@ -100,14 +93,14 @@ namespace JurisFlow.Server.Services
             return ApplicationServiceResult<ClientPatchModel>.Success(new ClientPatchModel
             {
                 ClientNumber = NormalizeOptional(request.ClientNumber, 64),
-                Name = NormalizeOptional(request.Name, 256),
-                Email = NormalizeOptional(request.Email, 320),
-                NormalizedEmail = normalizedEmail,
+                Name = NormalizeOptional(request.Name, 256) ?? string.Empty,
+                Email = NormalizeOptional(request.Email, 320) ?? string.Empty,
+                NormalizedEmail = normalizedEmail ?? string.Empty,
                 Phone = NormalizeOptional(request.Phone, 64),
                 Mobile = NormalizeOptional(request.Mobile, 64),
                 Company = NormalizeOptional(request.Company, 256),
-                Type = normalizedType,
-                Status = normalizedStatus,
+                Type = normalizedType ?? string.Empty,
+                Status = normalizedStatus ?? string.Empty,
                 Address = NormalizeOptional(request.Address, 512),
                 City = NormalizeOptional(request.City, 128),
                 State = NormalizeOptional(request.State, 128),
@@ -118,7 +111,6 @@ namespace JurisFlow.Server.Services
                 RegisteredAgent = NormalizeOptional(request.RegisteredAgent, 256),
                 AuthorizedRepresentatives = NormalizeOptional(request.AuthorizedRepresentatives, 2000),
                 Notes = NormalizeOptional(request.Notes, 4000),
-                Password = NormalizePassword(request.Password),
                 PortalEnabled = request.PortalEnabled,
                 StatusChangeNote = NormalizeOptional(request.StatusChangeNote, 512)
             });
@@ -126,7 +118,7 @@ namespace JurisFlow.Server.Services
 
         public ApplicationServiceResult<string> ValidatePortalPassword(ClientSetPortalPasswordRequest request)
         {
-            var password = NormalizePassword(request.Password);
+            var password = string.IsNullOrWhiteSpace(request.Password) ? null : request.Password.Trim();
             if (string.IsNullOrWhiteSpace(password))
             {
                 return ApplicationServiceResult<string>.Failure(StatusCodes.Status400BadRequest, "Invalid password", "Password is required.");
@@ -154,7 +146,6 @@ namespace JurisFlow.Server.Services
             string? registeredAgent,
             string? authorizedRepresentatives,
             string? notes,
-            string? password,
             bool? portalEnabled,
             string? statusChangeNote)
         {
@@ -201,7 +192,6 @@ namespace JurisFlow.Server.Services
                 RegisteredAgent = NormalizeOptional(registeredAgent, 256),
                 AuthorizedRepresentatives = NormalizeOptional(authorizedRepresentatives, 2000),
                 Notes = NormalizeOptional(notes, 4000),
-                Password = NormalizePassword(password),
                 PortalEnabled = portalEnabled,
                 StatusChangeNote = NormalizeOptional(statusChangeNote, 512)
             });
@@ -216,11 +206,6 @@ namespace JurisFlow.Server.Services
 
             var trimmed = value.Trim();
             return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
-        }
-
-        private static string? NormalizePassword(string? value)
-        {
-            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
 
         private static bool TryNormalizeClientStatus(string? status, out string? normalizedStatus)
@@ -263,7 +248,6 @@ namespace JurisFlow.Server.Services
         public string? RegisteredAgent { get; init; }
         public string? AuthorizedRepresentatives { get; init; }
         public string? Notes { get; init; }
-        public string? Password { get; init; }
         public bool? PortalEnabled { get; init; }
         public string? StatusChangeNote { get; init; }
     }

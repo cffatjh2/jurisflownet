@@ -571,7 +571,7 @@ const Reports: React.FC = () => {
         if (!leads || leads.length === 0) {
             return [];
         }
-        const stages = ['New', 'Contacted', 'Consultation', 'Retained', 'Lost'];
+        const stages = ['New', 'Contacted', 'Scheduled', 'Consulted', 'Proposal', 'Retained', 'Lost'];
         return stages.map(stage => ({
             stage,
             count: (leads || []).filter(lead => lead.status === stage).length

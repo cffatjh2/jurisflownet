@@ -9,7 +9,7 @@ import { toast } from './Toast';
 const CRM: React.FC = () => {
    const [view, setView] = React.useState<'pipeline' | 'clients'>('pipeline');
    const { t, formatCurrency } = useTranslation();
-   const { clients, leads, addLead, updateLead, deleteLead, updateClient, addClient } = useData();
+   const { clients, leads, crmReadModelsLoading, crmReadModelsReady, refreshCrmReadModels, addLead, updateLead, deleteLead, updateClient, addClient, setClientPortalPassword } = useData();
    const [highlightClientId, setHighlightClientId] = useState<string | null>(null);
    const [highlightLeadId, setHighlightLeadId] = useState<string | null>(null);
    const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
@@ -50,11 +50,11 @@ const CRM: React.FC = () => {
 
    // Lead pipeline stages (simplified for clean UI)
    const pipelineStages: { key: LeadStatus; label: string; color: string }[] = [
-      { key: LeadStatus.NewInquiry, label: 'New', color: 'bg-blue-500' },
-      { key: LeadStatus.InitialContact, label: 'Contacted', color: 'bg-indigo-500' },
-      { key: LeadStatus.ConsultationScheduled, label: 'Scheduled', color: 'bg-purple-500' },
-      { key: LeadStatus.ConsultationCompleted, label: 'Consulted', color: 'bg-violet-500' },
-      { key: LeadStatus.ProposalSent, label: 'Proposal', color: 'bg-amber-500' },
+      { key: LeadStatus.New, label: 'New', color: 'bg-blue-500' },
+      { key: LeadStatus.Contacted, label: 'Contacted', color: 'bg-indigo-500' },
+      { key: LeadStatus.Scheduled, label: 'Scheduled', color: 'bg-purple-500' },
+      { key: LeadStatus.Consulted, label: 'Consulted', color: 'bg-violet-500' },
+      { key: LeadStatus.Proposal, label: 'Proposal', color: 'bg-amber-500' },
       { key: LeadStatus.Retained, label: 'Retained', color: 'bg-green-500' },
       { key: LeadStatus.Lost, label: 'Lost', color: 'bg-gray-400' }
    ];
@@ -82,34 +82,50 @@ const CRM: React.FC = () => {
       return () => clearTimeout(timer);
    }, [highlightLeadId]);
 
+   useEffect(() => {
+      if (crmReadModelsReady || crmReadModelsLoading) return;
+      void refreshCrmReadModels().catch(error => {
+         console.error('Failed to hydrate CRM read models', error);
+      });
+   }, [crmReadModelsReady, crmReadModelsLoading]);
+
    const moveLead = (lead: Lead, direction: 'prev' | 'next') => {
       const idx = pipelineStages.findIndex(s => s.key === lead.status);
       if (idx === -1) return;
       const targetIdx = direction === 'prev' ? Math.max(0, idx - 1) : Math.min(pipelineStages.length - 1, idx + 1);
       const nextStatus = pipelineStages[targetIdx].key;
-      updateLead(lead.id, { status: nextStatus as any });
+      void updateLead(lead.id, { status: nextStatus }).catch(error => {
+         console.error('Failed to update lead status', error);
+         toast.error('Failed to update lead status.');
+      });
    };
 
-   const handleAddDeal = (e: React.FormEvent) => {
+   const handleAddDeal = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newLeadName) return;
 
-      addLead({
-         id: `l${Date.now()}`,
+      try {
+         await addLead({
          name: newLeadName,
          source: newLeadSource,
          estimatedValue: parseFloat(String(newLeadVal)) || 0,
-         status: LeadStatus.NewInquiry as any,
+         status: LeadStatus.New,
          practiceArea: newLeadPracticeArea
-      });
-      setShowModal(false);
-      setNewLeadName('');
-      setNewLeadVal('');
+         });
+         setShowModal(false);
+         setNewLeadName('');
+         setNewLeadVal('');
+         toast.success('Lead created successfully.');
+      } catch (error) {
+         console.error('Failed to create lead', error);
+         toast.error('Failed to create lead.');
+      }
    };
 
    const [isSearching, setIsSearching] = useState(false);
    const safeClients = useMemo(() => clients.filter((client): client is Client => !!client && typeof client.id === 'string'), [clients]);
-   const safeLeads = useMemo(() => leads.filter((lead): lead is Lead => !!lead && typeof lead.id === 'string'), [leads]);
+   const safeLeads = useMemo(() => leads.filter((lead): lead is Lead => !!lead && typeof lead.id === 'string' && !lead.isArchived), [leads]);
+   const isCrmSyncing = crmReadModelsLoading || !crmReadModelsReady;
 
    // Derived client stats
    const activeCount = useMemo(() => safeClients.filter(c => (c.status || 'Active') === 'Active').length, [safeClients]);
@@ -137,8 +153,9 @@ const CRM: React.FC = () => {
 
    const performConflictCheck = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!conflictQuery || conflictQuery.trim().length < 2) {
-         alert('Please enter at least 2 characters');
+      const normalizedQuery = conflictQuery.trim();
+      if (normalizedQuery.length < 3) {
+         toast.error('Please enter at least 3 characters.');
          return;
       }
 
@@ -146,22 +163,11 @@ const CRM: React.FC = () => {
       setConflictResults(null);
 
       try {
-         const token = localStorage.getItem('auth_token');
-         const res = await fetch(`/api/crm/conflict-check?q=${encodeURIComponent(conflictQuery)}`, {
-            headers: {
-               'Authorization': `Bearer ${token}`
-            }
-         });
-
-         if (!res.ok) {
-            throw new Error('Search failed');
-         }
-
-         const data = await res.json();
+         const data = await api.crmConflictCheck(normalizedQuery);
          setConflictResults(data);
       } catch (err) {
          console.error(err);
-         alert('Failed to perform conflict check');
+         toast.error('Failed to perform conflict check.');
       } finally {
          setIsSearching(false);
       }
@@ -188,6 +194,7 @@ const CRM: React.FC = () => {
       const name = newClientForm.name.trim();
       const email = newClientForm.email.trim();
       const password = newClientForm.password.trim();
+      const shouldEnablePortal = newClientForm.portalEnabled;
 
       if (!name) {
          setCreateClientError('Name is required.');
@@ -197,12 +204,13 @@ const CRM: React.FC = () => {
          setCreateClientError('Email is required.');
          return;
       }
-      if (newClientForm.portalEnabled && !password) {
+      if (shouldEnablePortal && !password) {
          setCreateClientError('Set a password to enable portal access.');
          return;
       }
 
       setIsCreatingClient(true);
+      let clientCreated = false;
       try {
          const payload: any = {
             name,
@@ -213,15 +221,19 @@ const CRM: React.FC = () => {
             type: newClientForm.type,
             status: newClientForm.status
          };
-         if (newClientForm.portalEnabled && password) {
-            payload.password = password;
+         const createdClient = await addClient(payload);
+         clientCreated = true;
+         if (shouldEnablePortal) {
+            await setClientPortalPassword(createdClient.id, password);
+            toast.success('Client created and portal access enabled.');
+         } else {
+            toast.success('Client created successfully.');
          }
-         await addClient(payload);
-         toast.success('Client created successfully.');
          setShowCreateClientModal(false);
          resetNewClientForm();
-      } catch {
-         toast.error('Failed to create client.');
+      } catch (error) {
+         console.error('Failed to create client', error);
+         toast.error(clientCreated ? 'Client created, but portal setup failed.' : 'Failed to create client.');
       } finally {
          setIsCreatingClient(false);
       }
@@ -265,6 +277,7 @@ const CRM: React.FC = () => {
       const portalEnabled = !!clientForm.portalEnabled;
       const requiresPortalPassword = portalEnabled && !editingClient.portalEnabled;
       const normalizedPortalPassword = portalPassword.trim();
+      const shouldRotatePortalPassword = normalizedPortalPassword.length > 0;
       const nextStatus = clientForm.status || editingClient.status;
       const statusChanged = nextStatus !== editingClient.status;
       if (requiresPortalPassword && !normalizedPortalPassword) {
@@ -274,15 +287,24 @@ const CRM: React.FC = () => {
       setIsSavingClient(true);
       try {
          const payload: any = { ...clientForm };
-         if (portalEnabled && normalizedPortalPassword) {
-            payload.password = normalizedPortalPassword;
+         if (requiresPortalPassword) {
+            delete payload.portalEnabled;
          }
          if (statusChanged && statusChangeNote.trim()) {
             payload.statusChangeNote = statusChangeNote.trim();
          }
          await updateClient(editingClient.id, payload);
+         if (requiresPortalPassword || shouldRotatePortalPassword) {
+            await setClientPortalPassword(editingClient.id, normalizedPortalPassword);
+         }
          await loadStatusHistory(editingClient.id);
-         toast.success('Client updated successfully.');
+         if (requiresPortalPassword) {
+            toast.success('Client updated and portal access enabled.');
+         } else if (shouldRotatePortalPassword) {
+            toast.success('Client updated and portal password changed.');
+         } else {
+            toast.success('Client updated successfully.');
+         }
          setEditingClient(null);
          setPortalPassword('');
          setStatusChangeNote('');
@@ -300,6 +322,9 @@ const CRM: React.FC = () => {
             <div>
                <h1 className="text-2xl font-bold text-slate-800">{t('crm_title')}</h1>
                <p className="text-sm text-gray-500 mt-1">{t('crm_subtitle')}</p>
+               {isCrmSyncing && (
+                  <p className="text-xs text-indigo-600 mt-2">CRM records are syncing in the background.</p>
+               )}
             </div>
             <div className="flex gap-4">
                {/* Conflict Check Button */}
@@ -328,6 +353,11 @@ const CRM: React.FC = () => {
 
          {view === 'pipeline' ? (
             <div className="flex-1 overflow-x-auto p-6">
+               {isCrmSyncing && safeLeads.length === 0 && (
+                  <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                     Loading lead pipeline...
+                  </div>
+               )}
                <div className="flex gap-4 min-w-[1000px] h-full">
                   {pipelineStages.map(stage => {
                      const stageLeads = safeLeads.filter(l => l.status === stage.key);
@@ -357,7 +387,7 @@ const CRM: React.FC = () => {
                                           <button onClick={() => moveLead(lead, 'prev')} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200">&lt;</button>
                                           <button onClick={() => moveLead(lead, 'next')} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200">&gt;</button>
                                        </div>
-                                       <button onClick={() => deleteLead(lead.id)} className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded hover:bg-red-100">Delete</button>
+                                       <button onClick={() => { void deleteLead(lead.id).catch(error => { console.error('Failed to archive lead', error); toast.error('Failed to archive lead.'); }); }} className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded hover:bg-red-100">Archive</button>
                                     </div>
                                  </div>
                               ))}
@@ -372,7 +402,9 @@ const CRM: React.FC = () => {
             </div>
          ) : (
             <div className="p-6 overflow-y-auto">
-               {clients.length === 0 ? (
+               {isCrmSyncing && safeClients.length === 0 ? (
+                  <div className="text-center text-gray-400 mt-12">Loading clients...</div>
+               ) : clients.length === 0 ? (
                   <div className="text-center text-gray-400 mt-12">No clients found. Add a Matter to create clients.</div>
                ) : (
                   <div className="space-y-4">
@@ -764,7 +796,7 @@ const CRM: React.FC = () => {
                                     </button>
                                  </div>
                                  <p className="text-xs text-gray-400 mt-2">
-                                    Share this password with the client and ask them to change it after signing in.
+                                    This password is applied through the dedicated portal credential endpoint after the client record is created.
                                  </p>
                               </div>
                            )}
@@ -941,7 +973,7 @@ const CRM: React.FC = () => {
                               <label className="text-xs font-semibold text-gray-500">Set New Password</label>
                               <div className="mt-1 flex gap-2">
                                  <input
-                                    type="text"
+                                     type="password"
                                     className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900"
                                     value={portalPassword}
                                     onChange={e => setPortalPassword(e.target.value)}
@@ -956,7 +988,7 @@ const CRM: React.FC = () => {
                                  </button>
                               </div>
                               <p className="text-xs text-gray-400 mt-2">
-                                 Share the new password with the client if you change it.
+                                  Password changes are applied through the dedicated portal credential endpoint.
                               </p>
                            </div>
                         ) : (

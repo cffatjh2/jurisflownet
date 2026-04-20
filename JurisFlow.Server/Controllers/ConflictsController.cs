@@ -22,6 +22,7 @@ namespace JurisFlow.Server.Controllers
             "NewClient",
             "NewMatter",
             "OpposingParty",
+            "IntakeSubmission",
             "Manual"
         };
         private static readonly HashSet<string> AllowedEntityTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -107,7 +108,6 @@ namespace JurisFlow.Server.Controllers
                 {
                     c.Id,
                     c.Name,
-                    c.Email,
                     c.NormalizedEmail
                 })
                 .Take(MaxConflictResults)
@@ -116,7 +116,7 @@ namespace JurisFlow.Server.Controllers
             var clientMatterLookup = await BuildClientMatterLookupAsync(clients.Select(c => c.Id).ToList());
             foreach (var client in clients)
             {
-                var evaluation = EvaluateClientMatch(normalizedSearchQuery, client.Name, client.Email, client.NormalizedEmail);
+                var evaluation = EvaluateClientMatch(normalizedSearchQuery, client.Name, client.NormalizedEmail);
                 if (evaluation == null)
                 {
                     continue;
@@ -237,7 +237,7 @@ namespace JurisFlow.Server.Controllers
                 Id = check.Id,
                 Status = check.Status,
                 MatchCount = check.MatchCount,
-                SearchQuery = check.SearchQuery,
+                SearchQuery = RedactForDisplay(check.SearchQuery),
                 CheckType = check.CheckType,
                 WaivedBy = check.WaivedBy,
                 WaiverReason = check.WaiverReason,
@@ -306,7 +306,7 @@ namespace JurisFlow.Server.Controllers
                 .Select(c => new ConflictCheckSummaryDto
                 {
                     Id = c.Id,
-                    SearchQuery = c.SearchQuery,
+                    SearchQuery = RedactForDisplay(c.SearchQuery),
                     CheckType = c.CheckType,
                     Status = c.Status,
                     MatchCount = c.MatchCount,
@@ -420,7 +420,7 @@ namespace JurisFlow.Server.Controllers
             return matters.ToDictionary(m => m.Id, m => new MatterLookup(m.Id, m.Name), StringComparer.Ordinal);
         }
 
-        private static MatchEvaluation? EvaluateClientMatch(string searchQuery, string? name, string? email, string normalizedEmail)
+        private static MatchEvaluation? EvaluateClientMatch(string searchQuery, string? name, string normalizedEmail)
         {
             var nameMatch = EvaluateContainsMatch(searchQuery, name, "Contains");
 
@@ -432,7 +432,7 @@ namespace JurisFlow.Server.Controllers
                     isExact ? "EmailExact" : "EmailContains",
                     isExact ? 100 : 92,
                     isExact ? "High" : "High",
-                    $"Matched client email{(string.IsNullOrWhiteSpace(email) ? string.Empty : $": {email}")}");
+                    "Matched against a protected client email.");
             }
 
             if (emailMatch == null) return nameMatch;
@@ -455,7 +455,7 @@ namespace JurisFlow.Server.Controllers
 
             if (string.Equals(normalizedCandidate, searchQuery, StringComparison.OrdinalIgnoreCase))
             {
-                return new MatchEvaluation("Exact", 100, "High", $"Exact match on '{candidate}'");
+                return new MatchEvaluation("Exact", 100, "High", "Exact match on protected entity data.");
             }
 
             var tokenBoundaryMatch = Regex.IsMatch(normalizedCandidate, $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(searchQuery)}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase);
@@ -465,7 +465,13 @@ namespace JurisFlow.Server.Controllers
             var riskLevel = score >= 90d ? "High" : score >= 75d ? "Medium" : "Low";
             var matchType = tokenBoundaryMatch ? "WordMatch" : defaultMatchType;
 
-            return new MatchEvaluation(matchType, score, riskLevel, $"Matched by {matchType} on '{candidate}'");
+            return new MatchEvaluation(matchType, score, riskLevel, $"Matched by {matchType} on protected entity data.");
+        }
+
+        private static string? RedactForDisplay(string? value)
+        {
+            var redacted = RedactForAudit(value);
+            return string.IsNullOrWhiteSpace(redacted) ? null : redacted;
         }
 
         private static string RedactForAudit(string? value)
