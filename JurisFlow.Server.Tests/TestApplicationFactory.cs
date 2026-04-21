@@ -74,7 +74,8 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
                     || hostedDescriptor.ImplementationType == typeof(DeadlineReminderHostedService)
                     || hostedDescriptor.ImplementationType == typeof(OperationsJobHostedService)
                     || hostedDescriptor.ImplementationType == typeof(IntegrationSecretMaintenanceHostedService)
-                    || hostedDescriptor.ImplementationType == typeof(AuditLogWriteHostedService))
+                    || hostedDescriptor.ImplementationType == typeof(AuditLogWriteHostedService)
+                    || hostedDescriptor.ImplementationType == typeof(TaskDomainOutboxHostedService))
                 {
                     services.Remove(hostedDescriptor);
                 }

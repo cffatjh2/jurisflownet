@@ -28,6 +28,7 @@ namespace JurisFlow.Server.Data
         public DbSet<MatterNote> MatterNotes { get; set; }
         public DbSet<Employee> Employees { get; set; }
         public DbSet<JurisFlow.Server.Models.Task> Tasks { get; set; }
+        public DbSet<TaskTemplate> TaskTemplates { get; set; }
         public DbSet<Document> Documents { get; set; }
         public DbSet<CalendarEvent> CalendarEvents { get; set; }
         public DbSet<TrustTransaction> TrustTransactions { get; set; }
@@ -220,6 +221,25 @@ namespace JurisFlow.Server.Data
                 .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.CreatedAt));
             modelBuilder.Entity<JurisFlow.Server.Models.Task>()
                 .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.MatterId), nameof(JurisFlow.Server.Models.Task.CreatedAt));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.CreatedByUserId), nameof(JurisFlow.Server.Models.Task.UpdatedAt));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.AssignedEmployeeId), nameof(JurisFlow.Server.Models.Task.Status), nameof(JurisFlow.Server.Models.Task.UpdatedAt));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.Status), nameof(JurisFlow.Server.Models.Task.DueDate));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .HasIndex("TenantId", nameof(JurisFlow.Server.Models.Task.ReminderSent), nameof(JurisFlow.Server.Models.Task.ReminderAt));
+            modelBuilder.Entity<JurisFlow.Server.Models.Task>()
+                .ToTable(tableBuilder =>
+                {
+                    tableBuilder.HasCheckConstraint(
+                        "CK_Tasks_ReminderAt_OnOrBeforeDueDate",
+                        "\"ReminderAt\" IS NULL OR \"DueDate\" IS NULL OR \"ReminderAt\" <= \"DueDate\"");
+                });
+            modelBuilder.Entity<TaskTemplate>()
+                .HasIndex("TenantId", nameof(TaskTemplate.IsActive), nameof(TaskTemplate.Category), nameof(TaskTemplate.Name));
+            modelBuilder.Entity<TaskTemplate>()
+                .HasIndex("TenantId", nameof(TaskTemplate.UpdatedAt));
             modelBuilder.Entity<CalendarEvent>()
                 .HasIndex("TenantId", nameof(CalendarEvent.Date));
             modelBuilder.Entity<CalendarEvent>()

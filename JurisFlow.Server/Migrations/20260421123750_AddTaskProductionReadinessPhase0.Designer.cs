@@ -3,6 +3,7 @@ using System;
 using JurisFlow.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace JurisFlow.Server.Migrations
 {
     [DbContext(typeof(JurisFlowDbContext))]
-    partial class JurisFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260421123750_AddTaskProductionReadinessPhase0")]
+    partial class AddTaskProductionReadinessPhase0
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.2");

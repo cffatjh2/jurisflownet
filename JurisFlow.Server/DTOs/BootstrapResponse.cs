@@ -1,17 +1,63 @@
+using JurisFlow.Server.Contracts;
+using JurisFlow.Server.Models;
+
 namespace JurisFlow.Server.DTOs
 {
     public class BootstrapResponse
     {
-        public object? Matters { get; set; }
-        public object? Tasks { get; set; }
-        public object? TimeEntries { get; set; }
-        public object? Expenses { get; set; }
-        public object? Clients { get; set; }
-        public object? Leads { get; set; }
-        public object? Events { get; set; }
-        public object? Invoices { get; set; }
-        public object? Notifications { get; set; }
-        public object? Documents { get; set; }
-        public object? TaskTemplates { get; set; }
+        public IReadOnlyList<Matter> Matters { get; set; } = Array.Empty<Matter>();
+        public IReadOnlyList<TaskResponse> Tasks { get; set; } = Array.Empty<TaskResponse>();
+        public IReadOnlyList<TimeEntry> TimeEntries { get; set; } = Array.Empty<TimeEntry>();
+        public IReadOnlyList<Expense> Expenses { get; set; } = Array.Empty<Expense>();
+        public IReadOnlyList<Client> Clients { get; set; } = Array.Empty<Client>();
+        public IReadOnlyList<Lead> Leads { get; set; } = Array.Empty<Lead>();
+        public IReadOnlyList<CalendarEvent> Events { get; set; } = Array.Empty<CalendarEvent>();
+        public IReadOnlyList<Invoice> Invoices { get; set; } = Array.Empty<Invoice>();
+        public IReadOnlyList<Notification> Notifications { get; set; } = Array.Empty<Notification>();
+        public IReadOnlyList<BootstrapDocumentResponse> Documents { get; set; } = Array.Empty<BootstrapDocumentResponse>();
+        public IReadOnlyList<TaskTemplateResponse> TaskTemplates { get; set; } = Array.Empty<TaskTemplateResponse>();
+    }
+
+    public sealed class BootstrapDocumentResponse
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string? MimeType { get; set; }
+        public string? MatterId { get; set; }
+        public int Version { get; set; }
+        public string? Category { get; set; }
+        public string? Description { get; set; }
+        public string? Tags { get; set; }
+        public string? Status { get; set; }
+        public string? LegalHoldReason { get; set; }
+        public DateTime? LegalHoldPlacedAt { get; set; }
+        public DateTime? LegalHoldReleasedAt { get; set; }
+        public string? LegalHoldPlacedBy { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime UpdatedAt { get; set; }
+
+        public static BootstrapDocumentResponse FromModel(Document document)
+        {
+            return new BootstrapDocumentResponse
+            {
+                Id = document.Id,
+                Name = document.Name,
+                FileSize = document.FileSize,
+                MimeType = document.MimeType,
+                MatterId = document.MatterId,
+                Version = document.Version,
+                Category = document.Category,
+                Description = document.Description,
+                Tags = document.Tags,
+                Status = document.Status,
+                LegalHoldReason = document.LegalHoldReason,
+                LegalHoldPlacedAt = document.LegalHoldPlacedAt,
+                LegalHoldReleasedAt = document.LegalHoldReleasedAt,
+                LegalHoldPlacedBy = document.LegalHoldPlacedBy,
+                CreatedAt = document.CreatedAt,
+                UpdatedAt = document.UpdatedAt
+            };
+        }
     }
 }

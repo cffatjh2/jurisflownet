@@ -16,7 +16,7 @@ namespace JurisFlow.Server.Models
         public string? Description { get; set; }
         public DateTime? DueDate { get; set; }
         public DateTime? ReminderAt { get; set; }
-        
+
         [Required]
         public string Priority { get; set; } // High | Medium | Low
 
@@ -26,6 +26,9 @@ namespace JurisFlow.Server.Models
         public string? Outcome { get; set; } // Success | Failed
 
         // Relations
+        [MaxLength(128)]
+        public string? CreatedByUserId { get; set; }
+
         public string? MatterId { get; set; }
 
         [ForeignKey("MatterId")]
@@ -37,6 +40,11 @@ namespace JurisFlow.Server.Models
         [ForeignKey("AssignedEmployeeId")]
         [JsonIgnore]
         public Employee? AssignedEmployee { get; set; }
+
+        [Required]
+        [MaxLength(32)]
+        [ConcurrencyCheck]
+        public string RowVersion { get; set; } = Guid.NewGuid().ToString("N");
 
         public bool ReminderSent { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

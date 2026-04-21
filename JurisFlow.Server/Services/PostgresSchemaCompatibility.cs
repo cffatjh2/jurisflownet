@@ -472,6 +472,27 @@ namespace JurisFlow.Server.Services
             """CREATE INDEX IF NOT EXISTS "IX_MatterNotes_TenantId_MatterId_UpdatedAt" ON "MatterNotes" ("TenantId", "MatterId", "UpdatedAt" DESC);""",
             """CREATE INDEX IF NOT EXISTS "IX_Matters_TenantId_CreatedByUserId" ON "Matters" ("TenantId", "CreatedByUserId");""",
             """CREATE INDEX IF NOT EXISTS "IX_Matters_TenantId_ShareWithFirm" ON "Matters" ("TenantId", "ShareWithFirm");""",
+            """ALTER TABLE IF EXISTS "Tasks" ADD COLUMN IF NOT EXISTS "CreatedByUserId" text NULL;""",
+            """ALTER TABLE IF EXISTS "Tasks" ADD COLUMN IF NOT EXISTS "RowVersion" character varying(32) NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text);""",
+            """
+            CREATE TABLE IF NOT EXISTS "TaskTemplates" (
+                "Id" text PRIMARY KEY,
+                "Name" character varying(200) NOT NULL,
+                "Category" character varying(128) NULL,
+                "Description" character varying(1000) NULL,
+                "Definition" text NOT NULL,
+                "IsActive" boolean NOT NULL DEFAULT TRUE,
+                "CreatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+                "TenantId" text NULL
+            );
+            """,
+            """CREATE INDEX IF NOT EXISTS "IX_TaskTemplates_TenantId_IsActive_Category_Name" ON "TaskTemplates" ("TenantId", "IsActive", "Category", "Name");""",
+            """CREATE INDEX IF NOT EXISTS "IX_TaskTemplates_TenantId_UpdatedAt" ON "TaskTemplates" ("TenantId", "UpdatedAt" DESC);""",
+            """CREATE INDEX IF NOT EXISTS "IX_Tasks_TenantId_CreatedByUserId_UpdatedAt" ON "Tasks" ("TenantId", "CreatedByUserId", "UpdatedAt" DESC);""",
+            """CREATE INDEX IF NOT EXISTS "IX_Tasks_TenantId_AssignedEmployeeId_Status_UpdatedAt" ON "Tasks" ("TenantId", "AssignedEmployeeId", "Status", "UpdatedAt" DESC);""",
+            """CREATE INDEX IF NOT EXISTS "IX_Tasks_TenantId_Status_DueDate" ON "Tasks" ("TenantId", "Status", "DueDate");""",
+            """CREATE INDEX IF NOT EXISTS "IX_Tasks_TenantId_ReminderSent_ReminderAt" ON "Tasks" ("TenantId", "ReminderSent", "ReminderAt");""",
             """CREATE INDEX IF NOT EXISTS "IX_Invoices_TenantId_MatterId" ON "Invoices" ("TenantId", "MatterId");""",
             """CREATE INDEX IF NOT EXISTS "IX_Documents_TenantId_MatterId" ON "Documents" ("TenantId", "MatterId");""",
             """CREATE INDEX IF NOT EXISTS "IX_TimeEntries_TenantId_MatterId" ON "TimeEntries" ("TenantId", "MatterId");""",

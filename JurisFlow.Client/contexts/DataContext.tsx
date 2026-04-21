@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
-import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, InvoiceStatus, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer } from '../types';
+import { Matter, Client, TimeEntry, Message, Expense, CalendarEvent, DocumentFile, Invoice, InvoiceStatus, Lead, Task, TaskStatus, Notification as AppNotification, TaskTemplate, ActiveTimer, TaskCollectionResponse } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
 
@@ -61,7 +61,7 @@ interface DataContextType {
   updateTask: (id: string, data: Partial<Task>) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   archiveTask: (id: string) => Promise<void>;
-  createTasksFromTemplate: (data: { templateId: string; matterId?: string; assignedTo?: string; baseDate?: string }) => Promise<void>;
+  createTasksFromTemplate: (data: { templateId: string; matterId?: string; assignedEmployeeId?: string; baseDate?: string }) => Promise<void>;
   markAsBilled: (matterId: string) => Promise<void>;
   markNotificationRead: (id: string) => Promise<void>;
   markNotificationUnread: (id: string) => Promise<void>;
@@ -358,6 +358,13 @@ const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
 
   const sanitizeMatterLinkedItems = <T extends { id?: unknown; matterId?: string | null }>(items: T[] | null | undefined): T[] =>
     sanitizeIdentifiableItems<T>(items);
+
+  const extractTaskItems = (payload: Task[] | TaskCollectionResponse | null | undefined): Task[] => {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return sanitizeMatterLinkedItems<Task>(payload);
+    if (Array.isArray(payload.items)) return sanitizeMatterLinkedItems<Task>(payload.items);
+    return [];
+  };
 
   const normalizeDocument = (d: any): DocumentFile => {
     const mime = (d.mimeType || '').toLowerCase();
@@ -920,7 +927,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const loadInitialFallback = async () => {
       const [m, t, te, e, n] = await Promise.all([
         api.getMatters().catch(() => null),
-        api.getTasks().catch(() => null),
+        api.getTasks({ limit: 200, includeArchived: true }).catch(() => null),
         api.getTimeEntries().catch(() => null),
         api.getEvents().catch(() => null),
         api.getNotifications(user?.id).catch(() => [])
@@ -933,7 +940,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
         : mattersRef.current;
 
       if (Array.isArray(m)) setMatters(visibleMatters);
-      if (Array.isArray(t)) setTasks(filterByVisibleMatter(t, visibleMatters));
+      if (t) {
+        const taskItems = extractTaskItems(t);
+        setTasks(filterByVisibleMatter(taskItems, visibleMatters));
+      }
       if (Array.isArray(te)) setTimeEntries(filterByVisibleMatter(te, visibleMatters));
       if (Array.isArray(e)) setEvents(filterByVisibleMatter(e, visibleMatters));
       if (Array.isArray(n)) setNotifications(n);
@@ -1388,7 +1398,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     setTasks(prev => [...prev, tempTask]);
 
     try {
-      const newTask = await api.createTask(taskData);
+      const { assignedTo, ...payload } = taskData || {};
+      const newTask = await api.createTask(payload);
       if (newTask && newTask.id) {
         console.log('[addTask] Task created successfully with real ID:', newTask.id);
         // Replace temp task with real one from server
@@ -1405,21 +1416,40 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   };
 
   const updateTaskStatus = async (id: string, status: TaskStatus) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
-    try { await api.updateTaskStatus(id, status); } catch (e) { console.error("API Error", e); }
-  };
+    const previousTasks = [...tasks];
+    const currentTask = previousTasks.find(t => t.id === id);
 
-  const updateTask = async (id: string, data: Partial<Task>) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...data } : t));
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
     try {
-      const updated = await api.updateTask(id, data);
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
+      const updated = await api.updateTaskStatus(id, status, currentTask?.rowVersion);
+      if (updated?.id) {
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
+      }
     } catch (e) {
-      console.error("API Error (updateTask)", e);
+      console.error("API Error (updateTaskStatus)", e);
+      setTasks(previousTasks);
+      throw e;
     }
   };
 
-  const createTasksFromTemplate = async (data: { templateId: string; matterId?: string; assignedTo?: string; baseDate?: string }) => {
+  const updateTask = async (id: string, data: Partial<Task>) => {
+    const previousTasks = [...tasks];
+    const currentTask = previousTasks.find(t => t.id === id);
+
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...data } : t));
+    try {
+      const updated = await api.updateTask(id, data, currentTask?.rowVersion);
+      if (updated?.id) {
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
+      }
+    } catch (e) {
+      console.error("API Error (updateTask)", e);
+      setTasks(previousTasks);
+      throw e;
+    }
+  };
+
+  const createTasksFromTemplate = async (data: { templateId: string; matterId?: string; assignedEmployeeId?: string; baseDate?: string }) => {
     try {
       const res = await api.createTasksFromTemplate(data);
       if (res?.tasks) {
@@ -1467,11 +1497,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   };
 
   const archiveTask = async (id: string) => {
+    const previousTasks = [...tasks];
+    const currentTask = previousTasks.find(t => t.id === id);
+
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status: 'Archived' as TaskStatus } : t));
     try {
-      await api.updateTaskStatus(id, 'Archived');
+      const updated = await api.updateTaskStatus(id, 'Archived', currentTask?.rowVersion);
+      if (updated?.id) {
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
+      }
     } catch (e) {
       console.error("API Error (archiveTask)", e);
+      setTasks(previousTasks);
+      throw e;
     }
   };
 

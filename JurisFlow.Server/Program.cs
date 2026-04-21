@@ -77,6 +77,15 @@ var matterMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateL
 var matterMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:MatterMutation:WindowSeconds", 60), 1, 3600);
 var trustMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TrustMutation:PermitLimit", defaultTrustMutationPermitLimit), 1, 2000);
 var trustMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TrustMutation:WindowSeconds", 60), 1, 3600);
+var defaultTaskReadPermitLimit = builder.Environment.IsDevelopment() ? 240 : 60;
+var taskReadPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TaskRead:PermitLimit", defaultTaskReadPermitLimit), 1, 2000);
+var taskReadWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TaskRead:WindowSeconds", 60), 1, 3600);
+var defaultTaskMutationPermitLimit = builder.Environment.IsDevelopment() ? 180 : 40;
+var taskMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TaskMutation:PermitLimit", defaultTaskMutationPermitLimit), 1, 2000);
+var taskMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TaskMutation:WindowSeconds", 60), 1, 3600);
+var defaultBootstrapReadPermitLimit = builder.Environment.IsDevelopment() ? 120 : 24;
+var bootstrapReadPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:BootstrapRead:PermitLimit", defaultBootstrapReadPermitLimit), 1, 2000);
+var bootstrapReadWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:BootstrapRead:WindowSeconds", 60), 1, 3600);
 var integrationWebhookPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:PermitLimit", 120), 1, 5000);
 var integrationWebhookWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:WindowSeconds", 60), 1, 3600);
 
@@ -272,6 +281,42 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             }));
 
+    options.AddPolicy("TaskRead", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "task-read", includePathBucket: true),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = taskReadPermitLimit,
+                Window = TimeSpan.FromSeconds(taskReadWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("TaskMutation", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "task-mutation", includePathBucket: true),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = taskMutationPermitLimit,
+                Window = TimeSpan.FromSeconds(taskMutationWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("BootstrapRead", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "bootstrap-read", includePathBucket: true),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = bootstrapReadPermitLimit,
+                Window = TimeSpan.FromSeconds(bootstrapReadWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
     options.AddPolicy("IntegrationWebhook", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             BuildRateLimitPartitionKey(httpContext, "integration-webhook"),
@@ -361,7 +406,7 @@ builder.Services.AddHealthChecks()
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        var jwtKey = builder.Configuration["Jwt:Key"];
+        var jwtKey = ResolveJwtSigningKey(builder.Configuration, builder.Environment);
         if (string.IsNullOrWhiteSpace(jwtKey))
         {
             throw new InvalidOperationException("JWT Key is missing in configuration.");
@@ -370,6 +415,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             if (jwtKey.Contains("DevPurposeOnly", StringComparison.OrdinalIgnoreCase) ||
                 jwtKey.Contains("ChangeInProduction", StringComparison.OrdinalIgnoreCase) ||
+                jwtKey.Contains("__SET_", StringComparison.OrdinalIgnoreCase) ||
                 jwtKey.Length < 32)
             {
                 throw new InvalidOperationException("JWT Key is not production-safe. Set a strong secret in Jwt:Key.");
@@ -429,10 +475,12 @@ builder.Services.AddScoped<LeadApplicationService>();
 builder.Services.AddScoped<TaskApplicationService>();
 builder.Services.AddScoped<CalendarEventApplicationService>();
 builder.Services.AddScoped<MatterAccessService>();
+builder.Services.AddScoped<TaskAccessService>();
 builder.Services.AddScoped<MatterClientLinkService>();
 builder.Services.AddScoped<MatterWorkflowTriggerDispatcher>();
 builder.Services.AddSingleton<OutcomeFeePlannerTriggerQueue>();
 builder.Services.AddHostedService<OutcomeFeePlannerTriggerHostedService>();
+builder.Services.AddHostedService<TaskDomainOutboxHostedService>();
 builder.Services.AddSingleton<BackupJobQueue>();
 builder.Services.AddScoped<BackupService>();
 builder.Services.AddHostedService<BackupJobHostedService>();
@@ -588,7 +636,7 @@ using (var scope = app.Services.CreateScope())
         tenantContext.Set(tenant.Id, tenant.Slug);
         await TenantSeedHelper.BackfillTenantIdsAsync(context, tenant.Id);
 
-        var seedEnabled = builder.Configuration.GetValue("Seed:Enabled", app.Environment.IsDevelopment());
+        var seedEnabled = builder.Configuration.GetValue("Seed:Enabled", false);
         if (seedEnabled)
         {
             var passwordPolicy = services.GetRequiredService<PasswordPolicyService>();
@@ -763,7 +811,7 @@ static (string scheme, string baseServiceName)? ResolveRenderSiblingCorsRule(
     IConfiguration configuration,
     IEnumerable<string> allowedCorsOrigins)
 {
-    var allowRenderSiblingOrigins = configuration.GetValue("Cors:AllowRenderSiblingOrigins", true);
+    var allowRenderSiblingOrigins = configuration.GetValue("Cors:AllowRenderSiblingOrigins", false);
     if (!allowRenderSiblingOrigins)
     {
         return null;
@@ -992,6 +1040,8 @@ static void EnsureProductionSecurityRequirements(IConfiguration configuration)
     RequireBase64Key(configuration, "Security:DbEncryptionKey", exactBytes: 32, minBytes: null, errors);
     RequireBase64Key(configuration, "Security:AuditLogKey", exactBytes: null, minBytes: 32, errors);
     RequireIntegrationSecretProtection(configuration, errors);
+    RequireFlagDisabled(configuration, "Seed:Enabled", errors);
+    RequireFlagDisabled(configuration, "Seed:ResetPasswords", errors);
 
     if (errors.Count > 0)
     {
@@ -1068,6 +1118,14 @@ static void RequireFlagEnabled(IConfiguration configuration, string key, List<st
     if (!configuration.GetValue(key, false))
     {
         errors.Add($"{key} must be set to true.");
+    }
+}
+
+static void RequireFlagDisabled(IConfiguration configuration, string key, List<string> errors)
+{
+    if (configuration.GetValue(key, false))
+    {
+        errors.Add($"{key} must be set to false.");
     }
 }
 
@@ -1193,7 +1251,25 @@ static void InitializeDatabase(JurisFlowDbContext context, string provider, stri
         return;
     }
 
+    if (string.Equals(bootstrapMode, "validate", StringComparison.OrdinalIgnoreCase))
+    {
+        ValidateDatabaseMigrations(context);
+        return;
+    }
+
     context.Database.Migrate();
+}
+
+static void ValidateDatabaseMigrations(JurisFlowDbContext context)
+{
+    var pending = context.Database.GetPendingMigrations().ToList();
+    if (pending.Count == 0)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(
+        $"Database schema is not up to date. Pending migrations: {string.Join(", ", pending)}");
 }
 
 static void InitializePostgresSchema(JurisFlowDbContext context)
@@ -1253,15 +1329,34 @@ static string ResolveDatabaseBootstrapMode(IConfiguration configuration, string 
         return configuredMode switch
         {
             "migrate" => "migrate",
+            "validate" => "validate",
             "ensure-created" => "ensure-created",
             "ensurecreated" => "ensure-created",
-            _ => throw new InvalidOperationException("Database:BootstrapMode must be 'migrate' or 'ensure-created'.")
+            _ => throw new InvalidOperationException("Database:BootstrapMode must be 'migrate', 'validate', or 'ensure-created'.")
         };
     }
 
     return string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase)
-        ? "ensure-created"
+        ? "migrate"
         : "migrate";
+}
+
+static string? ResolveJwtSigningKey(IConfiguration configuration, IHostEnvironment environment)
+{
+    var configured = configuration["Jwt:Key"];
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return configured;
+    }
+
+    if (!environment.IsDevelopment())
+    {
+        return null;
+    }
+
+    return configuration["Jwt:DevelopmentKey"]
+        ?? Environment.GetEnvironmentVariable("JURISFLOW_JWT_DEV_KEY")
+        ?? "DevelopmentOnly_JurisFlow_Jwt_Key_Override_Me_1234567890";
 }
 
 static string ResolveSqliteConnectionString(string connectionString, string contentRoot)

@@ -320,10 +320,29 @@ public class BackupE2eApplicationFactory : WebApplicationFactory<Program>
                 if (hostedDescriptor.ImplementationType == typeof(RetentionHostedService)
                     || hostedDescriptor.ImplementationType == typeof(DeadlineReminderHostedService)
                     || hostedDescriptor.ImplementationType == typeof(OperationsJobHostedService)
-                    || hostedDescriptor.ImplementationType == typeof(IntegrationSecretMaintenanceHostedService))
+                    || hostedDescriptor.ImplementationType == typeof(IntegrationSecretMaintenanceHostedService)
+                    || hostedDescriptor.ImplementationType == typeof(TaskDomainOutboxHostedService))
                 {
                     services.Remove(hostedDescriptor);
                 }
+            }
+
+            var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<JurisFlowDbContext>();
+            db.Database.EnsureCreated();
+
+            if (!db.Tenants.Any(t => t.Slug == _tenantSlug))
+            {
+                db.Tenants.Add(new Tenant
+                {
+                    Name = "Backup E2E Firm",
+                    Slug = _tenantSlug,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                });
+                db.SaveChanges();
             }
         });
     }

@@ -99,8 +99,14 @@ public class TenantIsolationIntegrationTests : IClassFixture<TestApplicationFact
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         using var document = JsonDocument.Parse(payload);
-        Assert.True(!document.RootElement.TryGetProperty("leads", out var leadsElement) || leadsElement.ValueKind == JsonValueKind.Null);
-        Assert.True(!document.RootElement.TryGetProperty("clients", out var clientsElement) || clientsElement.ValueKind == JsonValueKind.Null);
+        Assert.True(
+            !document.RootElement.TryGetProperty("leads", out var leadsElement) ||
+            leadsElement.ValueKind == JsonValueKind.Null ||
+            (leadsElement.ValueKind == JsonValueKind.Array && leadsElement.GetArrayLength() == 0));
+        Assert.True(
+            !document.RootElement.TryGetProperty("clients", out var clientsElement) ||
+            clientsElement.ValueKind == JsonValueKind.Null ||
+            (clientsElement.ValueKind == JsonValueKind.Array && clientsElement.GetArrayLength() == 0));
 
         var leadsReadModelRequest = CreateAuthenticatedRequest(
             HttpMethod.Get,

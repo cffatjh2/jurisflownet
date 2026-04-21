@@ -8,6 +8,7 @@ import {
     CalendarEvent,
     Invoice,
     TaskStatus,
+    TaskCollectionResponse,
     Expense,
     Employee,
     IntegrationItem,
@@ -188,6 +189,11 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}, allowRefre
     }
     throw new Error(`API Error: Unexpected non-JSON response from ${endpoint}.`);
 };
+
+const buildIfMatchHeaders = (rowVersion?: string) =>
+    rowVersion
+        ? { 'If-Match': `"${rowVersion}"` }
+        : {};
 
 const fetchFile = async (endpoint: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
@@ -746,15 +752,46 @@ export const api = {
         fetchJson(`/matters/${encodeURIComponent(matterId)}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }),
 
     // Tasks
-    getTasks: () => fetchJson('/tasks'),
+    getTasks: (params?: {
+        cursor?: string;
+        limit?: number;
+        status?: string;
+        matterId?: string;
+        assignedEmployeeId?: string;
+        dueFrom?: string;
+        dueTo?: string;
+        includeArchived?: boolean;
+    }) => {
+        const qs = new URLSearchParams();
+        if (params?.cursor) qs.set('cursor', params.cursor);
+        if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+        if (params?.status) qs.set('status', params.status);
+        if (params?.matterId) qs.set('matterId', params.matterId);
+        if (params?.assignedEmployeeId) qs.set('assignedEmployeeId', params.assignedEmployeeId);
+        if (params?.dueFrom) qs.set('dueFrom', params.dueFrom);
+        if (params?.dueTo) qs.set('dueTo', params.dueTo);
+        if (typeof params?.includeArchived === 'boolean') qs.set('includeArchived', String(params.includeArchived));
+        const query = qs.toString() ? `?${qs.toString()}` : '';
+        return fetchJson(`/tasks${query}`) as Promise<TaskCollectionResponse | null>;
+    },
     createTask: (data: Partial<Task>) => fetchJson('/tasks', { method: 'POST', body: JSON.stringify(data) }),
-    updateTaskStatus: (id: string, status: TaskStatus) => fetchJson(`/tasks/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
-    updateTask: (id: string, data: Partial<Task>) => fetchJson(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    updateTaskStatus: (id: string, status: TaskStatus, rowVersion?: string) =>
+        fetchJson(`/tasks/${id}/status`, {
+            method: 'PUT',
+            headers: buildIfMatchHeaders(rowVersion),
+            body: JSON.stringify({ status })
+        }),
+    updateTask: (id: string, data: Partial<Task>, rowVersion?: string) =>
+        fetchJson(`/tasks/${id}`, {
+            method: 'PATCH',
+            headers: buildIfMatchHeaders(rowVersion),
+            body: JSON.stringify(data)
+        }),
     deleteTask: (id: string) => fetchJson(`/tasks/${id}`, { method: 'DELETE' }),
 
     // Task Templates
     getTaskTemplates: () => fetchJson('/task-templates'),
-    createTasksFromTemplate: (data: { templateId: string; matterId?: string; assignedTo?: string; baseDate?: string }) =>
+    createTasksFromTemplate: (data: { templateId: string; matterId?: string; assignedEmployeeId?: string; baseDate?: string }) =>
         fetchJson('/tasks/from-template', { method: 'POST', body: JSON.stringify(data) }),
 
     // Time & Expenses

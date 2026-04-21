@@ -1,8 +1,10 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Diagnostics;
+using JurisFlow.Server.Contracts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.DTOs;
@@ -19,21 +21,25 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly ILogger<BootstrapController> _logger;
         private readonly MatterAccessService _matterAccess;
+        private readonly TaskAccessService _taskAccess;
         private readonly MatterClientLinkService _matterClientLinks;
 
         public BootstrapController(
             JurisFlowDbContext context,
             ILogger<BootstrapController> logger,
             MatterAccessService matterAccess,
+            TaskAccessService taskAccess,
             MatterClientLinkService matterClientLinks)
         {
             _context = context;
             _logger = logger;
             _matterAccess = matterAccess;
+            _taskAccess = taskAccess;
             _matterClientLinks = matterClientLinks;
         }
 
         [HttpGet]
+        [EnableRateLimiting("BootstrapRead")]
         public async Task<ActionResult<BootstrapResponse>> GetBootstrap([FromQuery] string? scope = null)
         {
             var userId = GetUserId();
@@ -75,35 +81,52 @@ namespace JurisFlow.Server.Controllers
                     readableMatterMap = readableMatters.ToDictionary(m => m.Id, StringComparer.Ordinal);
                     response.Matters = readableMatters;
 
-                    var tasksQuery = _context.Tasks.AsNoTracking().AsQueryable();
-                    if (isPrivileged)
-                    {
-                        tasksQuery = TenantScope(tasksQuery).Where(t => t.MatterId == null || t.MatterId == "" || TenantScope(_context.Matters).Any(m => m.Id == t.MatterId));
-                    }
-                    else
-                    {
-                        tasksQuery = TenantScope(tasksQuery).Where(t => !string.IsNullOrWhiteSpace(t.MatterId) && readableMatterIdsQuery.Contains(t.MatterId!));
-                    }
-
-                    response.Tasks = await tasksQuery
-                        .OrderByDescending(t => t.CreatedAt)
+                    var tasks = await _taskAccess.ApplyReadableScope(_context.Tasks.AsNoTracking(), User)
+                        .Where(t => t.Status != "Archived")
+                        .OrderByDescending(t => t.UpdatedAt)
+                        .ThenByDescending(t => t.Id)
+                        .Take(50)
                         .Select(t => new
                         {
-                            id = t.Id,
-                            title = t.Title,
-                            description = t.Description,
-                            dueDate = t.DueDate,
-                            reminderAt = t.ReminderAt,
-                            priority = t.Priority,
-                            status = t.Status,
-                            outcome = t.Outcome,
-                            matterId = t.MatterId,
-                            assignedTo = t.AssignedEmployee != null ? t.AssignedEmployee.FirstName : null,
-                            reminderSent = t.ReminderSent,
-                            createdAt = t.CreatedAt,
-                            updatedAt = t.UpdatedAt
+                            t.Id,
+                            t.Title,
+                            t.Description,
+                            t.DueDate,
+                            t.ReminderAt,
+                            t.Priority,
+                            t.Status,
+                            t.Outcome,
+                            t.MatterId,
+                            MatterName = t.Matter != null ? t.Matter.Name : null,
+                            t.AssignedEmployeeId,
+                            AssignedEmployeeFirstName = t.AssignedEmployee != null ? t.AssignedEmployee.FirstName : null,
+                            AssignedEmployeeLastName = t.AssignedEmployee != null ? t.AssignedEmployee.LastName : null,
+                            t.RowVersion,
+                            t.ReminderSent,
+                            t.CreatedAt,
+                            t.UpdatedAt
                         })
                         .ToListAsync();
+
+                    response.Tasks = tasks.Select(t => new TaskResponse
+                    {
+                        Id = t.Id,
+                        Title = t.Title,
+                        Description = t.Description,
+                        DueDate = t.DueDate,
+                        ReminderAt = t.ReminderAt,
+                        Priority = t.Priority,
+                        Status = t.Status,
+                        Outcome = t.Outcome,
+                        MatterId = t.MatterId,
+                        MatterName = t.MatterName,
+                        AssignedEmployeeId = t.AssignedEmployeeId,
+                        AssignedTo = $"{t.AssignedEmployeeFirstName} {t.AssignedEmployeeLastName}".Trim() is var assignedTo && !string.IsNullOrWhiteSpace(assignedTo) ? assignedTo : null,
+                        RowVersion = t.RowVersion,
+                        ReminderSent = t.ReminderSent,
+                        CreatedAt = t.CreatedAt,
+                        UpdatedAt = t.UpdatedAt
+                    }).ToList();
 
                     var timeEntriesQuery = _context.TimeEntries.AsNoTracking().AsQueryable();
                     if (isPrivileged)
@@ -216,31 +239,21 @@ namespace JurisFlow.Server.Controllers
                             ((d.MatterId == null || d.MatterId == "") && d.UploadedBy == userId));
                     }
 
-                    response.Documents = await documentsQuery
+                    response.Documents = (await documentsQuery
                         .OrderByDescending(d => d.CreatedAt)
                         .Take(200)
-                        .Select(d => new
-                        {
-                            d.Id,
-                            d.Name,
-                            d.FileSize,
-                            d.MimeType,
-                            d.MatterId,
-                            d.Version,
-                            d.Category,
-                            d.Description,
-                            d.Tags,
-                            d.Status,
-                            d.LegalHoldReason,
-                            d.LegalHoldPlacedAt,
-                            d.LegalHoldReleasedAt,
-                            d.LegalHoldPlacedBy,
-                            d.CreatedAt,
-                            d.UpdatedAt
-                        })
-                        .ToListAsync();
+                        .ToListAsync())
+                        .Select(BootstrapDocumentResponse.FromModel)
+                        .ToList();
 
-                    response.TaskTemplates = Array.Empty<object>();
+                    response.TaskTemplates = (await _context.Set<TaskTemplate>()
+                        .AsNoTracking()
+                        .Where(t => t.IsActive)
+                        .OrderBy(t => t.Category)
+                        .ThenBy(t => t.Name)
+                        .ToListAsync())
+                        .Select(TaskTemplateResponse.FromModel)
+                        .ToList();
                     _logger.LogInformation("Bootstrap deferred scope loaded in {ElapsedMs} ms for user {UserId}", deferredStopwatch.ElapsedMilliseconds, userId);
                 }
 

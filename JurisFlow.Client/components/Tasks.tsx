@@ -93,8 +93,7 @@ const Tasks: React.FC = () => {
       status: 'To Do',
       startDate: newTaskStartDate ? new Date(newTaskStartDate).toISOString() : undefined,
       dueDate: newTaskDueDate ? new Date(newTaskDueDate).toISOString() : new Date().toISOString(),
-      matterId: newTaskMatterId,
-      assignedTo: 'ME'
+      matterId: newTaskMatterId
     });
     setShowModal(false);
     resetForm();
@@ -122,7 +121,6 @@ const Tasks: React.FC = () => {
   // Template Modal State
   const [templateId, setTemplateId] = useState('');
   const [templateMatterId, setTemplateMatterId] = useState('');
-  const [templateAssignedTo, setTemplateAssignedTo] = useState('');
   const [templateBaseDate, setTemplateBaseDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const handleCreateFromTemplate = async (e: React.FormEvent) => {
@@ -131,13 +129,11 @@ const Tasks: React.FC = () => {
     await createTasksFromTemplate({
       templateId,
       matterId: templateMatterId || undefined,
-      assignedTo: templateAssignedTo || undefined,
       baseDate: templateBaseDate ? new Date(templateBaseDate).toISOString() : undefined,
     });
     setShowTemplateModal(false);
     setTemplateId('');
     setTemplateMatterId('');
-    setTemplateAssignedTo('');
     setTemplateBaseDate(new Date().toISOString().slice(0, 10));
   };
 
@@ -669,25 +665,14 @@ const Tasks: React.FC = () => {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Start Date</label>
-                  <input
-                    type="date"
-                    value={templateBaseDate}
-                    onChange={e => setTemplateBaseDate(e.target.value)}
-                    className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-slate-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Assignee (Initials)</label>
-                  <input
-                    value={templateAssignedTo}
-                    onChange={e => setTemplateAssignedTo(e.target.value)}
-                    placeholder="MR / JP / ..."
-                    className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-slate-500 outline-none"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Start Date</label>
+                <input
+                  type="date"
+                  value={templateBaseDate}
+                  onChange={e => setTemplateBaseDate(e.target.value)}
+                  className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-slate-500 outline-none"
+                />
               </div>
 
               <div className="flex justify-end gap-2 pt-2">

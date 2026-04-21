@@ -681,11 +681,21 @@ export interface Task {
   isCompleted?: boolean;     // Quick completion flag
   outcome?: TaskOutcome;     // for completed tasks
   matterId?: string;
+  assignedEmployeeId?: string;
   assignedTo?: string;       // Initials
   templateId?: string;
   completedAt?: string;
+  rowVersion?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface TaskCollectionResponse {
+  items: Task[];
+  totalCount: number;
+  limit: number;
+  hasMore: boolean;
+  nextCursor?: string | null;
 }
 
 export interface TaskTemplate {
