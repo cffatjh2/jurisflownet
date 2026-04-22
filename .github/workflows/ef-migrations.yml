@@ -66,6 +66,8 @@ jobs:
           --project JurisFlow.Server/JurisFlow.Server.csproj
           --startup-project JurisFlow.Server/JurisFlow.Server.csproj
           --context JurisFlow.Server.Data.JurisFlowDbContext
+          --configuration Release
+          --no-build
           --idempotent
           --output ef-migrations.sql
 
@@ -86,3 +88,5 @@ jobs:
           --project JurisFlow.Server/JurisFlow.Server.csproj
           --startup-project JurisFlow.Server/JurisFlow.Server.csproj
           --context JurisFlow.Server.Data.JurisFlowDbContext
+          --configuration Release
+          --no-build
