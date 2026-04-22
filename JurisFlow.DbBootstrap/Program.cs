@@ -16,26 +16,28 @@ if (!string.Equals(context.Database.ProviderName, "Npgsql.EntityFrameworkCore.Po
     throw new InvalidOperationException("JurisFlow.DbBootstrap only supports PostgreSQL targets.");
 }
 
-var state = DetectDatabaseState(context);
-switch (state)
+var inspection = InspectDatabase(context);
+switch (ClassifyDatabaseState(inspection))
 {
-    case DatabaseState.Fresh:
-        BootstrapFreshDatabase(context);
+    case DatabaseState.CreateAndStamp:
+        CreateTablesAndStampMigrationHistory(context);
         WriteGithubOutput(githubOutputPath, "bootstrapped", "true");
-        WriteGithubOutput(githubOutputPath, "database_state", "fresh");
-        Console.WriteLine("Fresh PostgreSQL schema created and EF migration history stamped.");
+        WriteGithubOutput(githubOutputPath, "database_state", "create_and_stamp");
+        Console.WriteLine("PostgreSQL schema created and EF migration history stamped.");
+        break;
+    case DatabaseState.StampOnly:
+        StampMigrationHistory(context);
+        WriteGithubOutput(githubOutputPath, "bootstrapped", "true");
+        WriteGithubOutput(githubOutputPath, "database_state", "stamp_only");
+        Console.WriteLine("Existing JurisFlow PostgreSQL schema detected; EF migration history stamped.");
         break;
     case DatabaseState.Ready:
         WriteGithubOutput(githubOutputPath, "bootstrapped", "false");
         WriteGithubOutput(githubOutputPath, "database_state", "ready");
         Console.WriteLine("Database already contains EF migration history; bootstrap not required.");
         break;
-    case DatabaseState.NonEmptyWithoutHistory:
-        throw new InvalidOperationException(
-            "Database contains application tables but no __EFMigrationsHistory table. Refusing automatic bootstrap because the target is not empty.");
-    case DatabaseState.HistoryWithoutTables:
-        throw new InvalidOperationException(
-            "Database contains __EFMigrationsHistory but no application tables. Manual intervention is required.");
+    case DatabaseState.PartialModelWithoutHistory:
+        throw new InvalidOperationException(BuildPartialSchemaErrorMessage(inspection));
     default:
         throw new ArgumentOutOfRangeException();
 }
@@ -70,7 +72,7 @@ static void WriteGithubOutput(string? githubOutputPath, string key, string value
     File.AppendAllText(githubOutputPath, $"{key}={value}{Environment.NewLine}");
 }
 
-static DatabaseState DetectDatabaseState(JurisFlowDbContext context)
+static DatabaseInspection InspectDatabase(JurisFlowDbContext context)
 {
     var connection = context.Database.GetDbConnection();
     var shouldCloseConnection = connection.State != ConnectionState.Open;
@@ -81,6 +83,7 @@ static DatabaseState DetectDatabaseState(JurisFlowDbContext context)
 
     try
     {
+        var currentSchema = ExecuteScalar<string>(connection, "select current_schema();");
         var historyExists = ExecuteScalar<bool>(connection, """
             select exists (
                 select 1
@@ -90,27 +93,33 @@ static DatabaseState DetectDatabaseState(JurisFlowDbContext context)
             );
             """);
 
-        var applicationTableCount = ExecuteScalar<long>(connection, """
-            select count(*)
+        var existingTables = ExecuteColumn(connection, """
+            select table_name
             from information_schema.tables
             where table_schema = current_schema()
               and table_type = 'BASE TABLE'
-              and table_name <> '__EFMigrationsHistory';
+              and table_name <> '__EFMigrationsHistory'
+            order by table_name;
             """);
 
-        if (applicationTableCount < 0)
-        {
-            throw new InvalidOperationException("Application table count cannot be negative.");
-        }
+        var expectedModelTables = context.Model.GetRelationalModel().Tables
+            .Where(table => string.Equals(table.Schema ?? currentSchema, currentSchema, StringComparison.Ordinal))
+            .Select(table => table.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
 
-        return (historyExists, applicationTableCount) switch
-        {
-            (false, 0) => DatabaseState.Fresh,
-            (true, > 0) => DatabaseState.Ready,
-            (false, > 0) => DatabaseState.NonEmptyWithoutHistory,
-            (true, 0) => DatabaseState.HistoryWithoutTables,
-            _ => throw new InvalidOperationException("Unexpected PostgreSQL schema state.")
-        };
+        var existingTableSet = new HashSet<string>(existingTables, StringComparer.Ordinal);
+        var matchingModelTables = expectedModelTables
+            .Where(existingTableSet.Contains)
+            .ToArray();
+
+        return new DatabaseInspection(
+            currentSchema,
+            historyExists,
+            existingTables,
+            expectedModelTables,
+            matchingModelTables);
     }
     finally
     {
@@ -129,13 +138,104 @@ static T ExecuteScalar<T>(DbConnection connection, string commandText)
     return (T)Convert.ChangeType(value!, typeof(T));
 }
 
-static void BootstrapFreshDatabase(JurisFlowDbContext context)
+static string[] ExecuteColumn(DbConnection connection, string commandText)
+{
+    using var command = connection.CreateCommand();
+    command.CommandText = commandText;
+    using var reader = command.ExecuteReader();
+
+    var values = new List<string>();
+    while (reader.Read())
+    {
+        values.Add(Convert.ToString(reader.GetValue(0))!);
+    }
+
+    return values.ToArray();
+}
+
+static DatabaseState ClassifyDatabaseState(DatabaseInspection inspection)
+{
+    if (inspection.HistoryExists)
+    {
+        return DatabaseState.Ready;
+    }
+
+    if (inspection.MatchingModelTables.Count == 0)
+    {
+        return DatabaseState.CreateAndStamp;
+    }
+
+    return inspection.MatchingModelTables.Count == inspection.ExpectedModelTables.Count
+        ? DatabaseState.StampOnly
+        : DatabaseState.PartialModelWithoutHistory;
+}
+
+static string BuildPartialSchemaErrorMessage(DatabaseInspection inspection)
+{
+    var missingTables = inspection.ExpectedModelTables
+        .Except(inspection.MatchingModelTables, StringComparer.Ordinal)
+        .Take(10)
+        .ToArray();
+
+    var matchingTables = inspection.MatchingModelTables
+        .Take(10)
+        .ToArray();
+
+    return
+        $"Database schema '{inspection.CurrentSchema}' contains {inspection.MatchingModelTables.Count} of {inspection.ExpectedModelTables.Count} expected JurisFlow tables but no __EFMigrationsHistory table. " +
+        $"Matching tables: {JoinSample(matchingTables)}. Missing tables: {JoinSample(missingTables)}.";
+}
+
+static string JoinSample(IEnumerable<string> values)
+{
+    var sample = values.ToArray();
+    return sample.Length == 0
+        ? "(none)"
+        : string.Join(", ", sample);
+}
+
+static void CreateTablesAndStampMigrationHistory(JurisFlowDbContext context)
 {
     var databaseCreator = context.GetService<IRelationalDatabaseCreator>();
     databaseCreator.CreateTables();
 
+    StampMigrationHistory(context);
+}
+
+static void StampMigrationHistory(JurisFlowDbContext context)
+{
+    var connection = context.Database.GetDbConnection();
+    var shouldCloseConnection = connection.State != ConnectionState.Open;
+    if (shouldCloseConnection)
+    {
+        connection.Open();
+    }
+
+    bool historyExists;
+    try
+    {
+        historyExists = ExecuteScalar<bool>(connection, """
+            select exists (
+                select 1
+                from information_schema.tables
+                where table_schema = current_schema()
+                  and table_name = '__EFMigrationsHistory'
+            );
+            """);
+    }
+    finally
+    {
+        if (shouldCloseConnection)
+        {
+            connection.Close();
+        }
+    }
+
     var historyRepository = context.GetService<IHistoryRepository>();
-    context.Database.ExecuteSqlRaw(historyRepository.GetCreateIfNotExistsScript());
+    if (!historyExists)
+    {
+        context.Database.ExecuteSqlRaw(historyRepository.GetCreateIfNotExistsScript());
+    }
 
     var productVersion = ResolveEfProductVersion();
     foreach (var migrationId in context.Database.GetMigrations().OrderBy(id => id, StringComparer.Ordinal))
@@ -163,8 +263,15 @@ static string ResolveEfProductVersion()
 
 enum DatabaseState
 {
-    Fresh,
+    CreateAndStamp,
+    StampOnly,
     Ready,
-    NonEmptyWithoutHistory,
-    HistoryWithoutTables
+    PartialModelWithoutHistory
 }
+
+sealed record DatabaseInspection(
+    string CurrentSchema,
+    bool HistoryExists,
+    IReadOnlyList<string> ExistingTables,
+    IReadOnlyList<string> ExpectedModelTables,
+    IReadOnlyList<string> MatchingModelTables);
