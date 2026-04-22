@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -31,6 +32,10 @@ public sealed class JurisFlowDesignTimeDbContextFactory : IDesignTimeDbContextFa
         }
 
         var provider = ResolveProvider(configuration, connectionString);
+        var ignorePendingModelChangesWarning = string.Equals(
+            Environment.GetEnvironmentVariable("EF_IGNORE_PENDING_MODEL_CHANGES"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
         var resolvedConnectionString = provider switch
         {
             "sqlite" => ResolveSqliteConnectionString(connectionString, contentRoot),
@@ -50,6 +55,12 @@ public sealed class JurisFlowDesignTimeDbContextFactory : IDesignTimeDbContextFa
                     npgsqlOptions.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null);
                 });
                 break;
+        }
+
+        if (ignorePendingModelChangesWarning)
+        {
+            optionsBuilder.ConfigureWarnings(warnings =>
+                warnings.Ignore(RelationalEventId.PendingModelChangesWarning));
         }
 
         var dbEncryptionService = new DbEncryptionService(configuration, NullLogger<DbEncryptionService>.Instance);

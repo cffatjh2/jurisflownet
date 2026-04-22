@@ -17,26 +17,39 @@ if (!string.Equals(context.Database.ProviderName, "Npgsql.EntityFrameworkCore.Po
 }
 
 var inspection = InspectDatabase(context);
-switch (ClassifyDatabaseState(inspection))
+var orderedMigrationIds = context.Database.GetMigrations().OrderBy(id => id, StringComparer.Ordinal).ToArray();
+var decision = DecideBootstrapPlan(inspection, orderedMigrationIds);
+switch (decision.Action)
 {
-    case DatabaseState.CreateAndStamp:
-        CreateTablesAndStampMigrationHistory(context);
+    case BootstrapAction.CreateAndStampAll:
+        CreateTables(context);
+        StampMigrationHistory(context, orderedMigrationIds);
         WriteGithubOutput(githubOutputPath, "bootstrapped", "true");
         WriteGithubOutput(githubOutputPath, "database_state", "create_and_stamp");
+        WriteGithubOutput(githubOutputPath, "requires_update", "false");
         Console.WriteLine("PostgreSQL schema created and EF migration history stamped.");
         break;
-    case DatabaseState.StampOnly:
-        StampMigrationHistory(context);
+    case BootstrapAction.StampAll:
+        StampMigrationHistory(context, orderedMigrationIds);
         WriteGithubOutput(githubOutputPath, "bootstrapped", "true");
         WriteGithubOutput(githubOutputPath, "database_state", "stamp_only");
+        WriteGithubOutput(githubOutputPath, "requires_update", "false");
         Console.WriteLine("Existing JurisFlow PostgreSQL schema detected; EF migration history stamped.");
         break;
-    case DatabaseState.Ready:
+    case BootstrapAction.StampBaselineThenUpdate:
+        StampMigrationHistory(context, decision.MigrationsToStamp);
+        WriteGithubOutput(githubOutputPath, "bootstrapped", "true");
+        WriteGithubOutput(githubOutputPath, "database_state", "baseline_stamped");
+        WriteGithubOutput(githubOutputPath, "requires_update", "true");
+        Console.WriteLine($"Stamped EF migration history through {decision.MigrationsToStamp.LastOrDefault() ?? "(none)"}; remaining migrations will be applied normally.");
+        break;
+    case BootstrapAction.Ready:
         WriteGithubOutput(githubOutputPath, "bootstrapped", "false");
         WriteGithubOutput(githubOutputPath, "database_state", "ready");
+        WriteGithubOutput(githubOutputPath, "requires_update", "true");
         Console.WriteLine("Database already contains EF migration history; bootstrap not required.");
         break;
-    case DatabaseState.PartialModelWithoutHistory:
+    case BootstrapAction.UnsupportedPartialSchema:
         throw new InvalidOperationException(BuildPartialSchemaErrorMessage(inspection));
     default:
         throw new ArgumentOutOfRangeException();
@@ -153,21 +166,33 @@ static string[] ExecuteColumn(DbConnection connection, string commandText)
     return values.ToArray();
 }
 
-static DatabaseState ClassifyDatabaseState(DatabaseInspection inspection)
+static BootstrapDecision DecideBootstrapPlan(DatabaseInspection inspection, IReadOnlyList<string> orderedMigrationIds)
 {
     if (inspection.HistoryExists)
     {
-        return DatabaseState.Ready;
+        return new BootstrapDecision(BootstrapAction.Ready, Array.Empty<string>());
     }
 
     if (inspection.MatchingModelTables.Count == 0)
     {
-        return DatabaseState.CreateAndStamp;
+        return new BootstrapDecision(BootstrapAction.CreateAndStampAll, Array.Empty<string>());
     }
 
-    return inspection.MatchingModelTables.Count == inspection.ExpectedModelTables.Count
-        ? DatabaseState.StampOnly
-        : DatabaseState.PartialModelWithoutHistory;
+    if (inspection.MatchingModelTables.Count == inspection.ExpectedModelTables.Count)
+    {
+        return new BootstrapDecision(BootstrapAction.StampAll, Array.Empty<string>());
+    }
+
+    var missingTables = inspection.ExpectedModelTables
+        .Except(inspection.MatchingModelTables, StringComparer.Ordinal)
+        .ToArray();
+
+    if (!TryResolveBaselineStamp(orderedMigrationIds, missingTables, out var migrationsToStamp))
+    {
+        return new BootstrapDecision(BootstrapAction.UnsupportedPartialSchema, Array.Empty<string>());
+    }
+
+    return new BootstrapDecision(BootstrapAction.StampBaselineThenUpdate, migrationsToStamp);
 }
 
 static string BuildPartialSchemaErrorMessage(DatabaseInspection inspection)
@@ -194,15 +219,54 @@ static string JoinSample(IEnumerable<string> values)
         : string.Join(", ", sample);
 }
 
-static void CreateTablesAndStampMigrationHistory(JurisFlowDbContext context)
+static bool TryResolveBaselineStamp(
+    IReadOnlyList<string> orderedMigrationIds,
+    IReadOnlyList<string> missingTables,
+    out string[] migrationsToStamp)
+{
+    migrationsToStamp = Array.Empty<string>();
+
+    var tableToMigration = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["LeadStatusHistories"] = "20260419170340_AddLeadDomainParityPhase2",
+        ["TaskTemplates"] = "20260421123750_AddTaskProductionReadinessPhase0",
+        ["MessageAttachments"] = "20260421213011_AddMessageAttachments",
+        ["PaymentCommandDeduplications"] = "20260422112409_HardenPaymentsAndBillingLocksP1"
+    };
+
+    if (missingTables.Any(table => !tableToMigration.ContainsKey(table)))
+    {
+        return false;
+    }
+
+    var earliestMissingMigration = missingTables
+        .Select(table => tableToMigration[table])
+        .Distinct(StringComparer.Ordinal)
+        .OrderBy(id => id, StringComparer.Ordinal)
+        .FirstOrDefault();
+
+    if (string.IsNullOrWhiteSpace(earliestMissingMigration))
+    {
+        return false;
+    }
+
+    var stopIndex = Array.IndexOf(orderedMigrationIds.ToArray(), earliestMissingMigration);
+    if (stopIndex < 0)
+    {
+        return false;
+    }
+
+    migrationsToStamp = orderedMigrationIds.Take(stopIndex).ToArray();
+    return true;
+}
+
+static void CreateTables(JurisFlowDbContext context)
 {
     var databaseCreator = context.GetService<IRelationalDatabaseCreator>();
     databaseCreator.CreateTables();
-
-    StampMigrationHistory(context);
 }
 
-static void StampMigrationHistory(JurisFlowDbContext context)
+static void StampMigrationHistory(JurisFlowDbContext context, IEnumerable<string> migrationIds)
 {
     var connection = context.Database.GetDbConnection();
     var shouldCloseConnection = connection.State != ConnectionState.Open;
@@ -238,7 +302,7 @@ static void StampMigrationHistory(JurisFlowDbContext context)
     }
 
     var productVersion = ResolveEfProductVersion();
-    foreach (var migrationId in context.Database.GetMigrations().OrderBy(id => id, StringComparer.Ordinal))
+    foreach (var migrationId in migrationIds.OrderBy(id => id, StringComparer.Ordinal))
     {
         context.Database.ExecuteSqlRaw(historyRepository.GetInsertScript(new HistoryRow(migrationId, productVersion)));
     }
@@ -261,12 +325,13 @@ static string ResolveEfProductVersion()
         : informationalVersion;
 }
 
-enum DatabaseState
+enum BootstrapAction
 {
-    CreateAndStamp,
-    StampOnly,
+    CreateAndStampAll,
+    StampAll,
+    StampBaselineThenUpdate,
     Ready,
-    PartialModelWithoutHistory
+    UnsupportedPartialSchema
 }
 
 sealed record DatabaseInspection(
@@ -275,3 +340,7 @@ sealed record DatabaseInspection(
     IReadOnlyList<string> ExistingTables,
     IReadOnlyList<string> ExpectedModelTables,
     IReadOnlyList<string> MatchingModelTables);
+
+sealed record BootstrapDecision(
+    BootstrapAction Action,
+    IReadOnlyList<string> MigrationsToStamp);

@@ -76,11 +76,12 @@ jobs:
           "$GITHUB_OUTPUT"
 
       - name: Generate idempotent SQL script
-        if: steps.bootstrap.outputs.bootstrapped != 'true'
+        if: steps.bootstrap.outputs.requires_update == 'true'
         env:
           ASPNETCORE_ENVIRONMENT: Development
           Database__Provider: postgres
           ConnectionStrings__DefaultConnection: ${{ env.DEFAULT_CONNECTION }}
+          EF_IGNORE_PENDING_MODEL_CHANGES: "true"
         run: >
           dotnet ef migrations script
           --project JurisFlow.Server/JurisFlow.Server.csproj
@@ -92,18 +93,19 @@ jobs:
           --output ef-migrations.sql
 
       - name: Upload SQL script artifact
-        if: steps.bootstrap.outputs.bootstrapped != 'true'
+        if: steps.bootstrap.outputs.requires_update == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ef-migrations-${{ github.event.inputs.target }}
           path: ef-migrations.sql
 
       - name: Apply migrations
-        if: ${{ steps.bootstrap.outputs.bootstrapped != 'true' && github.event.inputs.apply == 'true' }}
+        if: ${{ steps.bootstrap.outputs.requires_update == 'true' && github.event.inputs.apply == 'true' }}
         env:
           ASPNETCORE_ENVIRONMENT: Development
           Database__Provider: postgres
           ConnectionStrings__DefaultConnection: ${{ env.DEFAULT_CONNECTION }}
+          EF_IGNORE_PENDING_MODEL_CHANGES: "true"
         run: >
           dotnet ef database update
           --project JurisFlow.Server/JurisFlow.Server.csproj
