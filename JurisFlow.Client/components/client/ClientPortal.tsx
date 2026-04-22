@@ -13,7 +13,7 @@ import ClientAppointments from './ClientAppointments';
 import ClientPayments from './ClientPayments';
 import ClientSignatures from './ClientSignatures';
 import ClientNotificationsPanel from './ClientNotificationsPanel';
-import { Briefcase, CreditCard, Folder, Mail, User, Bell, Scale, X, Calendar as CalendarIcon, Video, Clock, Edit3, DollarSign } from '../Icons';
+import { Briefcase, CreditCard, Folder, Mail, User, Bell, Scale, X, Calendar as CalendarIcon, Video, Clock, Edit3, DollarSign, Menu } from '../Icons';
 import { clientApi } from '../../services/clientApi';
 
 type ClientTab = 'dashboard' | 'matters' | 'invoices' | 'payments' | 'documents' | 'messages' | 'calendar' | 'appointments' | 'signatures' | 'profile' | 'videocall';
@@ -23,6 +23,7 @@ const ClientPortal: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ClientTab>('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -50,9 +51,14 @@ const ClientPortal: React.FC = () => {
     return <ClientLogin />;
   }
 
+  const handleNavigate = (tab: ClientTab) => {
+    setActiveTab(tab);
+    setIsMobileNavOpen(false);
+  };
+
   const NavButton = ({ tab, icon: Icon, label }: { tab: ClientTab; icon: any; label: string }) => (
     <button
-      onClick={() => setActiveTab(tab)}
+      onClick={() => handleNavigate(tab)}
       className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 ${activeTab === tab
         ? 'bg-blue-600 text-white font-medium shadow-sm'
         : 'text-gray-600 hover:bg-gray-100'
@@ -80,13 +86,41 @@ const ClientPortal: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    if (!isMobileNavOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isMobileNavOpen]);
+
   return (
-    <div className="flex h-screen w-full bg-gray-50 font-sans overflow-hidden">
+    <div className="flex h-[100dvh] w-full bg-gray-50 font-sans overflow-hidden">
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setIsMobileNavOpen(false)}
+          className="fixed inset-0 z-20 bg-slate-950/50 md:hidden"
+        />
+      )}
+
       {/* SIDEBAR */}
-      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col z-20 relative">
+      <aside className={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] flex-col border-r border-gray-200 bg-white transition-transform duration-200 md:static md:z-20 md:w-64 md:max-w-none ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="h-16 flex items-center px-6 mb-2 border-b border-gray-200">
           <Scale className="w-6 h-6 text-blue-600 mr-3" />
           <span className="text-xl font-bold text-slate-900 tracking-tight">Juris<span className="text-blue-600">Flow</span></span>
+          <button
+            type="button"
+            onClick={() => setIsMobileNavOpen(false)}
+            className="ml-auto rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 md:hidden"
+            aria-label="Close navigation"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <div className="px-4 py-4 border-b border-gray-200">
@@ -146,12 +180,20 @@ const ClientPortal: React.FC = () => {
 
       {/* MAIN CONTENT */}
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50 relative">
-        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-10 sticky top-0">
-          <div>
-            <h1 className="text-lg font-bold text-slate-900">{getPageTitle()}</h1>
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-3 md:px-4 z-10 sticky top-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsMobileNavOpen(true)}
+              className="inline-flex rounded-lg p-2 text-gray-600 hover:bg-gray-100 md:hidden"
+              aria-label="Open navigation"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <h1 className="truncate text-base md:text-lg font-bold text-slate-900">{getPageTitle()}</h1>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4">
             <button
               onClick={() => setShowNotifications(!showNotifications)}
               className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"

@@ -701,20 +701,20 @@ const Documents: React.FC = () => {
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white">
+      <div className="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 bg-white">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">{t('docs_title')}</h1>
           <p className="text-sm text-gray-500 mt-1">{t('docs_subtitle')}</p>
         </div>
-        <div className="flex gap-3 relative">
-          <div className="hidden md:flex flex-col gap-1">
+        <div className="flex flex-wrap gap-3 relative">
+          <div className="flex flex-col gap-1 w-full md:w-auto">
             <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
               <Search className="w-4 h-4 text-gray-400" />
               <input
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Search by name, tag, or description..."
-                className="bg-transparent outline-none text-sm text-slate-700 placeholder:text-gray-400 w-64"
+                className="bg-transparent outline-none text-sm text-slate-700 placeholder:text-gray-400 w-full md:w-64"
               />
             </div>
             <label className="flex items-center gap-2 text-xs text-gray-500">
@@ -773,9 +773,9 @@ const Documents: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col lg:flex-row overflow-hidden">
         {/* Sidebar Tree */}
-        <div className="w-64 border-r border-gray-100 bg-gray-50 p-4 flex flex-col gap-1 overflow-y-auto">
+        <div className="w-full lg:w-64 border-b lg:border-b-0 lg:border-r border-gray-100 bg-gray-50 p-4 flex flex-col gap-1 overflow-y-auto max-h-60 lg:max-h-none">
           <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 px-2">Locations</div>
           <button
             onClick={() => setSelectedMatter(null)}
@@ -805,7 +805,7 @@ const Documents: React.FC = () => {
         </div>
 
         {/* File Grid */}
-        <div className="flex-1 p-6 overflow-y-auto">
+        <div className="flex-1 p-4 md:p-6 overflow-y-auto">
           {selectedIds.length > 0 && (
             <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="text-sm text-indigo-900 font-semibold">

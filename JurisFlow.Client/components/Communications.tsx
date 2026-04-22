@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Message, Employee, StaffMessage, Client, Matter } from '../types';
-import { Mail, Search, Plus, Send, X } from './Icons';
+import { Mail, Search, Plus, Send, X, ArrowLeft } from './Icons';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
 import { gmailService } from '../services/gmailService';
@@ -302,10 +302,21 @@ const Communications: React.FC = () => {
     });
   };
 
+  const hasSelectedThread =
+    mode === 'email' ? Boolean(selectedMessage) :
+      mode === 'direct' ? Boolean(selectedEmployee) :
+        Boolean(selectedClient);
+
+  const clearSelectedThread = () => {
+    setSelectedMsgId(null);
+    setSelectedEmployee(null);
+    setSelectedClient(null);
+  };
+
   return (
-    <div className="h-full flex bg-white relative">
+    <div className="h-full flex flex-col lg:flex-row bg-white relative">
       {/* Sidebar List */}
-      <div className="w-96 border-r border-gray-200 flex flex-col">
+      <div className={`${hasSelectedThread ? 'hidden lg:flex' : 'flex'} w-full lg:w-96 border-r border-gray-200 flex-col min-h-0`}>
         <div className="p-4 border-b border-gray-200 overflow-hidden">
           <div className="flex flex-wrap items-start gap-2 mb-3">
             <h2 className="text-lg font-bold text-slate-800 min-w-0 flex-1 truncate">{t('comms_title')}</h2>
@@ -456,14 +467,24 @@ const Communications: React.FC = () => {
       </div>
 
       {/* Message View */}
-      <div className="flex-1 flex flex-col bg-gray-50/50">
+      <div className={`${hasSelectedThread ? 'flex' : 'hidden lg:flex'} flex-1 min-w-0 flex-col bg-gray-50/50`}>
         {mode === 'email' ? (
           <>
             {selectedMessage ? (
-              <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-6 border-b border-gray-100">
+              <div className="flex-1 flex flex-col bg-white m-3 lg:m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-4 lg:p-6 border-b border-gray-100">
                   <div className="flex justify-between items-start mb-4">
-                    <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <button
+                        type="button"
+                        onClick={clearSelectedThread}
+                        className="mt-0.5 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                        aria-label="Back to messages"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+                      <h2 className="min-w-0 text-lg lg:text-xl font-bold text-slate-900 break-words">{selectedMessage.subject}</h2>
+                    </div>
                     <span className="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-1 rounded">{selectedMessage.date}</span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -476,7 +497,7 @@ const Communications: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <div className="p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                <div className="p-4 lg:p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap overflow-y-auto">
                     {selectedMessage.preview}
                     <br/><br/>
                     Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
@@ -521,14 +542,24 @@ const Communications: React.FC = () => {
             )}
           </>
         ) : mode === 'direct' ? (
-          <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex-1 flex flex-col bg-white m-3 lg:m-4 rounded-xl shadow-sm border border-gray-200 min-h-0">
             {selectedEmployee ? (
               <>
-                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                  <div>
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={clearSelectedThread}
+                      className="mt-0.5 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                      aria-label="Back to teammates"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                    <div className="min-w-0">
                     <p className="text-xs uppercase text-gray-500">Direct chat</p>
                     <h3 className="text-lg font-semibold text-slate-900">{selectedEmployee.firstName} {selectedEmployee.lastName}</h3>
                     <p className="text-xs text-gray-500">{selectedEmployee.email}</p>
+                    </div>
                   </div>
                   <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">{selectedEmployee.role}</span>
                 </div>
@@ -566,7 +597,7 @@ const Communications: React.FC = () => {
                   })}
                 </div>
                 <form onSubmit={handleSendDm} className="border-t border-gray-100 p-4 flex flex-col gap-3 bg-gray-50">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <textarea
                       value={dmInput}
                       onChange={(e) => setDmInput(e.target.value)}
@@ -612,14 +643,24 @@ const Communications: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex-1 flex flex-col bg-white m-3 lg:m-4 rounded-xl shadow-sm border border-gray-200 min-h-0">
             {selectedClient ? (
               <>
-                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                  <div>
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={clearSelectedThread}
+                      className="mt-0.5 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                      aria-label="Back to clients"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                    <div className="min-w-0">
                     <p className="text-xs uppercase text-gray-500">Client thread</p>
                     <h3 className="text-lg font-semibold text-slate-900">{selectedClient.name}</h3>
                     <p className="text-xs text-gray-500">{selectedClient.email}</p>
+                    </div>
                   </div>
                   <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">{selectedClient.status || 'Active'}</span>
                 </div>
@@ -686,8 +727,8 @@ const Communications: React.FC = () => {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <input type="file" className="hidden" multiple ref={clientFileInput} onChange={(e) => {
                         if (e.target.files) setClientAttachments([...clientAttachments, ...Array.from(e.target.files)]);
                       }} />
@@ -726,7 +767,7 @@ const Communications: React.FC = () => {
       {/* Compose Modal */}
       {showCompose && mode === 'email' && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[600px]">
+             <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[min(600px,calc(100dvh-2rem))]">
                  <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                     <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2"><Send className="w-4 h-4"/> {t('compose')}</h3>
                     <button onClick={() => setShowCompose(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5"/></button>

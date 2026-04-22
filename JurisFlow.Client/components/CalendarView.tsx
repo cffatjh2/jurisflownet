@@ -236,8 +236,8 @@ const CalendarView: React.FC = () => {
   });
 
   return (
-    <div className="p-8 h-full flex flex-col bg-gray-50/50 relative overflow-y-auto">
-      <div className="flex justify-between items-center mb-6">
+    <div className="p-4 md:p-8 h-full flex flex-col bg-gray-50/50 relative overflow-y-auto">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
         <div>
           <h1 className="text-3xl font-bold font-sans text-slate-900">{t('cal_title')}</h1>
           <p className="text-sm text-gray-500 mt-1">
@@ -260,117 +260,117 @@ const CalendarView: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex h-full gap-6">
+      <div className="flex flex-col xl:flex-row gap-6 min-h-0">
         {/* Calendar Grid */}
-        <div className="flex-1 bg-white rounded-xl shadow-card border border-gray-200 flex flex-col overflow-hidden">
+        <div className="flex-1 min-w-0 bg-white rounded-xl shadow-card border border-gray-200 flex flex-col overflow-hidden">
           {/* Header Row */}
-          <div className="grid grid-cols-7 border-b border-gray-200 bg-gray-50">
-            {daysShort.map((d: string) => (
-              <div key={d} className="py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wide">
-                {d}
-              </div>
-            ))}
-          </div>
-
-          {/* Days Grid */}
-          <div className="flex-1 grid grid-cols-7 grid-rows-5 divide-x divide-y divide-gray-100">
-            {emptySlots.map((_, i) => <div key={`empty-${i}`} className="bg-gray-50/30"></div>)}
-
-            {daySlots.map((day) => {
-              const isToday =
-                day === currentDate.getDate() &&
-                currentMonth === currentDate.getMonth() &&
-                currentYear === currentDate.getFullYear();
-
-              const dayEvents = events.filter(e => {
-                const d = new Date(e.date);
-                return d.getDate() === day && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-              });
-
-              // Get tasks with deadlines on this day
-              const dayTasks = tasks.filter(t => {
-                if (!t.dueDate) return false;
-                const d = new Date(t.dueDate);
-                return d.getDate() === day && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-              });
-
-              return (
-                <div
-                  key={day}
-                  onClick={() => openAddModal(day)}
-                  className={`min-h-[100px] p-2 relative hover:bg-blue-50 cursor-pointer transition-colors group flex flex-col gap-1 ${isToday ? 'bg-blue-50/50' : ''}`}
-                >
-                  <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700'}`}>
-                    {day}
-                  </span>
-
-                  {/* Event Indicators */}
-                  <div className="flex flex-col gap-1 mt-1">
-                    {dayEvents.map(ev => (
-                      <div
-                        key={ev.id}
-                        className={`text-[10px] px-1.5 py-0.5 rounded truncate font-medium group/item relative ${
-                          // Check if the event is happening now
-                          (() => {
-                            const now = Date.now();
-                            const start = new Date(ev.date).getTime();
-                            const end = start + (ev.duration || 60) * 60 * 1000;
-                            const isHappening = now >= start && now <= end;
-                            const isPast = end < now;
-
-                            if (isHappening) return 'bg-green-500 text-white animate-pulse ring-2 ring-green-300 z-10';
-                            if (isPast) return 'bg-gray-100 text-gray-400 opacity-60 line-through decoration-gray-400';
-
-                            return ev.type === 'Court' ? 'bg-red-100 text-red-700' :
-                              ev.type === 'Deadline' ? 'bg-amber-100 text-amber-700' :
-                                'bg-blue-100 text-blue-700';
-                          })()
-                          }`}
-                        title={ev.title}
-                      >
-                        <span className="truncate block">{ev.title}</span>
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            const ok = await confirm({
-                              title: 'Delete event',
-                              message: `Are you sure you want to delete "${ev.title}"?`,
-                              confirmText: 'Delete',
-                              cancelText: 'Cancel',
-                              variant: 'danger'
-                            });
-                            if (!ok) return;
-                            deleteEvent(ev.id);
-                          }}
-                          className="absolute right-1 top-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity text-red-600 hover:text-red-800"
-                          title="Delete event"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                    {/* Task Indicators */}
-                    {dayTasks.map(task => (
-                      <div
-                        key={task.id}
-                        className={`text-[10px] px-1.5 py-0.5 rounded truncate font-medium ${task.priority === 'High' ? 'bg-purple-100 text-purple-700' :
-                          task.priority === 'Medium' ? 'bg-indigo-100 text-indigo-700' :
-                            'bg-gray-100 text-gray-700'
-                          }`}
-                        title={`Task: ${task.title}`}
-                      >
-                        <span className="truncate block">{task.title}</span>
-                      </div>
-                    ))}
+          <div className="overflow-x-auto">
+            <div className="min-w-[700px]">
+              <div className="grid grid-cols-7 border-b border-gray-200 bg-gray-50">
+                {daysShort.map((d: string) => (
+                  <div key={d} className="py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    {d}
                   </div>
-                </div>
-              )
-            })}
+                ))}
+              </div>
+
+              {/* Days Grid */}
+              <div className="grid grid-cols-7 grid-rows-5 divide-x divide-y divide-gray-100">
+                {emptySlots.map((_, i) => <div key={`empty-${i}`} className="bg-gray-50/30"></div>)}
+
+                {daySlots.map((day) => {
+                  const isToday =
+                    day === currentDate.getDate() &&
+                    currentMonth === currentDate.getMonth() &&
+                    currentYear === currentDate.getFullYear();
+
+                  const dayEvents = events.filter(e => {
+                    const d = new Date(e.date);
+                    return d.getDate() === day && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+                  });
+
+                  const dayTasks = tasks.filter(t => {
+                    if (!t.dueDate) return false;
+                    const d = new Date(t.dueDate);
+                    return d.getDate() === day && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+                  });
+
+                  return (
+                    <div
+                      key={day}
+                      onClick={() => openAddModal(day)}
+                      className={`min-h-[100px] p-2 relative hover:bg-blue-50 cursor-pointer transition-colors group flex flex-col gap-1 ${isToday ? 'bg-blue-50/50' : ''}`}
+                    >
+                      <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700'}`}>
+                        {day}
+                      </span>
+
+                      <div className="flex flex-col gap-1 mt-1">
+                        {dayEvents.map(ev => (
+                          <div
+                            key={ev.id}
+                            className={`text-[10px] px-1.5 py-0.5 rounded truncate font-medium group/item relative ${
+                              (() => {
+                                const now = Date.now();
+                                const start = new Date(ev.date).getTime();
+                                const end = start + (ev.duration || 60) * 60 * 1000;
+                                const isHappening = now >= start && now <= end;
+                                const isPast = end < now;
+
+                                if (isHappening) return 'bg-green-500 text-white animate-pulse ring-2 ring-green-300 z-10';
+                                if (isPast) return 'bg-gray-100 text-gray-400 opacity-60 line-through decoration-gray-400';
+
+                                return ev.type === 'Court' ? 'bg-red-100 text-red-700' :
+                                  ev.type === 'Deadline' ? 'bg-amber-100 text-amber-700' :
+                                    'bg-blue-100 text-blue-700';
+                              })()
+                            }`}
+                            title={ev.title}
+                          >
+                            <span className="truncate block">{ev.title}</span>
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const ok = await confirm({
+                                  title: 'Delete event',
+                                  message: `Are you sure you want to delete "${ev.title}"?`,
+                                  confirmText: 'Delete',
+                                  cancelText: 'Cancel',
+                                  variant: 'danger'
+                                });
+                                if (!ok) return;
+                                deleteEvent(ev.id);
+                              }}
+                              className="absolute right-1 top-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity text-red-600 hover:text-red-800"
+                              title="Delete event"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                        {dayTasks.map(task => (
+                          <div
+                            key={task.id}
+                            className={`text-[10px] px-1.5 py-0.5 rounded truncate font-medium ${task.priority === 'High' ? 'bg-purple-100 text-purple-700' :
+                              task.priority === 'Medium' ? 'bg-indigo-100 text-indigo-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}
+                            title={`Task: ${task.title}`}
+                          >
+                            <span className="truncate block">{task.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Sidebar Schedule */}
-        <div className="w-80 bg-white rounded-xl shadow-card border border-gray-200 p-6 flex flex-col">
+        <div className="w-full xl:w-80 bg-white rounded-xl shadow-card border border-gray-200 p-4 md:p-6 flex flex-col">
           <div className="pb-4 border-b border-gray-100">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg text-slate-900">Appointment Requests</h3>
@@ -559,7 +559,7 @@ const CalendarView: React.FC = () => {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-[480px] max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-xl shadow-2xl p-4 md:p-6 w-full max-w-[480px] max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
             <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-2">
               <h3 className="font-bold text-lg text-slate-900">Add Event</h3>
               <button onClick={() => { setShowModal(false); setNewMatterId(''); }}><X className="w-5 h-5 text-gray-400 hover:text-gray-600" /></button>
@@ -575,7 +575,7 @@ const CalendarView: React.FC = () => {
               </div>
 
               {/* Type and Time */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Type</label>
                   <select className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-slate-500 outline-none" value={newType} onChange={e => setNewType(e.target.value)}>
@@ -620,7 +620,7 @@ const CalendarView: React.FC = () => {
               </div>
 
               {/* Duration and Recurrence */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Duration</label>
                   <select className="w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-slate-500 outline-none" value={newDuration} onChange={e => setNewDuration(Number(e.target.value))}>
@@ -692,7 +692,7 @@ const CalendarView: React.FC = () => {
 
       {showAppointmentModal && activeAppointment && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-[480px] max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-xl shadow-2xl p-4 md:p-6 w-full max-w-[480px] max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
             <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-2">
               <div>
                 <p className="text-xs text-gray-500 uppercase">{activeAppointment.status === 'approved' ? 'Reschedule Appointment' : 'Schedule Appointment'}</p>
@@ -706,7 +706,7 @@ const CalendarView: React.FC = () => {
               Requested: {new Date(activeAppointment.requestedDate).toLocaleString('en-US')}
             </div>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Date</label>
                   <input
@@ -726,7 +726,7 @@ const CalendarView: React.FC = () => {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Duration</label>
                   <select

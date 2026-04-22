@@ -16,7 +16,9 @@ import {
   CheckSquare,
   Video,
   BarChart3,
-  FileText
+  FileText,
+  Menu,
+  X
 } from './Icons';
 import CommandPalette from './CommandPalette';
 import Notifications from './Notifications';
@@ -196,11 +198,14 @@ const MainLayout = () => {
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   const activateTab = (tab: ActiveTab) => {
     const safeTab = !staffTabEnabled && tab === 'employees' ? 'dashboard' : tab;
     setActiveTab(safeTab);
     setMountedTabs(prev => (prev.includes(safeTab) ? prev : [...prev, safeTab]));
+    setIsMobileNavOpen(false);
+    setShowProfileMenu(false);
   };
 
   useEffect(() => {
@@ -292,6 +297,36 @@ const MainLayout = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isMobileNavOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isMobileNavOpen]);
+
+  const tabLabels: Record<ActiveTab, string> = {
+    dashboard: String(t('nav_dashboard')),
+    matters: String(t('nav_matters')),
+    documents: String(t('nav_docs')),
+    communications: String(t('nav_comms')),
+    crm: String(t('nav_crm')),
+    intake: 'Intake',
+    ai: String(t('nav_ai')),
+    billing: String(t('nav_billing')),
+    calendar: String(t('nav_calendar')),
+    time: String(t('nav_time')),
+    tasks: String(t('nav_tasks')),
+    settings: String(t('settings')),
+    videocall: 'Video Calls',
+    reports: 'Reports',
+    employees: String(t('nav_employees') || 'Employees'),
+    trust: 'Trust (IOLTA)'
+  };
+
   const NavButton = ({ tab, icon: Icon, label, badge }: any) => (
     <button
       onClick={() => activateTab(tab as ActiveTab)}
@@ -308,15 +343,32 @@ const MainLayout = () => {
   );
 
   return (
-    <div className="flex h-screen w-full bg-slate-900 font-sans overflow-hidden">
+    <div className="flex h-[100dvh] w-full bg-slate-900 font-sans overflow-hidden">
       <CommandPalette isOpen={isCmdOpen} onClose={() => setIsCmdOpen(false)} onNavigate={tab => isActiveTab(tab) && activateTab(tab)} />
 
-      <aside className="w-64 bg-slate-900 flex flex-col z-20 relative border-r border-slate-700">
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setIsMobileNavOpen(false)}
+          className="fixed inset-0 z-20 bg-slate-950/60 md:hidden"
+        />
+      )}
+
+      <aside className={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] flex-col border-r border-slate-700 bg-slate-900 transition-transform duration-200 md:static md:z-20 md:w-64 md:max-w-none ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="h-16 flex items-center px-6 mb-2">
           <Scale className="w-6 h-6 text-white mr-3" />
           <span className="text-xl font-bold text-white tracking-tight">
             Juris<span className="text-primary-500">Flow</span>
           </span>
+          <button
+            type="button"
+            onClick={() => setIsMobileNavOpen(false)}
+            className="ml-auto rounded-lg p-2 text-gray-400 hover:bg-slate-800 hover:text-white md:hidden"
+            aria-label="Close navigation"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
@@ -378,31 +430,54 @@ const MainLayout = () => {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50 relative">
-        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-10 sticky top-0">
-          <div className="relative w-80 lg:w-96 hidden md:block">
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
-              <kbd className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 font-bold font-sans">Cmd + K</kbd>
-            </div>
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-3 md:px-4 z-10 sticky top-0">
+          <div className="flex min-w-0 items-center gap-2 md:gap-4">
             <button
-              onClick={() => setIsCmdOpen(true)}
-              className="w-full h-10 pl-9 pr-16 bg-gray-100 border-transparent hover:bg-white border hover:border-primary-300 rounded-lg text-sm text-left text-gray-400 transition-all whitespace-nowrap overflow-hidden text-ellipsis"
+              type="button"
+              onClick={() => setIsMobileNavOpen(true)}
+              className="inline-flex rounded-lg p-2 text-slate-600 hover:bg-gray-100 md:hidden"
+              aria-label="Open navigation"
             >
-              {String(t('search_placeholder')).replace(/\s*\(Cmd\+K\)\s*$/i, '')}
+              <Menu className="h-5 w-5" />
             </button>
+
+            <div className="min-w-0 md:hidden">
+              <h1 className="truncate text-sm font-semibold text-slate-900">{tabLabels[activeTab]}</h1>
+            </div>
+
+            <div className="relative hidden md:block w-80 lg:w-96">
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
+                <kbd className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 font-bold font-sans">Cmd + K</kbd>
+              </div>
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <button
+                onClick={() => setIsCmdOpen(true)}
+                className="w-full h-10 pl-9 pr-16 bg-gray-100 border-transparent hover:bg-white border hover:border-primary-300 rounded-lg text-sm text-left text-gray-400 transition-all whitespace-nowrap overflow-hidden text-ellipsis"
+              >
+                {String(t('search_placeholder')).replace(/\s*\(Cmd\+K\)\s*$/i, '')}
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="relative">
+          <div className="flex items-center gap-2 md:gap-3">
+            <button
+              type="button"
+              onClick={() => setIsCmdOpen(true)}
+              className="inline-flex rounded-lg p-2 text-slate-600 hover:bg-gray-100 md:hidden"
+              aria-label="Search"
+            >
+              <Search className="h-5 w-5" />
+            </button>
+            <div className="relative hidden sm:block">
               <GlobalTimer />
             </div>
             <Notifications />
             <button
               onClick={() => activateTab('matters')}
-              className="flex items-center gap-2 bg-slate-800 text-white px-3.5 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-all shadow-sm"
+              className="flex items-center gap-2 bg-slate-800 text-white px-3 py-2 md:px-3.5 rounded-lg text-sm font-medium hover:bg-slate-900 transition-all shadow-sm"
             >
               <Plus className="w-4 h-4" />
-              <span>{t('create_btn')}</span>
+              <span className="hidden sm:inline">{t('create_btn')}</span>
             </button>
           </div>
         </header>

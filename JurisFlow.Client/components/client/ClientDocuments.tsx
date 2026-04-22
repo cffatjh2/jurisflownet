@@ -469,7 +469,7 @@ const ClientDocuments: React.FC = () => {
   }
 
   return (
-    <div className="p-8 h-full overflow-y-auto">
+    <div className="p-4 md:p-8 h-full overflow-y-auto">
       <div className="mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
@@ -547,9 +547,9 @@ const ClientDocuments: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-6">
         {/* Matter Filter */}
-        <div className="w-64 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="w-full lg:w-64 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
           <h3 className="font-bold text-slate-900 mb-3">Filter by Case</h3>
           <button
             onClick={() => setSelectedMatter(null)}
@@ -719,7 +719,7 @@ const ClientDocuments: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex-1 overflow-auto p-6 bg-white">
+            <div className="flex-1 overflow-auto p-4 md:p-6 bg-white">
               {loadingContent ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-gray-400">Loading...</div>
@@ -749,7 +749,7 @@ const ClientDocuments: React.FC = () => {
             </div>
 
             {viewingDoc.filePath && (
-              <div className="border-t border-gray-200 bg-gray-50 p-6 space-y-4">
+              <div className="border-t border-gray-200 bg-gray-50 p-4 md:p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-semibold text-slate-800">Comments</h4>
                   <span className="text-xs text-gray-500">{comments.length} total</span>
@@ -775,7 +775,7 @@ const ClientDocuments: React.FC = () => {
                 )}
 
                 {getPermissions(viewingDoc).canComment ? (
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                     <input
                       value={commentDraft}
                       onChange={(e) => setCommentDraft(e.target.value)}

@@ -173,7 +173,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   };
 
   return (
-    <div className="min-h-screen w-full flex flex-col justify-center items-center bg-white relative overflow-hidden font-sans">
+    <div className="min-h-screen w-full flex flex-col justify-center items-center bg-white relative overflow-hidden font-sans px-4 py-10 sm:py-12">
 
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-slate-900"></div>
@@ -182,12 +182,12 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
       <button
         type="button"
         onClick={handleOpenSignup}
-        className="absolute top-6 right-6 z-20 px-4 py-2 rounded-xl border border-slate-200 bg-white/95 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition-colors shadow-sm"
+        className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20 px-3 sm:px-4 py-2 rounded-xl border border-slate-200 bg-white/95 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition-colors shadow-sm"
       >
         Sign Up
       </button>
 
-      <div className="w-full max-w-md p-8 z-10">
+      <div className="w-full max-w-md p-4 sm:p-8 pt-14 sm:pt-8 z-10">
 
         {/* Logo Section */}
         <div className="flex flex-col items-center mb-10">
@@ -345,7 +345,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         </div>
 
         {/* Footer Features */}
-        <div className="mt-12 pt-8 border-t border-gray-100 grid grid-cols-3 gap-4 text-center">
+        <div className="mt-12 pt-8 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
           <div className="flex flex-col items-center">
             <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-2"><CheckSquare className="w-4 h-4" /></div>
             <span className="text-[10px] font-bold text-gray-400 uppercase">Task Mgmt</span>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, Mail, Paperclip, X, Search } from '../Icons';
+import { Send, Plus, Mail, Paperclip, X, Search, ArrowLeft } from '../Icons';
 import { gmailService, GmailMessage } from '../../services/gmailService';
 import { toast } from '../Toast';
 import { clientApi } from '../../services/clientApi';
@@ -301,6 +301,10 @@ const ClientMessages: React.FC = () => {
     setShowCompose(true);
   };
 
+  const clearSelection = () => {
+    setSelectedMessage(null);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -310,9 +314,9 @@ const ClientMessages: React.FC = () => {
   }
 
   return (
-    <div className="h-full flex bg-white relative">
+    <div className="h-full flex flex-col lg:flex-row bg-white relative">
       {/* Sidebar */}
-      <div className="w-96 border-r border-gray-200 flex flex-col">
+      <div className={`${selectedMessage ? 'hidden lg:flex' : 'flex'} w-full lg:w-96 border-r border-gray-200 flex-col min-h-0`}>
         <div className="p-4 border-b border-gray-200">
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-2">
@@ -470,12 +474,21 @@ const ClientMessages: React.FC = () => {
       </div>
 
       {/* Message View */}
-      <div className="flex-1 flex flex-col bg-gray-50">
+      <div className={`${selectedMessage ? 'flex' : 'hidden lg:flex'} flex-1 min-w-0 flex-col bg-gray-50`}>
         {selectedMessage ? (
-            <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
+            <div className="flex-1 flex flex-col bg-white m-3 lg:m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-4 lg:p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div className="min-w-0 flex items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    className="mt-0.5 rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                    aria-label="Back to messages"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div className="min-w-0">
+                  <h2 className="text-lg lg:text-xl font-bold text-slate-900 break-words">{selectedMessage.subject}</h2>
                   <div className="text-xs text-gray-500 mt-2">
                     {formatDate(selectedMessage.createdAt)}
                     {selectedMessage.matter && ` - Case: ${selectedMessage.matter.caseNumber}`}
@@ -486,6 +499,7 @@ const ClientMessages: React.FC = () => {
                       From {selectedMessage.senderName || (selectedMessage.senderType === 'Staff' ? 'Legal Team' : 'You')}
                     </div>
                   )}
+                  </div>
                 </div>
               {selectedMessage.source === 'gmail' ? (
                 <button
@@ -503,7 +517,7 @@ const ClientMessages: React.FC = () => {
                 </button>
               )}
             </div>
-            <div className="p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap flex-1 overflow-y-auto">
+            <div className="p-4 lg:p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap flex-1 overflow-y-auto">
               {selectedMessage.message}
               {selectedAttachments.length > 0 && (
                 <div className="mt-6 space-y-2">
@@ -536,7 +550,7 @@ const ClientMessages: React.FC = () => {
       {/* Compose Modal */}
       {showCompose && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[600px]">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[min(600px,calc(100dvh-2rem))]">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
                 <Send className="w-4 h-4"/> Compose Message
@@ -646,7 +660,7 @@ const ClientMessages: React.FC = () => {
       {/* Gmail Compose Modal */}
       {showGmailCompose && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[600px]">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col h-[min(600px,calc(100dvh-2rem))]">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
                 <Mail className="w-4 h-4"/> Compose Email (Gmail)
