@@ -38,6 +38,8 @@ namespace JurisFlow.Server.Models
         [Required]
         public string ResponsibleAttorney { get; set; }
 
+        public string? ResponsibleEmployeeId { get; set; }
+
         public double BillableRate { get; set; }
         public double TrustBalance { get; set; } = 0;
 

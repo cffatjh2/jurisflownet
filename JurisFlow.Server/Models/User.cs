@@ -42,7 +42,9 @@ namespace JurisFlow.Server.Models
         public string? NotificationPreferences { get; set; } // JSON string
         public string? EmployeeRole { get; set; }
         public bool MfaEnabled { get; set; } = false;
+        [JsonIgnore]
         public string? MfaSecret { get; set; }
+        [JsonIgnore]
         public string? MfaBackupCodesJson { get; set; }
         public DateTime? MfaVerifiedAt { get; set; }
         public DateTime? MfaLastUsedAt { get; set; }

@@ -1,10 +1,14 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
+using JurisFlow.Server.DTOs;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using System.Text.Json;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace JurisFlow.Server.Controllers
 {
@@ -14,79 +18,114 @@ namespace JurisFlow.Server.Controllers
     public class StaffMessagesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly IAppFileStorage _fileStorage;
+        private readonly MessageAttachmentIntakeService _attachmentIntake;
+        private readonly MessageAttachmentIndexService _attachmentIndex;
+        private readonly AuditLogger _auditLogger;
         private readonly TenantContext _tenantContext;
-        private const int MaxAttachmentCount = 10;
-        private const int MaxAttachmentSizeBytes = 10 * 1024 * 1024;
-        private const int MaxTotalAttachmentSizeBytes = 25 * 1024 * 1024;
-        private static readonly IReadOnlyDictionary<string, string> AllowedMimeToExtension = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["application/pdf"] = ".pdf",
-            ["image/png"] = ".png",
-            ["image/jpeg"] = ".jpg",
-            ["image/webp"] = ".webp",
-            ["application/msword"] = ".doc",
-            ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx",
-            ["application/vnd.ms-excel"] = ".xls",
-            ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = ".xlsx",
-            ["application/vnd.ms-powerpoint"] = ".ppt",
-            ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = ".pptx",
-            ["text/plain"] = ".txt"
-        };
+        private const int MaxMessageRequestBodyBytes = 40 * 1024 * 1024;
 
-        public StaffMessagesController(JurisFlowDbContext context, IAppFileStorage fileStorage, TenantContext tenantContext)
+        public StaffMessagesController(
+            JurisFlowDbContext context,
+            MessageAttachmentIntakeService attachmentIntake,
+            MessageAttachmentIndexService attachmentIndex,
+            AuditLogger auditLogger,
+            TenantContext tenantContext)
         {
             _context = context;
-            _fileStorage = fileStorage;
+            _attachmentIntake = attachmentIntake;
+            _attachmentIndex = attachmentIndex;
+            _auditLogger = auditLogger;
             _tenantContext = tenantContext;
         }
 
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<StaffMessage>>> GetMessages([FromQuery] string? userId)
+        public async Task<ActionResult<IEnumerable<object>>> GetMessages()
         {
-            var query = _context.StaffMessages.AsNoTracking().AsQueryable();
-            if (!string.IsNullOrWhiteSpace(userId))
+            var currentEmployeeId = await ResolveCurrentEmployeeIdAsync();
+            if (string.IsNullOrWhiteSpace(currentEmployeeId))
             {
-                query = query.Where(m => m.SenderId == userId || m.RecipientId == userId);
+                return Forbid();
             }
 
-            var items = await query
+            var items = await TenantScope(_context.StaffMessages)
+                .AsNoTracking()
+                .Where(m => m.SenderId == currentEmployeeId || m.RecipientId == currentEmployeeId)
                 .OrderByDescending(m => m.CreatedAt)
                 .Take(200)
                 .ToListAsync();
 
-            return Ok(items);
+            var attachmentMap = await LoadAttachmentMapAsync(items.Select(m => m.Id));
+            return Ok(items.Select(m => ToResponse(m, GetPublicAttachments(attachmentMap, m.Id))));
         }
 
         [HttpGet("thread")]
-        public async Task<ActionResult<IEnumerable<StaffMessage>>> GetThread([FromQuery] string userA, [FromQuery] string userB)
+        public async Task<ActionResult<IEnumerable<object>>> GetThread([FromQuery] string participantId)
         {
-            if (string.IsNullOrWhiteSpace(userA) || string.IsNullOrWhiteSpace(userB))
+            if (string.IsNullOrWhiteSpace(participantId))
             {
-                return BadRequest("Both userA and userB are required.");
+                return BadRequest(new { message = "participantId is required." });
             }
 
-            var thread = await _context.StaffMessages
+            var currentEmployeeId = await ResolveCurrentEmployeeIdAsync();
+            if (string.IsNullOrWhiteSpace(currentEmployeeId))
+            {
+                return Forbid();
+            }
+
+            var normalizedParticipantId = participantId.Trim();
+            var participantExists = await TenantScope(_context.Employees)
                 .AsNoTracking()
-                .Where(m => (m.SenderId == userA && m.RecipientId == userB) || (m.SenderId == userB && m.RecipientId == userA))
+                .AnyAsync(e => e.Id == normalizedParticipantId);
+            if (!participantExists)
+            {
+                return NotFound(new { message = "Participant not found for this tenant." });
+            }
+
+            var thread = await TenantScope(_context.StaffMessages)
+                .AsNoTracking()
+                .Where(m =>
+                    (m.SenderId == currentEmployeeId && m.RecipientId == normalizedParticipantId) ||
+                    (m.SenderId == normalizedParticipantId && m.RecipientId == currentEmployeeId))
                 .OrderBy(m => m.CreatedAt)
                 .ToListAsync();
 
-            return Ok(thread);
+            var attachmentMap = await LoadAttachmentMapAsync(thread.Select(m => m.Id));
+            return Ok(thread.Select(m => ToResponse(m, GetPublicAttachments(attachmentMap, m.Id))));
         }
 
         [HttpPost]
-        public async Task<ActionResult<StaffMessage>> SendMessage([FromBody] StaffMessageCreateDto dto)
+        [EnableRateLimiting("StaffMessagingSend")]
+        [RequestSizeLimit(MaxMessageRequestBodyBytes)]
+        public async Task<ActionResult<object>> SendMessage([FromBody] StaffMessageCreateDto dto)
         {
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
 
-            List<MessageAttachment> attachments;
+            var sender = await ResolveCurrentEmployeeAsync();
+            if (sender == null)
+            {
+                return Forbid();
+            }
+
+            var recipient = await TenantScope(_context.Employees)
+                .Include(e => e.User)
+                .FirstOrDefaultAsync(e => e.Id == dto.RecipientId);
+            if (recipient == null)
+            {
+                return BadRequest(new { message = "Recipient not found." });
+            }
+
+            if (string.Equals(recipient.Id, sender.Id, StringComparison.Ordinal))
+            {
+                return BadRequest(new { message = "You cannot send a direct message to yourself." });
+            }
+
+            List<MessageAttachmentPayload> attachments;
             try
             {
-                attachments = await SaveAttachments(dto.Attachments);
+                attachments = await _attachmentIntake.SaveAsync(dto.Attachments, HttpContext.RequestAborted);
             }
             catch (InvalidOperationException ex)
             {
@@ -95,7 +134,7 @@ namespace JurisFlow.Server.Controllers
 
             var message = new StaffMessage
             {
-                SenderId = dto.SenderId,
+                SenderId = sender.Id,
                 RecipientId = dto.RecipientId,
                 Body = dto.Body.Trim(),
                 Status = "Unread",
@@ -104,45 +143,59 @@ namespace JurisFlow.Server.Controllers
             };
 
             _context.StaffMessages.Add(message);
-            await _context.SaveChangesAsync();
+            await _attachmentIndex.IndexStaffMessageAsync(message, attachments, HttpContext.RequestAborted);
 
             // Create notification for recipient if user exists
-            var recipient = await _context.Employees.Include(e => e.User).FirstOrDefaultAsync(e => e.Id == dto.RecipientId);
             if (recipient?.User != null)
             {
-            _context.Notifications.Add(new Notification
-            {
-                UserId = recipient.UserId,
-                Title = "New direct message",
-                Message = $"You have a message from {dto.SenderId}",
-                Type = "info",
-                Link = "tab:communications"
-            });
-            await _context.SaveChangesAsync();
-        }
+                _context.Notifications.Add(new Notification
+                {
+                    UserId = recipient.UserId,
+                    Title = "New direct message",
+                    Message = $"You have a message from {sender.FirstName} {sender.LastName}".Trim(),
+                    Type = "info",
+                    Link = "tab:communications"
+                });
+            }
 
-        return CreatedAtAction(nameof(GetMessages), new { id = message.Id }, message);
-    }
+            await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(
+                HttpContext,
+                "staff.message.send",
+                nameof(StaffMessage),
+                message.Id,
+                $"SenderEmployeeId={sender.Id}, RecipientEmployeeId={recipient.Id}");
+
+            return CreatedAtAction(nameof(GetMessages), new { id = message.Id }, ToResponse(message, ToPublicAttachments(attachments)));
+        }
 
         [HttpPost("{id}/read")]
         public async Task<IActionResult> MarkRead(string id)
         {
-            var message = await _context.StaffMessages.FindAsync(id);
+            var currentEmployeeId = await ResolveCurrentEmployeeIdAsync();
+            if (string.IsNullOrWhiteSpace(currentEmployeeId))
+            {
+                return Forbid();
+            }
+
+            var message = await TenantScope(_context.StaffMessages).FirstOrDefaultAsync(m => m.Id == id);
             if (message == null) return NotFound();
+            if (!string.Equals(message.RecipientId, currentEmployeeId, StringComparison.Ordinal))
+            {
+                return Forbid();
+            }
 
             message.Status = "Read";
             message.ReadAt = DateTime.UtcNow;
             _context.StaffMessages.Update(message);
             await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(HttpContext, "staff.message.read", nameof(StaffMessage), message.Id, null);
 
             return NoContent();
         }
 
         public class StaffMessageCreateDto
         {
-            [System.ComponentModel.DataAnnotations.Required]
-            public string SenderId { get; set; } = string.Empty;
-
             [System.ComponentModel.DataAnnotations.Required]
             public string RecipientId { get; set; } = string.Empty;
 
@@ -152,164 +205,118 @@ namespace JurisFlow.Server.Controllers
             public List<AttachmentDto>? Attachments { get; set; }
         }
 
-        private async Task<List<MessageAttachment>> SaveAttachments(List<AttachmentDto>? attachments)
+        private async Task<Employee?> ResolveCurrentEmployeeAsync()
         {
-            var result = new List<MessageAttachment>();
-            if (attachments == null || attachments.Count == 0) return result;
-
-            if (attachments.Count > MaxAttachmentCount)
+            var userId = GetUserId();
+            if (string.IsNullOrWhiteSpace(userId))
             {
-                throw new InvalidOperationException($"A maximum of {MaxAttachmentCount} attachments is allowed per message.");
+                return null;
             }
 
-            long totalBytes = 0;
-            foreach (var att in attachments)
-            {
-                var (mimeType, base64Payload) = ParseAttachmentData(att);
-                if (!AllowedMimeToExtension.TryGetValue(mimeType, out var ext))
-                {
-                    throw new InvalidOperationException($"Attachment MIME type '{mimeType}' is not allowed.");
-                }
-
-                var bytes = DecodeBase64(base64Payload, MaxAttachmentSizeBytes);
-                totalBytes += bytes.Length;
-                if (totalBytes > MaxTotalAttachmentSizeBytes)
-                {
-                    throw new InvalidOperationException(
-                        $"Total attachment payload exceeds the {(MaxTotalAttachmentSizeBytes / (1024 * 1024)).ToString()} MB limit.");
-                }
-
-                var fileName = $"{Guid.NewGuid():N}{ext}";
-                await _fileStorage.SaveBytesAsync(GetMessageAttachmentPath(fileName), bytes, mimeType);
-
-                result.Add(new MessageAttachment
-                {
-                    FileName = NormalizeDisplayFileName(att.FileName, ext),
-                    FilePath = $"/api/files/messages/{fileName}",
-                    MimeType = mimeType,
-                    Size = bytes.Length
-                });
-            }
-            return result;
+            return await TenantScope(_context.Employees)
+                .Include(e => e.User)
+                .FirstOrDefaultAsync(e => e.UserId == userId);
         }
 
-        private string GetMessageAttachmentPath(string fileName)
+        private async Task<string?> ResolveCurrentEmployeeIdAsync()
+        {
+            var employee = await ResolveCurrentEmployeeAsync();
+            return employee?.Id;
+        }
+
+        private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
+        {
+            var tenantId = RequireTenantId();
+            return query.Where(entity => EF.Property<string>(entity, "TenantId") == tenantId);
+        }
+
+        private string RequireTenantId()
         {
             if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
             {
                 throw new InvalidOperationException("Tenant context is missing.");
             }
 
-            return $"uploads/{_tenantContext.TenantId}/message-attachments/{fileName}";
+            return _tenantContext.TenantId;
         }
 
-        private static (string MimeType, string Base64Payload) ParseAttachmentData(AttachmentDto attachment)
+        private string? GetUserId()
         {
-            if (string.IsNullOrWhiteSpace(attachment.Data))
-            {
-                throw new InvalidOperationException("Attachment data is required.");
-            }
-
-            var rawData = attachment.Data.Trim();
-            if (!rawData.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Attachment payload must be a base64 data URL.");
-            }
-
-            var commaIndex = rawData.IndexOf(',');
-            if (commaIndex <= 5 || commaIndex >= rawData.Length - 1)
-            {
-                throw new InvalidOperationException("Attachment payload is malformed.");
-            }
-
-            var header = rawData.Substring(5, commaIndex - 5);
-            var base64Payload = rawData[(commaIndex + 1)..].Trim();
-            if (string.IsNullOrWhiteSpace(base64Payload))
-            {
-                throw new InvalidOperationException("Attachment payload is empty.");
-            }
-
-            var headerParts = header.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (headerParts.Length == 0 || string.IsNullOrWhiteSpace(headerParts[0]))
-            {
-                throw new InvalidOperationException("Attachment MIME type is required.");
-            }
-
-            if (!headerParts.Any(p => string.Equals(p, "base64", StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new InvalidOperationException("Attachment payload must use base64 encoding.");
-            }
-
-            var mimeType = headerParts[0].Trim().ToLowerInvariant();
-            if (!string.IsNullOrWhiteSpace(attachment.Type) &&
-                !string.Equals(attachment.Type.Trim(), mimeType, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Attachment type metadata does not match payload MIME type.");
-            }
-
-            return (mimeType, base64Payload);
+            return User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                   ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
         }
 
-        private static byte[] DecodeBase64(string base64Payload, int maxBytes)
+        private async Task<Dictionary<string, List<object>>> LoadAttachmentMapAsync(IEnumerable<string> messageIds)
         {
-            if (base64Payload.Length % 4 != 0)
+            var ids = messageIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct()
+                .ToList();
+            if (ids.Count == 0)
             {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
+                return new Dictionary<string, List<object>>();
             }
 
-            var padding = base64Payload.EndsWith("==", StringComparison.Ordinal)
-                ? 2
-                : base64Payload.EndsWith("=", StringComparison.Ordinal) ? 1 : 0;
+            var attachments = await TenantScope(_context.MessageAttachments)
+                .AsNoTracking()
+                .Where(a => a.MessageType == "staff" && ids.Contains(a.MessageId))
+                .OrderBy(a => a.CreatedAt)
+                .ToListAsync();
 
-            var expectedBytes = ((long)base64Payload.Length / 4L) * 3L - padding;
-            if (expectedBytes <= 0 || expectedBytes > int.MaxValue)
-            {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
-            }
-
-            if (expectedBytes > maxBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
-            }
-
-            var buffer = new byte[(int)expectedBytes];
-            if (!Convert.TryFromBase64String(base64Payload, buffer, out var bytesWritten))
-            {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
-            }
-
-            if (bytesWritten <= 0 || bytesWritten > maxBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
-            }
-
-            return bytesWritten == buffer.Length ? buffer : buffer[..bytesWritten];
+            return attachments
+                .GroupBy(a => a.MessageId)
+                .ToDictionary(g => g.Key, g => g.Select(ToPublicAttachment).ToList());
         }
 
-        private static string NormalizeDisplayFileName(string? fileName, string extension)
+        private static IReadOnlyList<object> GetPublicAttachments(
+            IReadOnlyDictionary<string, List<object>> attachmentMap,
+            string messageId)
         {
-            var candidate = Path.GetFileName(fileName ?? string.Empty);
-            var baseName = Path.GetFileNameWithoutExtension(candidate);
-            if (string.IsNullOrWhiteSpace(baseName))
-            {
-                return $"attachment{extension}";
-            }
+            return attachmentMap.TryGetValue(messageId, out var attachments)
+                ? attachments
+                : Array.Empty<object>();
+        }
 
-            var invalidChars = Path.GetInvalidFileNameChars();
-            var sanitized = new string(baseName.Where(ch => !invalidChars.Contains(ch)).ToArray());
-            if (string.IsNullOrWhiteSpace(sanitized))
-            {
-                sanitized = "attachment";
-            }
+        private static IReadOnlyList<object> ToPublicAttachments(IEnumerable<MessageAttachmentPayload> attachments)
+        {
+            return attachments.Select(ToPublicAttachment).ToList();
+        }
 
-            if (sanitized.Length > 80)
+        private static object ToPublicAttachment(MessageAttachmentPayload attachment)
+        {
+            return new
             {
-                sanitized = sanitized[..80];
-            }
+                name = attachment.FileName,
+                url = attachment.FilePath,
+                mimeType = attachment.MimeType,
+                size = attachment.Size
+            };
+        }
 
-            return $"{sanitized}{extension}";
+        private static object ToPublicAttachment(MessageAttachment attachment)
+        {
+            return new
+            {
+                name = attachment.FileName,
+                url = attachment.FilePath,
+                mimeType = attachment.MimeType,
+                size = attachment.Size
+            };
+        }
+
+        private static object ToResponse(StaffMessage message, IReadOnlyList<object> attachments)
+        {
+            return new
+            {
+                id = message.Id,
+                senderId = message.SenderId,
+                recipientId = message.RecipientId,
+                body = message.Body,
+                status = message.Status,
+                createdAt = message.CreatedAt,
+                readAt = message.ReadAt,
+                attachments
+            };
         }
     }
 }

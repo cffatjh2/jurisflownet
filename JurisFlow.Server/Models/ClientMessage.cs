@@ -32,11 +32,4 @@ namespace JurisFlow.Server.Models
         public string? AttachmentsJson { get; set; }
     }
 
-    public class MessageAttachment
-    {
-        public string FileName { get; set; } = string.Empty;
-        public string FilePath { get; set; } = string.Empty;
-        public string MimeType { get; set; } = string.Empty;
-        public long Size { get; set; }
-    }
 }

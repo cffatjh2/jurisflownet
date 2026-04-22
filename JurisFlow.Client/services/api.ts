@@ -1074,6 +1074,13 @@ export const api = {
         const query = qs.toString() ? `?${qs.toString()}` : '';
         return fetchJson(`/employees${query}`);
     },
+    getStaffDirectory: (params?: { entityId?: string; officeId?: string }) => {
+        const qs = new URLSearchParams();
+        if (params?.entityId) qs.set('entityId', params.entityId);
+        if (params?.officeId) qs.set('officeId', params.officeId);
+        const query = qs.toString() ? `?${qs.toString()}` : '';
+        return fetchJson(`/staff-directory${query}`);
+    },
     getEmployee: (id: string) => fetchJson(`/employees/${id}`),
     createEmployee: (data: Partial<Employee>) => fetchJson('/employees', { method: 'POST', body: JSON.stringify(data) }),
     updateEmployee: (id: string, data: Partial<Employee>) => fetchJson(`/employees/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -1447,11 +1454,11 @@ export const api = {
 
     // Staff Direct Messages
     staffMessages: {
-        list: (userId?: string) =>
-            fetchJson(`/staffmessages${userId ? `?userId=${encodeURIComponent(userId)}` : ''}`),
-        thread: (userA: string, userB: string) =>
-            fetchJson(`/staffmessages/thread?userA=${encodeURIComponent(userA)}&userB=${encodeURIComponent(userB)}`),
-        send: (data: { senderId: string; recipientId: string; body: string }) =>
+        list: () =>
+            fetchJson('/staffmessages'),
+        thread: (participantId: string) =>
+            fetchJson(`/staffmessages/thread?participantId=${encodeURIComponent(participantId)}`),
+        send: (data: { recipientId: string; body: string; attachments?: Array<{ fileName?: string; name?: string; size?: number; type?: string; data: string }> }) =>
             fetchJson('/staffmessages', { method: 'POST', body: JSON.stringify(data) }),
         markRead: (id: string) =>
             fetchJson(`/staffmessages/${id}/read`, { method: 'POST' }),

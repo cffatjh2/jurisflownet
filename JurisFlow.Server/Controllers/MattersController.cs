@@ -148,7 +148,13 @@ namespace JurisFlow.Server.Controllers
                 }
 
                 var relatedClientResolution = await ResolveRelatedClientsForWriteAsync(resolvedClientId, request.RelatedClientIds);
-                var matter = MapCreateRequest(request, currentUserId, resolvedClientId);
+                var responsibleEmployeeId = await ResolveResponsibleEmployeeIdAsync(request.ResponsibleEmployeeId, currentUserId, HttpContext.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(request.ResponsibleEmployeeId) && string.IsNullOrWhiteSpace(responsibleEmployeeId))
+                {
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Responsible employee not found.", detail: "ResponsibleEmployeeId must refer to an employee in the active tenant.");
+                }
+
+                var matter = MapCreateRequest(request, currentUserId, resolvedClientId, responsibleEmployeeId);
 
                 NormalizeSharingSettings(matter);
 
@@ -220,6 +226,12 @@ namespace JurisFlow.Server.Controllers
                 existingMatter.Status = request.Status;
                 existingMatter.FeeStructure = request.FeeStructure;
                 existingMatter.ResponsibleAttorney = request.ResponsibleAttorney;
+                var responsibleEmployeeId = await ResolveResponsibleEmployeeIdAsync(request.ResponsibleEmployeeId, existingMatter.CreatedByUserId, HttpContext.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(request.ResponsibleEmployeeId) && string.IsNullOrWhiteSpace(responsibleEmployeeId))
+                {
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Responsible employee not found.", detail: "ResponsibleEmployeeId must refer to an employee in the active tenant.");
+                }
+                existingMatter.ResponsibleEmployeeId = responsibleEmployeeId;
                 existingMatter.BillableRate = request.BillableRate;
                 existingMatter.EntityId = resolved.entityId;
                 existingMatter.OfficeId = resolved.officeId;
@@ -657,7 +669,7 @@ namespace JurisFlow.Server.Controllers
             return clientExists ? normalizedClientId : null;
         }
 
-        private static Matter MapCreateRequest(CreateMatterRequest request, string currentUserId, string resolvedClientId)
+        private static Matter MapCreateRequest(CreateMatterRequest request, string currentUserId, string resolvedClientId, string? responsibleEmployeeId)
         {
             return new Matter
             {
@@ -671,11 +683,35 @@ namespace JurisFlow.Server.Controllers
                 FeeStructure = request.FeeStructure,
                 OpenDate = DateTime.UtcNow,
                 ResponsibleAttorney = request.ResponsibleAttorney,
+                ResponsibleEmployeeId = responsibleEmployeeId,
                 BillableRate = request.BillableRate,
                 ClientId = resolvedClientId,
                 CreatedByUserId = currentUserId,
                 RelatedClientIds = request.RelatedClientIds
             };
+        }
+
+        private async Task<string?> ResolveResponsibleEmployeeIdAsync(string? requestedEmployeeId, string? fallbackUserId, CancellationToken cancellationToken)
+        {
+            var normalizedEmployeeId = requestedEmployeeId?.Trim();
+            if (!string.IsNullOrWhiteSpace(normalizedEmployeeId))
+            {
+                var exists = await _context.Employees
+                    .AsNoTracking()
+                    .AnyAsync(e => e.Id == normalizedEmployeeId, cancellationToken);
+                return exists ? normalizedEmployeeId : null;
+            }
+
+            if (string.IsNullOrWhiteSpace(fallbackUserId))
+            {
+                return null;
+            }
+
+            return await _context.Employees
+                .AsNoTracking()
+                .Where(e => e.UserId == fallbackUserId)
+                .Select(e => e.Id)
+                .FirstOrDefaultAsync(cancellationToken);
         }
 
         private Task<MatterRelatedClientResolution> ResolveRelatedClientsForWriteAsync(string primaryClientId, IEnumerable<string>? requestedClientIds)

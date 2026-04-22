@@ -12,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import EntityOfficeFilter from './common/EntityOfficeFilter';
 import { passwordRequirementsText, validatePassword } from '../services/passwordPolicy';
 
-const getAvatarPath = (emp: Employee) => emp.user?.avatar || emp.avatar || null;
+const getAvatarPath = (emp: Employee) => emp.avatar || null;
 
 const Employees: React.FC = () => {
     const { t } = useTranslation();
@@ -254,8 +254,7 @@ const Employees: React.FC = () => {
             if (user && normalized.length > 0) {
                 const found = normalized.find((e: Employee) =>
                     e.email?.toLowerCase() === user.email?.toLowerCase() ||
-                    e.userId === user.id ||
-                    e.user?.id === user.id
+                    e.userId === user.id
                 );
                 if (found) setSelfEmployeeId(found.id);
             }
@@ -396,9 +395,7 @@ const Employees: React.FC = () => {
         if (!messageTarget || !messageBody.trim()) return;
         setSendingMessage(true);
         try {
-            const senderId = selfEmployeeId || user?.id || 'current-user';
             await api.staffMessages.send({
-                senderId,
                 recipientId: messageTarget.id,
                 body: messageBody.trim()
             });

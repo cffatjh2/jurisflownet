@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
+using JurisFlow.Server.DTOs;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 
@@ -17,32 +18,22 @@ namespace JurisFlow.Server.Controllers
     public class ClientMessagesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
-        private readonly IAppFileStorage _fileStorage;
+        private readonly MessageAttachmentIntakeService _attachmentIntake;
+        private readonly MessageAttachmentIndexService _attachmentIndex;
         private readonly AuditLogger _auditLogger;
         private readonly TenantContext _tenantContext;
-        private const int MaxAttachmentCount = 10;
-        private const int MaxAttachmentSizeBytes = 10 * 1024 * 1024;
-        private const int MaxTotalAttachmentSizeBytes = 25 * 1024 * 1024;
         private const int MaxMessageRequestBodyBytes = 40 * 1024 * 1024;
-        private static readonly IReadOnlyDictionary<string, string> AllowedMimeToExtension = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["application/pdf"] = ".pdf",
-            ["image/png"] = ".png",
-            ["image/jpeg"] = ".jpg",
-            ["image/webp"] = ".webp",
-            ["application/msword"] = ".doc",
-            ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx",
-            ["application/vnd.ms-excel"] = ".xls",
-            ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = ".xlsx",
-            ["application/vnd.ms-powerpoint"] = ".ppt",
-            ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = ".pptx",
-            ["text/plain"] = ".txt"
-        };
 
-        public ClientMessagesController(JurisFlowDbContext context, IAppFileStorage fileStorage, AuditLogger auditLogger, TenantContext tenantContext)
+        public ClientMessagesController(
+            JurisFlowDbContext context,
+            MessageAttachmentIntakeService attachmentIntake,
+            MessageAttachmentIndexService attachmentIndex,
+            AuditLogger auditLogger,
+            TenantContext tenantContext)
         {
             _context = context;
-            _fileStorage = fileStorage;
+            _attachmentIntake = attachmentIntake;
+            _attachmentIndex = attachmentIndex;
             _auditLogger = auditLogger;
             _tenantContext = tenantContext;
         }
@@ -72,6 +63,7 @@ namespace JurisFlow.Server.Controllers
                 .OrderByDescending(m => m.CreatedAt)
                 .Take(100)
                 .ToListAsync();
+            var attachmentMap = await LoadAttachmentMapAsync(items.Select(m => m.Id));
 
             var matterIds = items.Where(m => !string.IsNullOrEmpty(m.MatterId)).Select(m => m.MatterId!).Distinct().ToList();
             var matters = await TenantScope(_context.Matters)
@@ -114,7 +106,7 @@ namespace JurisFlow.Server.Controllers
                 createdAt = m.CreatedAt,
                 matterId = m.MatterId,
                 matter = m.MatterId != null && matterMap.TryGetValue(m.MatterId, out var matter) ? matter : null,
-                attachments = ParsePublicAttachments(m.AttachmentsJson),
+                attachments = GetPublicAttachments(attachmentMap, m.Id),
                 senderType = string.IsNullOrWhiteSpace(m.SenderType) ? "Client" : m.SenderType,
                 senderName = ResolveSenderName(m, client?.Name, userMap, employeeMap)
             });
@@ -157,6 +149,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var items = await query.OrderByDescending(m => m.CreatedAt).Take(200).ToListAsync();
+            var attachmentMap = await LoadAttachmentMapAsync(items.Select(m => m.Id));
 
             var clientIds = items.Select(m => m.ClientId).Distinct().ToList();
             var clients = await TenantScope(_context.Clients)
@@ -209,7 +202,7 @@ namespace JurisFlow.Server.Controllers
                 createdAt = m.CreatedAt,
                 matterId = m.MatterId,
                 matter = m.MatterId != null && matterMap.TryGetValue(m.MatterId, out var matter) ? matter : null,
-                attachments = ParsePublicAttachments(m.AttachmentsJson),
+                attachments = GetPublicAttachments(attachmentMap, m.Id),
                 senderType = string.IsNullOrWhiteSpace(m.SenderType) ? "Client" : m.SenderType,
                 senderName = ResolveSenderName(m, clientMap.TryGetValue(m.ClientId, out var clientName) ? clientName.Name : null, userMap, employeeMap)
             });
@@ -247,10 +240,10 @@ namespace JurisFlow.Server.Controllers
                 }
             }
 
-            List<MessageAttachment> attachments;
+            List<MessageAttachmentPayload> attachments;
             try
             {
-                attachments = await SaveAttachments(dto.Attachments);
+                attachments = await _attachmentIntake.SaveAsync(dto.Attachments, HttpContext.RequestAborted);
             }
             catch (InvalidOperationException ex)
             {
@@ -294,6 +287,7 @@ namespace JurisFlow.Server.Controllers
             };
 
             _context.ClientMessages.Add(msg);
+            await _attachmentIndex.IndexClientMessageAsync(msg, attachments, HttpContext.RequestAborted);
 
             var contextLabel = matter != null ? $"{matter.CaseNumber} - {matter.Name}" : "your matter";
             _context.Notifications.Add(new Notification
@@ -338,7 +332,7 @@ namespace JurisFlow.Server.Controllers
                 read = false,
                 createdAt = msg.CreatedAt,
                 matterId = msg.MatterId,
-                attachments = ParsePublicAttachments(msg.AttachmentsJson),
+                attachments = ToPublicAttachments(attachments),
                 senderType = msg.SenderType,
                 senderName
             });
@@ -367,10 +361,10 @@ namespace JurisFlow.Server.Controllers
                 if (matter == null) return Forbid();
             }
 
-            List<MessageAttachment> attachments;
+            List<MessageAttachmentPayload> attachments;
             try
             {
-                attachments = await SaveAttachments(dto.Attachments);
+                attachments = await _attachmentIntake.SaveAsync(dto.Attachments, HttpContext.RequestAborted);
             }
             catch (InvalidOperationException ex)
             {
@@ -394,7 +388,7 @@ namespace JurisFlow.Server.Controllers
                     return BadRequest(new { message = "Employee not found for this tenant." });
                 }
 
-                if (!IsEmployeeAllowedForClientMatter(targetEmployee, matter))
+                if (!IsEmployeeAssignedToMatter(targetEmployee, matter))
                 {
                     return Forbid();
                 }
@@ -418,6 +412,7 @@ namespace JurisFlow.Server.Controllers
             };
 
             _context.ClientMessages.Add(msg);
+            await _attachmentIndex.IndexClientMessageAsync(msg, attachments, HttpContext.RequestAborted);
 
             if (!string.IsNullOrEmpty(targetEmployeeUserId))
             {
@@ -442,7 +437,7 @@ namespace JurisFlow.Server.Controllers
                 read = false,
                 createdAt = msg.CreatedAt,
                 matterId = msg.MatterId,
-                attachments = ParsePublicAttachments(msg.AttachmentsJson),
+                attachments = ToPublicAttachments(attachments),
                 senderType = msg.SenderType,
                 senderName = client.Name
             });
@@ -469,201 +464,6 @@ namespace JurisFlow.Server.Controllers
 
             await _auditLogger.LogAsync(HttpContext, "client.message.read", "ClientMessage", id, null);
             return NoContent();
-        }
-
-        private async Task<List<MessageAttachment>> SaveAttachments(List<AttachmentDto>? attachments)
-        {
-            var result = new List<MessageAttachment>();
-            if (attachments == null || attachments.Count == 0) return result;
-
-            if (attachments.Count > MaxAttachmentCount)
-            {
-                throw new InvalidOperationException($"A maximum of {MaxAttachmentCount} attachments is allowed per message.");
-            }
-
-            long totalBytes = 0;
-            foreach (var att in attachments)
-            {
-                var (mimeType, base64Payload) = ParseAttachmentData(att);
-                if (!AllowedMimeToExtension.TryGetValue(mimeType, out var ext))
-                {
-                    throw new InvalidOperationException($"Attachment MIME type '{mimeType}' is not allowed.");
-                }
-
-                var bytes = DecodeBase64(base64Payload, MaxAttachmentSizeBytes);
-                ValidateAttachmentSignature(mimeType, bytes);
-                totalBytes += bytes.Length;
-                if (totalBytes > MaxTotalAttachmentSizeBytes)
-                {
-                    throw new InvalidOperationException(
-                        $"Total attachment payload exceeds the {(MaxTotalAttachmentSizeBytes / (1024 * 1024)).ToString()} MB limit.");
-                }
-
-                var fileName = $"{Guid.NewGuid():N}{ext}";
-                await _fileStorage.SaveBytesAsync(GetMessageAttachmentPath(fileName), bytes, mimeType);
-
-                result.Add(new MessageAttachment
-                {
-                    FileName = NormalizeDisplayFileName(att.FileName ?? att.Name, ext),
-                    FilePath = $"/api/files/messages/{fileName}",
-                    MimeType = mimeType,
-                    Size = bytes.Length
-                });
-            }
-            return result;
-        }
-
-        private string GetMessageAttachmentPath(string fileName)
-        {
-            if (string.IsNullOrWhiteSpace(_tenantContext.TenantId))
-            {
-                throw new InvalidOperationException("Tenant context is missing.");
-            }
-
-            return $"uploads/{_tenantContext.TenantId}/message-attachments/{fileName}";
-        }
-
-        private static (string MimeType, string Base64Payload) ParseAttachmentData(AttachmentDto attachment)
-        {
-            if (string.IsNullOrWhiteSpace(attachment.Data))
-            {
-                throw new InvalidOperationException("Attachment data is required.");
-            }
-
-            var rawData = attachment.Data.Trim();
-            if (!rawData.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Attachment payload must be a base64 data URL.");
-            }
-
-            var commaIndex = rawData.IndexOf(',');
-            if (commaIndex <= 5 || commaIndex >= rawData.Length - 1)
-            {
-                throw new InvalidOperationException("Attachment payload is malformed.");
-            }
-
-            var header = rawData.Substring(5, commaIndex - 5);
-            var base64Payload = rawData[(commaIndex + 1)..].Trim();
-            if (string.IsNullOrWhiteSpace(base64Payload))
-            {
-                throw new InvalidOperationException("Attachment payload is empty.");
-            }
-
-            var headerParts = header.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (headerParts.Length == 0 || string.IsNullOrWhiteSpace(headerParts[0]))
-            {
-                throw new InvalidOperationException("Attachment MIME type is required.");
-            }
-
-            if (!headerParts.Any(p => string.Equals(p, "base64", StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new InvalidOperationException("Attachment payload must use base64 encoding.");
-            }
-
-            var mimeType = headerParts[0].Trim().ToLowerInvariant();
-            if (!string.IsNullOrWhiteSpace(attachment.Type) &&
-                !string.Equals(attachment.Type.Trim(), mimeType, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Attachment type metadata does not match payload MIME type.");
-            }
-
-            return (mimeType, base64Payload);
-        }
-
-        private static byte[] DecodeBase64(string base64Payload, int maxBytes)
-        {
-            if (base64Payload.Length % 4 != 0)
-            {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
-            }
-
-            var padding = base64Payload.EndsWith("==", StringComparison.Ordinal)
-                ? 2
-                : base64Payload.EndsWith("=", StringComparison.Ordinal) ? 1 : 0;
-
-            var expectedBytes = ((long)base64Payload.Length / 4L) * 3L - padding;
-            if (expectedBytes <= 0 || expectedBytes > int.MaxValue)
-            {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
-            }
-
-            if (expectedBytes > maxBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
-            }
-
-            var buffer = new byte[(int)expectedBytes];
-            if (!Convert.TryFromBase64String(base64Payload, buffer, out var bytesWritten))
-            {
-                throw new InvalidOperationException("Attachment payload is not valid base64.");
-            }
-
-            if (bytesWritten <= 0 || bytesWritten > maxBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Attachment exceeds the {(maxBytes / (1024 * 1024)).ToString()} MB per-file limit.");
-            }
-
-            return bytesWritten == buffer.Length ? buffer : buffer[..bytesWritten];
-        }
-
-        private static string NormalizeDisplayFileName(string? fileName, string extension)
-        {
-            var candidate = Path.GetFileName(fileName ?? string.Empty);
-            var baseName = Path.GetFileNameWithoutExtension(candidate);
-            if (string.IsNullOrWhiteSpace(baseName))
-            {
-                return $"attachment{extension}";
-            }
-
-            var invalidChars = Path.GetInvalidFileNameChars();
-            var sanitized = new string(baseName.Where(ch => !invalidChars.Contains(ch)).ToArray());
-            if (string.IsNullOrWhiteSpace(sanitized))
-            {
-                sanitized = "attachment";
-            }
-
-            if (sanitized.Length > 80)
-            {
-                sanitized = sanitized[..80];
-            }
-
-            return $"{sanitized}{extension}";
-        }
-
-        private static void ValidateAttachmentSignature(string mimeType, byte[] bytes)
-        {
-            if (bytes.Length == 0)
-            {
-                throw new InvalidOperationException("Attachment payload is empty.");
-            }
-
-            bool isValid = mimeType.ToLowerInvariant() switch
-            {
-                "application/pdf" => StartsWith(bytes, "%PDF"u8),
-                "image/png" => StartsWith(bytes, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }),
-                "image/jpeg" => StartsWith(bytes, new byte[] { 0xFF, 0xD8, 0xFF }),
-                "image/webp" => StartsWith(bytes, "RIFF"u8) && bytes.Length > 12 && StartsWith(bytes.AsSpan(8).ToArray(), "WEBP"u8),
-                "application/msword" or "application/vnd.ms-excel" or "application/vnd.ms-powerpoint" =>
-                    StartsWith(bytes, new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 }),
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    or "application/vnd.openxmlformats-officedocument.presentationml.presentation" =>
-                    StartsWith(bytes, new byte[] { 0x50, 0x4B, 0x03, 0x04 }) || StartsWith(bytes, new byte[] { 0x50, 0x4B, 0x05, 0x06 }),
-                "text/plain" => !bytes.Contains((byte)0),
-                _ => false
-            };
-
-            if (!isValid)
-            {
-                throw new InvalidOperationException("Attachment content does not match the declared MIME type.");
-            }
-        }
-
-        private static bool StartsWith(byte[] bytes, ReadOnlySpan<byte> signature)
-        {
-            return bytes.AsSpan().StartsWith(signature);
         }
 
         private bool IsClient()
@@ -725,17 +525,16 @@ namespace JurisFlow.Server.Controllers
                    string.Equals(message.EmployeeId, employeeId, StringComparison.Ordinal);
         }
 
-        private bool IsEmployeeAllowedForClientMatter(Employee employee, Matter matter)
+        private static bool IsEmployeeAssignedToMatter(Employee employee, Matter matter)
         {
-            if (string.IsNullOrWhiteSpace(matter.ResponsibleAttorney))
+            if (!string.IsNullOrWhiteSpace(matter.ResponsibleEmployeeId))
             {
-                return false;
+                return string.Equals(matter.ResponsibleEmployeeId, employee.Id, StringComparison.Ordinal);
             }
 
-            var responsibleAttorney = matter.ResponsibleAttorney.Trim();
-            var employeeName = $"{employee.FirstName} {employee.LastName}".Trim();
-            return string.Equals(responsibleAttorney, employeeName, StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(responsibleAttorney, employee.Email?.Trim(), StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrWhiteSpace(matter.CreatedByUserId) &&
+                   !string.IsNullOrWhiteSpace(employee.UserId) &&
+                   string.Equals(matter.CreatedByUserId, employee.UserId, StringComparison.Ordinal);
         }
 
         private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
@@ -754,33 +553,62 @@ namespace JurisFlow.Server.Controllers
             return _tenantContext.TenantId;
         }
 
-        private static IReadOnlyList<object> ParsePublicAttachments(string? attachmentsJson)
+        private async Task<Dictionary<string, List<object>>> LoadAttachmentMapAsync(IEnumerable<string> messageIds)
         {
-            if (string.IsNullOrWhiteSpace(attachmentsJson))
+            var ids = messageIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct()
+                .ToList();
+            if (ids.Count == 0)
             {
-                return Array.Empty<object>();
+                return new Dictionary<string, List<object>>();
             }
 
-            try
-            {
-                var attachments = JsonSerializer.Deserialize<List<MessageAttachment>>(attachmentsJson);
-                if (attachments == null || attachments.Count == 0)
-                {
-                    return Array.Empty<object>();
-                }
+            var attachments = await TenantScope(_context.MessageAttachments)
+                .AsNoTracking()
+                .Where(a => a.MessageType == "client" && ids.Contains(a.MessageId))
+                .OrderBy(a => a.CreatedAt)
+                .ToListAsync();
 
-                return attachments.Select(a => (object)new
-                {
-                    name = a.FileName,
-                    url = a.FilePath,
-                    mimeType = a.MimeType,
-                    size = a.Size
-                }).ToList();
-            }
-            catch (JsonException)
+            return attachments
+                .GroupBy(a => a.MessageId)
+                .ToDictionary(g => g.Key, g => g.Select(ToPublicAttachment).ToList());
+        }
+
+        private static IReadOnlyList<object> GetPublicAttachments(
+            IReadOnlyDictionary<string, List<object>> attachmentMap,
+            string messageId)
+        {
+            return attachmentMap.TryGetValue(messageId, out var attachments)
+                ? attachments
+                : Array.Empty<object>();
+        }
+
+        private static IReadOnlyList<object> ToPublicAttachments(IEnumerable<MessageAttachmentPayload> attachments)
+        {
+            return attachments.Select(ToPublicAttachment).ToList();
+        }
+
+        private static object ToPublicAttachment(MessageAttachmentPayload attachment)
+        {
+            return new
             {
-                return Array.Empty<object>();
-            }
+                name = attachment.FileName,
+                url = attachment.FilePath,
+                mimeType = attachment.MimeType,
+                size = attachment.Size
+            };
+        }
+
+        private static object ToPublicAttachment(MessageAttachment attachment)
+        {
+            return new
+            {
+                name = attachment.FileName,
+                url = attachment.FilePath,
+                mimeType = attachment.MimeType,
+                size = attachment.Size
+            };
         }
 
         private static string ResolveSenderName(
@@ -839,12 +667,4 @@ namespace JurisFlow.Server.Controllers
         public List<AttachmentDto>? Attachments { get; set; }
     }
 
-    public class AttachmentDto
-    {
-        public string? FileName { get; set; }
-        public string? Name { get; set; }
-        public long Size { get; set; }
-        public string? Type { get; set; }
-        public string Data { get; set; } = string.Empty; // data URL base64
-    }
 }

@@ -28,8 +28,6 @@ ConfigureRuntimePortBinding(builder);
 
 // Add services to the container.
 
-builder.Services.AddMemoryCache();
-
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -65,6 +63,8 @@ var clientAuthRefreshPermitLimit = Math.Clamp(builder.Configuration.GetValue("Ra
 var clientAuthRefreshWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientAuthRefresh:WindowSeconds", authRefreshWindowSeconds), 1, 3600);
 var clientMessagingSendPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientMessagingSend:PermitLimit", 12), 1, 200);
 var clientMessagingSendWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:ClientMessagingSend:WindowSeconds", 60), 1, 3600);
+var staffMessagingSendPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:StaffMessagingSend:PermitLimit", clientMessagingSendPermitLimit), 1, 200);
+var staffMessagingSendWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:StaffMessagingSend:WindowSeconds", clientMessagingSendWindowSeconds), 1, 3600);
 var crmConflictSearchPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:PermitLimit", 20), 1, 200);
 var crmConflictSearchWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:CrmConflictSearch:WindowSeconds", 60), 1, 3600);
 var publicIntakeSubmitPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:PublicIntakeSubmit:PermitLimit", 5), 1, 100);
@@ -216,6 +216,18 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = clientMessagingSendPermitLimit,
                 Window = TimeSpan.FromSeconds(clientMessagingSendWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("StaffMessagingSend", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "staff-messaging-send"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = staffMessagingSendPermitLimit,
+                Window = TimeSpan.FromSeconds(staffMessagingSendWindowSeconds),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 0,
                 AutoReplenishment = true
@@ -442,6 +454,11 @@ builder.Services.AddAuthorization(options =>
         policy.RequireRole("SecurityAdmin");
     });
 
+    options.AddPolicy("EmployeeAdminOnly", policy =>
+    {
+        policy.RequireRole("Admin");
+    });
+
     options.AddPolicy("StaffOnly", policy =>
     {
         policy.RequireRole("Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager");
@@ -506,6 +523,9 @@ builder.Services.AddScoped<TrustRecoveryService>();
 builder.Services.AddScoped<TwilioSmsService>();
 builder.Services.AddScoped<SmsReminderService>();
 builder.Services.AddScoped<OutboundEmailService>();
+builder.Services.AddSingleton<OAuthStateService>();
+builder.Services.AddScoped<MessageAttachmentIntakeService>();
+builder.Services.AddScoped<MessageAttachmentIndexService>();
 builder.Services.AddScoped<HolidaySeedService>();
 builder.Services.AddScoped<EfilingAutomationService>();
 builder.Services.AddScoped<JurisdictionRulesPlatformService>();
@@ -559,10 +579,10 @@ if (app.Environment.IsDevelopment())
     // app.MapOpenApi();
 }
 
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+if (ForwardedHeadersConfiguration.IsEnabled(app.Configuration))
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
-});
+    app.UseForwardedHeaders(ForwardedHeadersConfiguration.CreateOptions(app.Configuration));
+}
 
 if (!app.Environment.IsDevelopment())
 {
@@ -1040,6 +1060,7 @@ static void EnsureProductionSecurityRequirements(IConfiguration configuration)
     RequireBase64Key(configuration, "Security:DbEncryptionKey", exactBytes: 32, minBytes: null, errors);
     RequireBase64Key(configuration, "Security:AuditLogKey", exactBytes: null, minBytes: 32, errors);
     RequireIntegrationSecretProtection(configuration, errors);
+    RequireForwardedHeadersTrustBoundary(configuration, errors);
     RequireFlagDisabled(configuration, "Seed:Enabled", errors);
     RequireFlagDisabled(configuration, "Seed:ResetPasswords", errors);
 
@@ -1047,6 +1068,19 @@ static void EnsureProductionSecurityRequirements(IConfiguration configuration)
     {
         throw new InvalidOperationException(
             $"Production security requirements are not satisfied:{Environment.NewLine}- {string.Join(Environment.NewLine + "- ", errors)}");
+    }
+}
+
+static void RequireForwardedHeadersTrustBoundary(IConfiguration configuration, List<string> errors)
+{
+    if (!ForwardedHeadersConfiguration.HasExplicitTrustBoundary(configuration))
+    {
+        errors.Add("ForwardedHeaders must define KnownProxies/KnownNetworks in production, disable ForwardedHeaders:Enabled, or explicitly set ForwardedHeaders:TrustAllProxies.");
+    }
+
+    if (!ForwardedHeadersConfiguration.IsTrustAllAllowedInProduction(configuration))
+    {
+        errors.Add("ForwardedHeaders:TrustAllProxies requires ForwardedHeaders:AllowTrustAllProxiesInProduction=true in production.");
     }
 }
 

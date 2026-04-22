@@ -59,7 +59,7 @@ const Communications: React.FC = () => {
         const blobUrl = window.URL.createObjectURL(file.blob);
         const link = document.createElement('a');
         link.href = blobUrl;
-        link.download = file.filename || att.fileName || 'attachment';
+        link.download = file.filename || att.fileName || att.name || 'attachment';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -83,7 +83,7 @@ const Communications: React.FC = () => {
     if (mode !== 'direct') return;
     const loadEmployees = async () => {
       try {
-        const list = await api.getEmployees();
+      const list = await api.getStaffDirectory();
         setEmployees(list || []);
         const self = (list || []).find(e => e.email?.toLowerCase() === (user?.email || '').toLowerCase());
         setCurrentEmployeeId(self?.id || user?.id || null);
@@ -100,7 +100,7 @@ const Communications: React.FC = () => {
     const loadThread = async () => {
       setDmLoading(true);
       try {
-        const thread = await api.staffMessages.thread(currentEmployeeId, selectedEmployee.id);
+        const thread = await api.staffMessages.thread(selectedEmployee.id);
         setDmMessages(thread || []);
 
         const unread = (thread || []).filter(m => m.status === 'Unread' && m.recipientId === currentEmployeeId);
@@ -229,7 +229,6 @@ const Communications: React.FC = () => {
     const attachments = await Promise.all(dmAttachments.map(fileToDto));
     try {
       const sent = await api.staffMessages.send({
-        senderId,
         recipientId: selectedEmployee.id,
         body: dmInput.trim(),
         ...(attachments.length > 0 ? { attachments } : {})
@@ -260,6 +259,11 @@ const Communications: React.FC = () => {
     } catch {
       return [];
     }
+  };
+
+  const getMessageAttachments = (msg: any) => {
+    if (Array.isArray(msg?.attachments)) return msg.attachments;
+    return parseClientAttachments(msg?.attachmentsJson);
   };
 
   const handleSendClientMessage = async (e?: React.FormEvent) => {
@@ -626,7 +630,7 @@ const Communications: React.FC = () => {
                   )}
                   {sortedClientMessages.map((msg: any) => {
                     const isStaff = String(msg.senderType || 'Client').toLowerCase() === 'staff';
-                    const attachments = parseClientAttachments(msg.attachmentsJson);
+                    const attachments = getMessageAttachments(msg);
                     return (
                       <div key={msg.id} className={`flex ${isStaff ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm shadow space-y-2 ${isStaff ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-800'}`}>
@@ -641,7 +645,7 @@ const Communications: React.FC = () => {
                                   onClick={() => openAttachment(att)}
                                   className="flex items-center gap-2 underline"
                                 >
-                                  Attachment: {att.fileName || 'attachment'}
+                                  Attachment: {att.fileName || att.name || 'attachment'}
                                 </button>
                               ))}
                             </div>

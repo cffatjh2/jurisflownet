@@ -1,6 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
@@ -92,114 +91,37 @@ namespace JurisFlow.Server.Controllers
                     return false;
                 }
 
-                return await QueryContainsAttachmentAsync(
-                    TenantScope(_context.ClientMessages)
+                return await TenantScope(_context.MessageAttachments)
                         .AsNoTracking()
-                        .Where(m => m.ClientId == clientId)
-                        .Select(m => m.AttachmentsJson),
-                    fileName);
+                        .AnyAsync(a =>
+                            a.MessageType == "client" &&
+                            a.StoredFileName == fileName &&
+                            a.ClientId == clientId);
             }
 
             var currentUserId = GetUserId();
             var currentEmployeeId = await ResolveEmployeeIdAsync();
 
-            if (await QueryContainsAttachmentAsync(
-                    TenantScope(_context.ClientMessages)
-                        .AsNoTracking()
-                        .Where(m =>
-                            IsAdmin() ||
-                            (!string.IsNullOrWhiteSpace(currentUserId) && m.SenderUserId == currentUserId) ||
-                            (!string.IsNullOrWhiteSpace(currentEmployeeId) && m.EmployeeId == currentEmployeeId))
-                        .Select(m => m.AttachmentsJson),
-                    fileName))
+            if (await TenantScope(_context.MessageAttachments)
+                    .AsNoTracking()
+                    .AnyAsync(a =>
+                        a.StoredFileName == fileName &&
+                        a.MessageType == "client" &&
+                        (IsAdmin() ||
+                         (!string.IsNullOrWhiteSpace(currentUserId) && a.SenderUserId == currentUserId) ||
+                         (!string.IsNullOrWhiteSpace(currentEmployeeId) && a.MessageEmployeeId == currentEmployeeId))))
             {
                 return true;
             }
 
-            if (IsAdmin())
-            {
-                return await QueryContainsAttachmentAsync(
-                    TenantScope(_context.StaffMessages)
-                        .AsNoTracking()
-                        .Select(m => m.AttachmentsJson),
-                    fileName);
-            }
-
-            if (string.IsNullOrWhiteSpace(currentEmployeeId))
-            {
-                return false;
-            }
-
-            return await QueryContainsAttachmentAsync(
-                TenantScope(_context.StaffMessages)
+            return await TenantScope(_context.MessageAttachments)
                     .AsNoTracking()
-                    .Where(m => m.SenderId == currentEmployeeId || m.RecipientId == currentEmployeeId)
-                    .Select(m => m.AttachmentsJson),
-                fileName);
-        }
-
-        private static async Task<bool> QueryContainsAttachmentAsync(IQueryable<string?> attachmentsQuery, string fileName)
-        {
-            var attachmentsJsonRows = await attachmentsQuery.ToListAsync();
-            foreach (var attachmentsJson in attachmentsJsonRows)
-            {
-                if (ContainsAttachment(attachmentsJson, fileName))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool ContainsAttachment(string? attachmentsJson, string fileName)
-        {
-            if (string.IsNullOrWhiteSpace(attachmentsJson))
-            {
-                return false;
-            }
-
-            try
-            {
-                var attachments = JsonSerializer.Deserialize<List<MessageAttachment>>(attachmentsJson);
-                if (attachments == null || attachments.Count == 0)
-                {
-                    return false;
-                }
-
-                foreach (var attachment in attachments)
-                {
-                    var referencedFileName = ExtractStoredFileName(attachment.FilePath);
-                    if (string.Equals(referencedFileName, fileName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
-
-            return false;
-        }
-
-        private static string? ExtractStoredFileName(string? filePath)
-        {
-            if (string.IsNullOrWhiteSpace(filePath))
-            {
-                return null;
-            }
-
-            var value = filePath.Trim();
-            var queryIndex = value.IndexOfAny(new[] { '?', '#' });
-            if (queryIndex >= 0)
-            {
-                value = value[..queryIndex];
-            }
-
-            value = value.Replace('\\', '/');
-            return Path.GetFileName(value);
+                    .AnyAsync(a =>
+                        a.StoredFileName == fileName &&
+                        a.MessageType == "staff" &&
+                        (IsAdmin() ||
+                         (!string.IsNullOrWhiteSpace(currentEmployeeId) &&
+                          (a.SenderEmployeeId == currentEmployeeId || a.RecipientEmployeeId == currentEmployeeId))));
         }
 
         private bool IsClient()

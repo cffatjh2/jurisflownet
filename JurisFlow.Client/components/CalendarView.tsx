@@ -109,9 +109,9 @@ const CalendarView: React.FC = () => {
     }
   };
 
-  const loadEmployees = async () => {
+    const loadEmployees = async () => {
     try {
-      const data = await api.getEmployees();
+      const data = await api.getStaffDirectory();
       setEmployees(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load employees', error);

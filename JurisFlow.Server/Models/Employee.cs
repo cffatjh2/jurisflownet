@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
 using JurisFlow.Server.Enums;
 
 namespace JurisFlow.Server.Models
@@ -63,6 +64,7 @@ namespace JurisFlow.Server.Models
         public string? UserId { get; set; }
         
         [ForeignKey("UserId")]
+        [JsonIgnore]
         public User? User { get; set; }
     }
 }

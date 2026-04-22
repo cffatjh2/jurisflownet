@@ -75,32 +75,21 @@ export const getOAuthAccessToken = (target: OAuthTarget): string | null => {
 
 export const getOAuthRefreshToken = (target: OAuthTarget): string | null => {
   const keys = TOKEN_KEYS[target];
-  const sessionToken = readSessionToken(keys.refresh);
-  if (sessionToken) return sessionToken;
-
-  const legacyToken = readLegacyToken(keys.refresh);
-  if (legacyToken && hasWindow()) {
-    sessionStorage.setItem(keys.refresh, legacyToken);
+  if (hasWindow()) {
+    sessionStorage.removeItem(keys.refresh);
     removeLegacyToken(keys.refresh);
-    return legacyToken;
   }
 
   return null;
 };
 
-export const setOAuthTokens = (target: OAuthTarget, accessToken: string, refreshToken?: string | null): void => {
+export const setOAuthTokens = (target: OAuthTarget, accessToken: string, _refreshToken?: string | null): void => {
   if (!hasWindow()) return;
   const keys = TOKEN_KEYS[target];
   sessionStorage.setItem(keys.access, accessToken);
   removeLegacyToken(keys.access);
-
-  if (refreshToken) {
-    sessionStorage.setItem(keys.refresh, refreshToken);
-    removeLegacyToken(keys.refresh);
-  } else {
-    sessionStorage.removeItem(keys.refresh);
-    removeLegacyToken(keys.refresh);
-  }
+  sessionStorage.removeItem(keys.refresh);
+  removeLegacyToken(keys.refresh);
 };
 
 export const clearOAuthTokens = (target: OAuthTarget): void => {
@@ -121,17 +110,11 @@ export const getPreferredGoogleAccessToken = (): string | null => {
 export const refreshGoogleOAuthAccessToken = async (
   target: Extract<OAuthTarget, 'gmail' | 'google-docs' | 'google-meet'>
 ): Promise<string | null> => {
-  const refreshToken = getOAuthRefreshToken(target);
-  if (!refreshToken) {
-    return null;
-  }
-
   const response = await fetch('/api/google/oauth/refresh', {
     method: 'POST',
     headers: buildOAuthAuthHeaders(true),
     body: JSON.stringify({
-      target,
-      refreshToken
+      target
     })
   });
 
@@ -141,7 +124,7 @@ export const refreshGoogleOAuthAccessToken = async (
     throw new Error(message);
   }
 
-  setOAuthTokens(target, payload.accessToken, payload?.refreshToken || refreshToken);
+  setOAuthTokens(target, payload.accessToken);
   return payload.accessToken;
 };
 

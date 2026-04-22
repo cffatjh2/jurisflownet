@@ -15,6 +15,7 @@ interface ClientMessage {
   read: boolean;
   createdAt: string;
   attachmentsJson?: string | null;
+  attachments?: any[];
   source?: 'internal' | 'gmail';
   senderType?: 'Client' | 'Staff';
   senderName?: string;
@@ -56,7 +57,7 @@ const ClientMessages: React.FC = () => {
         const blobUrl = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = blobUrl;
-        link.download = att.fileName || 'attachment';
+        link.download = att.fileName || att.name || 'attachment';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -279,7 +280,7 @@ const ClientMessages: React.FC = () => {
   });
 
   const selectedAttachments = selectedMessage?.source === 'internal'
-    ? parseAttachments(selectedMessage.attachmentsJson)
+    ? (Array.isArray(selectedMessage.attachments) ? selectedMessage.attachments : parseAttachments(selectedMessage.attachmentsJson))
     : [];
 
   const handleReply = () => {
@@ -509,12 +510,12 @@ const ClientMessages: React.FC = () => {
                   <div className="text-xs font-bold text-gray-500 uppercase">Attachments</div>
                   {selectedAttachments.map((att: any, idx: number) => (
                     <button
-                      key={`${att.filePath || att.url || att.fileName}-${idx}`}
+                      key={`${att.filePath || att.url || att.fileName || att.name}-${idx}`}
                       type="button"
                       onClick={() => openAttachment(att)}
                       className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-blue-700 hover:bg-gray-100"
                     >
-                      <span className="truncate">{att.fileName || 'attachment'}</span>
+                      <span className="truncate">{att.fileName || att.name || 'attachment'}</span>
                       {att.size ? (
                         <span className="text-xs text-gray-500">{Math.round(att.size / 1024)} KB</span>
                       ) : null}

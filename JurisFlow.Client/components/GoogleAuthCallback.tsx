@@ -73,7 +73,7 @@ const GoogleAuthCallback: React.FC = () => {
         }
 
         const target = normalizeGoogleTarget(data?.target);
-        setOAuthTokens(target, data.accessToken, data?.refreshToken);
+        setOAuthTokens(target, data.accessToken);
 
         toast.success(getSuccessMessage(target));
         const returnPath = normalizeReturnPath(data?.returnPath, TARGET_RETURN_PATH[target]);

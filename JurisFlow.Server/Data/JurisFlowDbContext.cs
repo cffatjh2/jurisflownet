@@ -93,6 +93,7 @@ namespace JurisFlow.Server.Data
         public DbSet<StaffMessage> StaffMessages { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<ClientMessage> ClientMessages { get; set; }
+        public DbSet<MessageAttachment> MessageAttachments { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
         public DbSet<AuthSession> AuthSessions { get; set; }
         public DbSet<MfaChallenge> MfaChallenges { get; set; }
@@ -202,6 +203,8 @@ namespace JurisFlow.Server.Data
             modelBuilder.Entity<Matter>()
                 .HasIndex("TenantId", nameof(Matter.CreatedByUserId), nameof(Matter.OpenDate));
             modelBuilder.Entity<Matter>()
+                .HasIndex("TenantId", nameof(Matter.ResponsibleEmployeeId), nameof(Matter.OpenDate));
+            modelBuilder.Entity<Matter>()
                 .HasIndex("TenantId", nameof(Matter.ShareWithFirm), nameof(Matter.OpenDate));
             modelBuilder.Entity<MatterClientLink>()
                 .HasIndex("TenantId", nameof(MatterClientLink.MatterId), nameof(MatterClientLink.ClientId))
@@ -286,6 +289,18 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<ClientMessage>()
                 .HasIndex(m => new { m.ClientId, m.CreatedAt });
+
+            modelBuilder.Entity<MessageAttachment>()
+                .ToTable("MessageAttachments");
+            modelBuilder.Entity<MessageAttachment>()
+                .HasIndex("TenantId", nameof(MessageAttachment.StoredFileName))
+                .IsUnique();
+            modelBuilder.Entity<MessageAttachment>()
+                .HasIndex("TenantId", nameof(MessageAttachment.ClientId), nameof(MessageAttachment.StoredFileName));
+            modelBuilder.Entity<MessageAttachment>()
+                .HasIndex("TenantId", nameof(MessageAttachment.MessageEmployeeId), nameof(MessageAttachment.StoredFileName));
+            modelBuilder.Entity<MessageAttachment>()
+                .HasIndex("TenantId", nameof(MessageAttachment.SenderEmployeeId), nameof(MessageAttachment.RecipientEmployeeId), nameof(MessageAttachment.StoredFileName));
 
             modelBuilder.Entity<AuditLog>()
                 .HasIndex(a => new { a.CreatedAt, a.Action });

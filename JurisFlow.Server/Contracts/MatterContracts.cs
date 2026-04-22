@@ -43,6 +43,8 @@ namespace JurisFlow.Server.Contracts
         [Required]
         public string ResponsibleAttorney { get; set; } = string.Empty;
 
+        public string? ResponsibleEmployeeId { get; set; }
+
         public double BillableRate { get; set; }
 
         public string? EntityId { get; set; }
@@ -75,6 +77,8 @@ namespace JurisFlow.Server.Contracts
         [Required]
         public string ResponsibleAttorney { get; set; } = string.Empty;
 
+        public string? ResponsibleEmployeeId { get; set; }
+
         public double BillableRate { get; set; }
 
         public string? EntityId { get; set; }
@@ -102,6 +106,7 @@ namespace JurisFlow.Server.Contracts
         public string FeeStructure { get; set; } = string.Empty;
         public DateTime OpenDate { get; set; }
         public string ResponsibleAttorney { get; set; } = string.Empty;
+        public string? ResponsibleEmployeeId { get; set; }
         public double BillableRate { get; set; }
         public double TrustBalance { get; set; }
         public string? CurrentOutcomeFeePlanId { get; set; }
@@ -132,6 +137,7 @@ namespace JurisFlow.Server.Contracts
                 FeeStructure = matter.FeeStructure,
                 OpenDate = matter.OpenDate,
                 ResponsibleAttorney = matter.ResponsibleAttorney,
+                ResponsibleEmployeeId = matter.ResponsibleEmployeeId,
                 BillableRate = matter.BillableRate,
                 TrustBalance = matter.TrustBalance,
                 CurrentOutcomeFeePlanId = matter.CurrentOutcomeFeePlanId,
