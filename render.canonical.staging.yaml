@@ -16,6 +16,8 @@ services:
         value: postgres
       - key: Database__BootstrapMode
         value: migrate
+      - key: Database__ApplyMigrationsOnStartup
+        value: false
       - key: ConnectionStrings__DefaultConnection
         sync: false
       - key: Cors__AllowedOriginsCsv
@@ -39,11 +41,7 @@ services:
       - key: Tenancy__DefaultTenantName
         sync: false
       - key: Seed__Enabled
-        value: true
-      - key: Seed__AdminEmail
-        sync: false
-      - key: Seed__AdminPassword
-        sync: false
+        value: false
       - key: Security__MfaEnforced
         value: true
       - key: Security__DocumentEncryptionEnabled

@@ -266,35 +266,24 @@ namespace JurisFlow.Server.Services
 
         private async Task EnsureNotLockedAsync(DateTime dateUtc, CancellationToken ct, string operationType = "billing_operation")
         {
-            var day = DateOnly.FromDateTime(dateUtc);
-            var locks = await _context.BillingLocks.AsNoTracking()
-                .Select(l => new { l.PeriodStart, l.PeriodEnd })
-                .ToListAsync(ct);
-
-            foreach (var item in locks)
+            var day = dateUtc.Date;
+            var isLocked = await _context.BillingLocks.AsNoTracking()
+                .AnyAsync(l => l.PeriodStart <= day && l.PeriodEnd >= day, ct);
+            if (!isLocked)
             {
-                if (!TryParseDateOnly(item.PeriodStart, out var start) || !TryParseDateOnly(item.PeriodEnd, out var end))
-                {
-                    continue;
-                }
-                if (day >= start && day <= end)
-                {
-                    try
-                    {
-                        await _trustRiskRadarService.RecordPeriodLockAttemptAsync(dateUtc, operationType, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Trust risk radar failed to record period lock attempt for {OperationType}.", operationType);
-                    }
-                    throw new InvalidOperationException("Billing period is locked.");
-                }
+                return;
             }
-        }
 
-        private static bool TryParseDateOnly(string? value, out DateOnly date)
-        {
-            return DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+            try
+            {
+                await _trustRiskRadarService.RecordPeriodLockAttemptAsync(dateUtc, operationType, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Trust risk radar failed to record period lock attempt for {OperationType}.", operationType);
+            }
+
+            throw new InvalidOperationException("Billing period is locked.");
         }
 
         private async Task<BillingRateCard?> ResolveRateCardAsync(MatterBillingPolicy policy, Matter matter, CancellationToken ct)

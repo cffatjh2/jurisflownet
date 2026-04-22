@@ -73,6 +73,7 @@ var adminDangerousOpsPermitLimit = Math.Clamp(builder.Configuration.GetValue("Ra
 var adminDangerousOpsWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:AdminDangerousOps:WindowSeconds", 300), 1, 3600);
 var defaultMatterMutationPermitLimit = builder.Environment.IsDevelopment() ? 300 : 30;
 var defaultTrustMutationPermitLimit = builder.Environment.IsDevelopment() ? 600 : 20;
+var defaultPaymentMutationPermitLimit = builder.Environment.IsDevelopment() ? 240 : 24;
 var matterMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:MatterMutation:PermitLimit", defaultMatterMutationPermitLimit), 1, 2000);
 var matterMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:MatterMutation:WindowSeconds", 60), 1, 3600);
 var trustMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:TrustMutation:PermitLimit", defaultTrustMutationPermitLimit), 1, 2000);
@@ -86,6 +87,8 @@ var taskMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateL
 var defaultBootstrapReadPermitLimit = builder.Environment.IsDevelopment() ? 120 : 24;
 var bootstrapReadPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:BootstrapRead:PermitLimit", defaultBootstrapReadPermitLimit), 1, 2000);
 var bootstrapReadWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:BootstrapRead:WindowSeconds", 60), 1, 3600);
+var paymentMutationPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:PaymentMutation:PermitLimit", defaultPaymentMutationPermitLimit), 1, 2000);
+var paymentMutationWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:PaymentMutation:WindowSeconds", 60), 1, 3600);
 var integrationWebhookPermitLimit = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:PermitLimit", 120), 1, 5000);
 var integrationWebhookWindowSeconds = Math.Clamp(builder.Configuration.GetValue("RateLimiting:IntegrationWebhook:WindowSeconds", 60), 1, 3600);
 
@@ -329,6 +332,18 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             }));
 
+    options.AddPolicy("PaymentMutation", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            BuildRateLimitPartitionKey(httpContext, "payment-mutation"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = paymentMutationPermitLimit,
+                Window = TimeSpan.FromSeconds(paymentMutationWindowSeconds),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
     options.AddPolicy("IntegrationWebhook", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             BuildRateLimitPartitionKey(httpContext, "integration-webhook"),
@@ -360,6 +375,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
 var databaseProvider = ResolveDatabaseProvider(builder.Configuration, connectionString);
 var resolvedConnectionString = ResolveDatabaseConnectionString(databaseProvider, connectionString, builder.Environment.ContentRootPath);
 var databaseBootstrapMode = ResolveDatabaseBootstrapMode(builder.Configuration, databaseProvider);
+var applyMigrationsOnStartup = ResolveApplyMigrationsOnStartup(builder.Configuration, builder.Environment);
 
 var (allowedCorsOrigins, invalidCorsOrigins) = ResolveCorsOrigins(builder.Configuration);
 if (invalidCorsOrigins.Count > 0)
@@ -468,6 +484,41 @@ builder.Services.AddAuthorization(options =>
     {
         policy.RequireRole("Admin", "Partner", "Associate", "Employee", "Attorney", "Staff", "Manager", "Client");
     });
+
+    options.AddPolicy("BillingRead", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "Associate", "Attorney", "Staff", "Employee", "FinanceAdmin", "Accountant");
+    });
+
+    options.AddPolicy("BillingWrite", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "Associate", "Attorney", "Staff", "FinanceAdmin", "Accountant");
+    });
+
+    options.AddPolicy("BillingApprove", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "FinanceAdmin");
+    });
+
+    options.AddPolicy("BillingFinalize", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "FinanceAdmin");
+    });
+
+    options.AddPolicy("BillingRefund", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "FinanceAdmin");
+    });
+
+    options.AddPolicy("BillingSettingsWrite", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager", "FinanceAdmin");
+    });
+
+    options.AddPolicy("ClientPortalManage", policy =>
+    {
+        policy.RequireRole("Admin", "Partner", "Manager");
+    });
 });
 
 builder.Services.AddHttpContextAccessor();
@@ -493,6 +544,9 @@ builder.Services.AddScoped<TaskApplicationService>();
 builder.Services.AddScoped<CalendarEventApplicationService>();
 builder.Services.AddScoped<MatterAccessService>();
 builder.Services.AddScoped<TaskAccessService>();
+builder.Services.AddScoped<BillingObjectAuthorizationService>();
+builder.Services.AddScoped<TaskAccessService>();
+builder.Services.AddScoped<BillingObjectAuthorizationService>();
 builder.Services.AddScoped<MatterClientLinkService>();
 builder.Services.AddScoped<MatterWorkflowTriggerDispatcher>();
 builder.Services.AddSingleton<OutcomeFeePlannerTriggerQueue>();
@@ -504,6 +558,7 @@ builder.Services.AddHostedService<BackupJobHostedService>();
 builder.Services.AddScoped<FirmStructureService>();
 builder.Services.AddSingleton<StripePaymentService>();
 builder.Services.AddSingleton<LemonSqueezyCheckoutService>();
+builder.Services.AddScoped<PaymentCommandIdempotencyService>();
 builder.Services.AddScoped<PaymentPlanService>();
 builder.Services.AddScoped<DocumentIndexService>();
 builder.Services.AddScoped<RetentionService>();
@@ -614,7 +669,7 @@ using (var scope = app.Services.CreateScope())
     {
         var context = services.GetRequiredService<JurisFlowDbContext>();
         var startupLogger = services.GetRequiredService<ILogger<Program>>();
-        InitializeDatabase(context, databaseProvider, databaseBootstrapMode);
+        InitializeDatabase(context, databaseProvider, databaseBootstrapMode, applyMigrationsOnStartup);
         await PostgresSchemaCompatibility.EnsureCriticalColumnsAsync(context, startupLogger);
         await PostgresLegacyTrustSchemaCompatibility.EnsureAsync(context, startupLogger);
 
@@ -662,8 +717,8 @@ using (var scope = app.Services.CreateScope())
             var passwordPolicy = services.GetRequiredService<PasswordPolicyService>();
             var resetSeedPasswords = builder.Configuration.GetValue("Seed:ResetPasswords", false);
 
-            var adminEmail = builder.Configuration["Seed:AdminEmail"] ?? "admin@jurisflow.local";
-            var adminPassword = builder.Configuration["Seed:AdminPassword"] ?? "ChangeMe123!";
+            var adminEmail = RequireConfiguredSeedValue(builder.Configuration, "Seed:AdminEmail");
+            var adminPassword = RequireConfiguredSeedValue(builder.Configuration, "Seed:AdminPassword");
 
             var adminPasswordResult = passwordPolicy.Validate(adminPassword, adminEmail, "Admin User");
             if (!adminPasswordResult.IsValid)
@@ -699,12 +754,13 @@ using (var scope = app.Services.CreateScope())
             }
 
             var portalSeedEnabled = builder.Configuration.GetValue("Seed:PortalClientEnabled", false);
-            var demoClientEmail = builder.Configuration["Seed:PortalClientEmail"] ?? "client.demo@jurisflow.local";
+            var demoClientEmail = builder.Configuration["Seed:PortalClientEmail"];
 
             if (portalSeedEnabled)
             {
                 // Seed a portal-enabled demo client so you can log in as a client user
-                var demoClientPassword = builder.Configuration["Seed:PortalClientPassword"] ?? "ChangeMe123!";
+                demoClientEmail = RequireConfiguredSeedValue(builder.Configuration, "Seed:PortalClientEmail");
+                var demoClientPassword = RequireConfiguredSeedValue(builder.Configuration, "Seed:PortalClientPassword");
 
                 var demoPasswordResult = passwordPolicy.Validate(demoClientPassword, demoClientEmail, "Demo Client");
                 if (!demoPasswordResult.IsValid)
@@ -744,7 +800,7 @@ using (var scope = app.Services.CreateScope())
                     demoClient.Status = "Active";
                 }
             }
-            else
+            else if (!string.IsNullOrWhiteSpace(demoClientEmail))
             {
                 var normalizedDemoClientEmail = EmailAddressNormalizer.Normalize(demoClientEmail);
                 var demoClient = context.Clients.FirstOrDefault(c => c.NormalizedEmail == normalizedDemoClientEmail);
@@ -787,7 +843,11 @@ using (var scope = app.Services.CreateScope())
     catch (Exception ex)
     {
         var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "An error occurred seeding the DB.");
+        logger.LogError(ex, "An error occurred during database startup initialization.");
+        if (app.Environment.IsProduction() || !applyMigrationsOnStartup)
+        {
+            throw;
+        }
     }
 }
 
@@ -1061,8 +1121,9 @@ static void EnsureProductionSecurityRequirements(IConfiguration configuration)
     RequireBase64Key(configuration, "Security:AuditLogKey", exactBytes: null, minBytes: 32, errors);
     RequireIntegrationSecretProtection(configuration, errors);
     RequireForwardedHeadersTrustBoundary(configuration, errors);
-    RequireFlagDisabled(configuration, "Seed:Enabled", errors);
-    RequireFlagDisabled(configuration, "Seed:ResetPasswords", errors);
+    RequireForwardedHeadersTrustBoundary(configuration, errors);
+    RequireProductionSeedDisabled(configuration, errors);
+    RequireProductionMigrationMode(configuration, errors);
 
     if (errors.Count > 0)
     {
@@ -1081,6 +1142,52 @@ static void RequireForwardedHeadersTrustBoundary(IConfiguration configuration, L
     if (!ForwardedHeadersConfiguration.IsTrustAllAllowedInProduction(configuration))
     {
         errors.Add("ForwardedHeaders:TrustAllProxies requires ForwardedHeaders:AllowTrustAllProxiesInProduction=true in production.");
+    }
+}
+
+static void RequireProductionSeedDisabled(IConfiguration configuration, List<string> errors)
+{
+    if (configuration.GetValue("Seed:Enabled", false))
+    {
+        errors.Add("Seed:Enabled must be false in production.");
+    }
+
+    if (configuration.GetValue("Seed:PortalClientEnabled", false))
+    {
+        errors.Add("Seed:PortalClientEnabled must be false in production.");
+    }
+
+    if (configuration.GetValue("Seed:ResetPasswords", false))
+    {
+        errors.Add("Seed:ResetPasswords must be false in production.");
+    }
+
+    foreach (var key in new[]
+    {
+        "Seed:AdminEmail",
+        "Seed:AdminPassword",
+        "Seed:PortalClientEmail",
+        "Seed:PortalClientPassword"
+    })
+    {
+        if (!string.IsNullOrWhiteSpace(configuration[key]))
+        {
+            errors.Add($"{key} must not be configured in production.");
+        }
+    }
+}
+
+static void RequireProductionMigrationMode(IConfiguration configuration, List<string> errors)
+{
+    var bootstrapMode = configuration["Database:BootstrapMode"]?.Trim();
+    if (!string.Equals(bootstrapMode, "migrate", StringComparison.OrdinalIgnoreCase))
+    {
+        errors.Add("Database:BootstrapMode must be 'migrate' in production; 'ensure-created' is forbidden.");
+    }
+
+    if (configuration.GetValue("Database:ApplyMigrationsOnStartup", false))
+    {
+        errors.Add("Database:ApplyMigrationsOnStartup must be false in production. Run the migration job before deploy; startup will fail fast when migrations are pending.");
     }
 }
 
@@ -1152,14 +1259,6 @@ static void RequireFlagEnabled(IConfiguration configuration, string key, List<st
     if (!configuration.GetValue(key, false))
     {
         errors.Add($"{key} must be set to true.");
-    }
-}
-
-static void RequireFlagDisabled(IConfiguration configuration, string key, List<string> errors)
-{
-    if (configuration.GetValue(key, false))
-    {
-        errors.Add($"{key} must be set to false.");
     }
 }
 
@@ -1271,7 +1370,11 @@ static void ConfigureDatabaseProvider(DbContextOptionsBuilder options, string pr
     }
 }
 
-static void InitializeDatabase(JurisFlowDbContext context, string provider, string bootstrapMode)
+static void InitializeDatabase(
+    JurisFlowDbContext context,
+    string provider,
+    string bootstrapMode,
+    bool applyMigrationsOnStartup)
 {
     if (string.Equals(bootstrapMode, "ensure-created", StringComparison.OrdinalIgnoreCase))
     {
@@ -1291,7 +1394,19 @@ static void InitializeDatabase(JurisFlowDbContext context, string provider, stri
         return;
     }
 
-    context.Database.Migrate();
+    if (applyMigrationsOnStartup)
+    {
+        context.Database.Migrate();
+        return;
+    }
+
+    var pendingMigrations = context.Database.GetPendingMigrations().ToList();
+    if (pendingMigrations.Count > 0)
+    {
+        throw new InvalidOperationException(
+            "Pending EF Core migrations detected. Apply migrations before application startup with the deployment migration job. Pending migrations: " +
+            string.Join(", ", pendingMigrations));
+    }
 }
 
 static void ValidateDatabaseMigrations(JurisFlowDbContext context)
@@ -1391,6 +1506,28 @@ static string? ResolveJwtSigningKey(IConfiguration configuration, IHostEnvironme
     return configuration["Jwt:DevelopmentKey"]
         ?? Environment.GetEnvironmentVariable("JURISFLOW_JWT_DEV_KEY")
         ?? "DevelopmentOnly_JurisFlow_Jwt_Key_Override_Me_1234567890";
+}
+
+static bool ResolveApplyMigrationsOnStartup(IConfiguration configuration, IWebHostEnvironment environment)
+{
+    var configuredValue = configuration["Database:ApplyMigrationsOnStartup"];
+    if (bool.TryParse(configuredValue, out var applyMigrationsOnStartup))
+    {
+        return applyMigrationsOnStartup;
+    }
+
+    return !environment.IsProduction();
+}
+
+static string RequireConfiguredSeedValue(IConfiguration configuration, string key)
+{
+    var value = configuration[key];
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        throw new InvalidOperationException($"{key} is required when seed data is enabled. Provide it via user-secrets or environment variables.");
+    }
+
+    return value;
 }
 
 static string ResolveSqliteConnectionString(string connectionString, string contentRoot)

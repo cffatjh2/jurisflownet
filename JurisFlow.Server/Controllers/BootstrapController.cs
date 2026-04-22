@@ -18,6 +18,9 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class BootstrapController : ControllerBase
     {
+        private const int BootstrapTimeEntriesLimit = 50;
+        private const int BootstrapExpensesLimit = 50;
+        private const int BootstrapInvoicesLimit = 50;
         private readonly JurisFlowDbContext _context;
         private readonly ILogger<BootstrapController> _logger;
         private readonly MatterAccessService _matterAccess;
@@ -142,6 +145,29 @@ namespace JurisFlow.Server.Controllers
 
                     response.TimeEntries = await timeEntriesQuery
                         .OrderByDescending(t => t.Date)
+                        .ThenByDescending(t => t.CreatedAt)
+                        .Take(BootstrapTimeEntriesLimit)
+                        .Select(t => new TimeEntryListItemDto
+                        {
+                            Id = t.Id,
+                            MatterId = t.MatterId,
+                            Description = t.Description,
+                            Duration = t.Duration,
+                            Rate = t.Rate,
+                            Date = t.Date,
+                            Billed = t.Billed,
+                            IsBillable = t.IsBillable,
+                            Type = t.Type,
+                            ActivityCode = t.ActivityCode,
+                            TaskCode = t.TaskCode,
+                            ApprovalStatus = t.ApprovalStatus,
+                            SubmittedAt = t.SubmittedAt,
+                            ApprovedAt = t.ApprovedAt,
+                            RejectedAt = t.RejectedAt,
+                            RejectionReason = t.RejectionReason,
+                            CreatedAt = t.CreatedAt,
+                            UpdatedAt = t.UpdatedAt
+                        })
                         .ToListAsync();
 
                     var eventsQuery = _context.CalendarEvents.AsNoTracking().AsQueryable();
@@ -198,6 +224,27 @@ namespace JurisFlow.Server.Controllers
 
                     response.Expenses = await expensesQuery
                         .OrderByDescending(e => e.Date)
+                        .ThenByDescending(e => e.CreatedAt)
+                        .Take(BootstrapExpensesLimit)
+                        .Select(e => new ExpenseListItemDto
+                        {
+                            Id = e.Id,
+                            MatterId = e.MatterId,
+                            Description = e.Description,
+                            Amount = e.Amount,
+                            Date = e.Date,
+                            Category = e.Category,
+                            Billed = e.Billed,
+                            Type = e.Type,
+                            ExpenseCode = e.ExpenseCode,
+                            ApprovalStatus = e.ApprovalStatus,
+                            SubmittedAt = e.SubmittedAt,
+                            ApprovedAt = e.ApprovedAt,
+                            RejectedAt = e.RejectedAt,
+                            RejectionReason = e.RejectionReason,
+                            CreatedAt = e.CreatedAt,
+                            UpdatedAt = e.UpdatedAt
+                        })
                         .ToListAsync();
 
                     var invoicesQuery = _context.Invoices.AsNoTracking().AsQueryable();
@@ -210,22 +257,31 @@ namespace JurisFlow.Server.Controllers
                         invoicesQuery = TenantScope(invoicesQuery).Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && billingReadableMatterIdsQuery.Contains(i.MatterId!));
                     }
 
-                    var invoices = await invoicesQuery
+                    response.Invoices = await invoicesQuery
                         .OrderByDescending(i => i.CreatedAt)
-                        .ToListAsync();
-                    if (!isPrivileged)
-                    {
-                        foreach (var invoice in invoices)
+                        .Take(BootstrapInvoicesLimit)
+                        .Select(i => new InvoiceListItemDto
                         {
-                            if (string.IsNullOrWhiteSpace(invoice.MatterId)) continue;
-                            if (readableMatterMap.TryGetValue(invoice.MatterId, out var matter) && !_matterAccess.CanSeeMatterNotes(matter, User))
-                            {
-                                invoice.Notes = null;
-                                invoice.Terms = null;
-                            }
-                        }
-                    }
-                    response.Invoices = invoices;
+                            Id = i.Id,
+                            Number = i.Number,
+                            ClientId = i.ClientId,
+                            MatterId = i.MatterId,
+                            EntityId = i.EntityId,
+                            OfficeId = i.OfficeId,
+                            Status = i.Status,
+                            IssueDate = i.IssueDate,
+                            DueDate = i.DueDate,
+                            Subtotal = i.Subtotal,
+                            Tax = i.Tax,
+                            Discount = i.Discount,
+                            Total = i.Total,
+                            AmountPaid = i.AmountPaid,
+                            Balance = i.Balance,
+                            LineItemCount = i.LineItems.Count,
+                            CreatedAt = i.CreatedAt,
+                            UpdatedAt = i.UpdatedAt
+                        })
+                        .ToListAsync();
 
                     var documentsQuery = _context.Documents.AsNoTracking().AsQueryable();
                     if (isPrivileged)

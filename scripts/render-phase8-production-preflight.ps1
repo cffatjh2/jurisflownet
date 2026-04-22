@@ -39,6 +39,7 @@ $requiredFiles = @(
 
 $expectedEnvKeys = @(
     "ConnectionStrings__DefaultConnection",
+    "Database__ApplyMigrationsOnStartup",
     "Storage__Supabase__Url",
     "Storage__Supabase__ServiceRoleKey",
     "Storage__Supabase__Bucket",
@@ -69,6 +70,7 @@ $envMatrix = Get-Content -Path (Join-Path $repoRoot "documentation\RENDER_CANONI
 $checks = @(
     [pscustomobject]@{ Name = "healthcheck_path"; Status = ($programContent -match 'MapHealthChecks\("/health"\)'); Detail = "/health maplenmis olmali" },
     [pscustomobject]@{ Name = "canonical_bootstrap_mode"; Status = ($renderTemplate -match 'Database__BootstrapMode' -and $renderTemplate -match 'value:\s*migrate'); Detail = "Canonical production blueprint migrate kullanmali" },
+    [pscustomobject]@{ Name = "canonical_startup_migrations_disabled"; Status = ($renderTemplate -match 'Database__ApplyMigrationsOnStartup' -and $renderTemplate -match 'value:\s*false'); Detail = "Canonical production blueprint deploy migration job modelini kullanmali" },
     [pscustomobject]@{ Name = "canonical_seed_disabled"; Status = ($renderTemplate -match 'Seed__Enabled' -and $renderTemplate -match 'value:\s*false'); Detail = "Production blueprint seed kapali olmali" },
     [pscustomobject]@{ Name = "canonical_healthcheck_path"; Status = ($renderTemplate -match 'healthCheckPath:\s*/health'); Detail = "Canonical production blueprint /health kullanmali" }
 )

@@ -6,7 +6,7 @@ This project now supports running the backend against Supabase Postgres and Supa
 
 - `Database:Provider` now supports `sqlite` and `postgres`.
 - PostgreSQL connection strings can be supplied in standard key/value form or as a `postgresql://...` URI.
-- PostgreSQL startup defaults to `Database:BootstrapMode=ensure-created` so a fresh Supabase database can be initialized from the current EF Core model without replaying the existing SQLite migration chain.
+- Production PostgreSQL startup requires `Database:BootstrapMode=migrate`; pending migrations must be applied by the deployment migration workflow before the app starts.
 - `Storage:Provider` now supports `local` and `supabase`.
 - When `Storage:Provider=supabase`, document files, client portal uploads, message attachments, avatars, and imported integration artifacts are stored in a private Supabase Storage bucket instead of the app filesystem.
 
@@ -16,7 +16,8 @@ Use `supabase.backend.env.example` as the baseline. The database-specific values
 
 ```env
 Database__Provider=postgres
-Database__BootstrapMode=ensure-created
+Database__BootstrapMode=migrate
+Database__ApplyMigrationsOnStartup=false
 ConnectionStrings__DefaultConnection=Host=aws-0-us-east-1.pooler.supabase.com;Port=5432;Database=postgres;Username=postgres.your-project-ref;Password=replace-me;SSL Mode=Require
 Storage__Provider=supabase
 Storage__Supabase__Url=https://your-project-ref.supabase.co
@@ -40,8 +41,9 @@ This repository now includes a dedicated `supabase/` workspace for PostgreSQL mi
 
 Current operational stance:
 
-- `Database__BootstrapMode=ensure-created` is still acceptable only for fresh throwaway bootstraps
-- staging and production Supabase projects should move to `Database__BootstrapMode=migrate` after the remote baseline is captured
+- `Database__BootstrapMode=migrate` is required for staging and production Supabase projects
+- `Database__ApplyMigrationsOnStartup=false` keeps production on the deploy migration job model; startup fails fast when EF migrations are pending
+- `ensure-created` is not allowed for production startup
 - the PostgreSQL schema baseline must come from `supabase db pull`, not from replaying the existing SQLite-oriented EF migration chain
 
 For the step-by-step baseline and history alignment procedure, use:

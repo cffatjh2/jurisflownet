@@ -7,12 +7,12 @@ namespace JurisFlow.Server.DTOs
     {
         public IReadOnlyList<Matter> Matters { get; set; } = Array.Empty<Matter>();
         public IReadOnlyList<TaskResponse> Tasks { get; set; } = Array.Empty<TaskResponse>();
-        public IReadOnlyList<TimeEntry> TimeEntries { get; set; } = Array.Empty<TimeEntry>();
-        public IReadOnlyList<Expense> Expenses { get; set; } = Array.Empty<Expense>();
+        public IReadOnlyList<TimeEntryListItemDto> TimeEntries { get; set; } = Array.Empty<TimeEntryListItemDto>();
+        public IReadOnlyList<ExpenseListItemDto> Expenses { get; set; } = Array.Empty<ExpenseListItemDto>();
         public IReadOnlyList<Client> Clients { get; set; } = Array.Empty<Client>();
         public IReadOnlyList<Lead> Leads { get; set; } = Array.Empty<Lead>();
         public IReadOnlyList<CalendarEvent> Events { get; set; } = Array.Empty<CalendarEvent>();
-        public IReadOnlyList<Invoice> Invoices { get; set; } = Array.Empty<Invoice>();
+        public IReadOnlyList<InvoiceListItemDto> Invoices { get; set; } = Array.Empty<InvoiceListItemDto>();
         public IReadOnlyList<Notification> Notifications { get; set; } = Array.Empty<Notification>();
         public IReadOnlyList<BootstrapDocumentResponse> Documents { get; set; } = Array.Empty<BootstrapDocumentResponse>();
         public IReadOnlyList<TaskTemplateResponse> TaskTemplates { get; set; } = Array.Empty<TaskTemplateResponse>();

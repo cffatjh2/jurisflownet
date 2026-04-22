@@ -13,13 +13,14 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/legal-billing")]
     [ApiController]
-    [Authorize(Policy = "StaffOnly")]
+    [Authorize(Policy = "BillingRead")]
     public class LegalBillingController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly LegalBillingEngineService _billingEngine;
         private readonly AuditLogger _auditLogger;
         private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
+        private readonly BillingObjectAuthorizationService _billingAuthorization;
         private readonly ILogger<LegalBillingController> _logger;
 
         public LegalBillingController(
@@ -27,18 +28,23 @@ namespace JurisFlow.Server.Controllers
             LegalBillingEngineService billingEngine,
             AuditLogger auditLogger,
             MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
+            BillingObjectAuthorizationService billingAuthorization,
             ILogger<LegalBillingController> logger)
         {
             _context = context;
             _billingEngine = billingEngine;
             _auditLogger = auditLogger;
             _workflowTriggerDispatcher = workflowTriggerDispatcher;
+            _billingAuthorization = billingAuthorization;
             _logger = logger;
         }
 
         [HttpGet("policies/matter/{matterId}")]
         public async Task<ActionResult<MatterBillingPolicy?>> GetMatterPolicy(string matterId, CancellationToken ct)
         {
+            var matterAuth = await RequireMatterAuthorizationAsync(matterId, requireWrite: false, ct);
+            if (matterAuth != null) return matterAuth;
+
             var policy = await _billingEngine.GetActiveMatterPolicyAsync(matterId, DateTime.UtcNow, ct);
             if (policy == null)
             {
@@ -49,9 +55,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("policies/matter")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<ActionResult<MatterBillingPolicy>> UpsertMatterPolicy([FromBody] MatterBillingPolicyUpsertRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireMatterAuthorizationAsync(request.MatterId, requireWrite: true, ct);
+            if (auth != null) return auth;
 
             try
             {
@@ -72,9 +81,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("rate-cards")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<ActionResult<BillingRateCard>> UpsertRateCard([FromBody] BillingRateCardUpsertRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireOptionalMatterClientAuthorizationAsync(request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var rateCard = await _billingEngine.UpsertRateCardAsync(request, GetUserId(), ct);
@@ -94,9 +106,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("rate-cards/{rateCardId}/entries")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<ActionResult<BillingRateCardEntry>> UpsertRateCardEntry(string rateCardId, [FromBody] BillingRateCardEntryUpsertRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireOptionalMatterClientAuthorizationAsync(request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
             request.RateCardId = rateCardId;
             try
             {
@@ -111,9 +126,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("prebills/generate")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<PrebillGenerationResult>> GeneratePrebill([FromBody] PrebillGenerateRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireMatterAuthorizationAsync(request.MatterId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var result = await _billingEngine.GeneratePrebillAsync(request, GetUserId(), ct);
@@ -129,19 +147,31 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("prebills")]
         public async Task<ActionResult<IEnumerable<BillingPrebillBatch>>> GetPrebills([FromQuery] BillingPrebillBatchQuery query, CancellationToken ct)
         {
+            var auth = await RequireOptionalMatterClientAuthorizationAsync(query?.MatterId, query?.ClientId, requireWrite: false, ct);
+            if (auth != null) return auth;
+            if ((query == null || (string.IsNullOrWhiteSpace(query.MatterId) && string.IsNullOrWhiteSpace(query.ClientId))) &&
+                !_billingAuthorization.IsPrivileged(User))
+            {
+                return Forbid();
+            }
             return Ok(await _billingEngine.ListPrebillsAsync(query ?? new BillingPrebillBatchQuery(), ct));
         }
 
         [HttpGet("prebills/{prebillId}")]
         public async Task<ActionResult<PrebillDetailResult>> GetPrebill(string prebillId, CancellationToken ct)
         {
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: false, ct);
+            if (auth != null) return auth;
             var result = await _billingEngine.GetPrebillAsync(prebillId, ct);
             return result == null ? NotFound() : Ok(result);
         }
 
         [HttpPost("prebills/{prebillId}/submit-review")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingPrebillBatch>> SubmitPrebillForReview(string prebillId, [FromBody] ReviewDecisionDto? body, CancellationToken ct)
         {
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var batch = await _billingEngine.SubmitPrebillForReviewAsync(prebillId, GetUserId(), body?.Notes, ct);
@@ -156,8 +186,11 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("prebills/{prebillId}/approve")]
+        [Authorize(Policy = "BillingApprove")]
         public async Task<ActionResult<BillingPrebillBatch>> ApprovePrebill(string prebillId, [FromBody] ReviewDecisionDto? body, CancellationToken ct)
         {
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var batch = await _billingEngine.ApprovePrebillAsync(prebillId, GetUserId(), body?.Notes, ct);
@@ -172,8 +205,11 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("prebills/{prebillId}/reject")]
+        [Authorize(Policy = "BillingApprove")]
         public async Task<ActionResult<BillingPrebillBatch>> RejectPrebill(string prebillId, [FromBody] ReviewDecisionDto? body, CancellationToken ct)
         {
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var batch = await _billingEngine.RejectPrebillAsync(prebillId, GetUserId(), body?.Notes, ct);
@@ -188,9 +224,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("prebills/{prebillId}/finalize")]
+        [Authorize(Policy = "BillingFinalize")]
         public async Task<ActionResult<FinalizePrebillResult>> FinalizePrebill(string prebillId, [FromBody] FinalizePrebillRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var result = await _billingEngine.FinalizePrebillToInvoiceAsync(prebillId, request, GetUserId(), ct);
@@ -207,9 +246,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("prebills/lines/{prebillLineId}/adjust")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingPrebillLine>> AdjustPrebillLine(string prebillLineId, [FromBody] PrebillLineAdjustmentRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequirePrebillLineAuthorizationAsync(prebillLineId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var line = await _billingEngine.AdjustPrebillLineAsync(prebillLineId, request, ct);
@@ -226,6 +268,8 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("prebills/{prebillId}/ledes-preview")]
         public async Task<ActionResult<LedesPreviewResult>> GetLedesPreview(string prebillId, CancellationToken ct)
         {
+            var auth = await RequirePrebillAuthorizationAsync(prebillId, requireWrite: false, ct);
+            if (auth != null) return auth;
             var result = await _billingEngine.GenerateLedesPreviewAsync(prebillId, ct);
             if (result != null)
             {
@@ -268,9 +312,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ebilling/transmissions")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingEbillingTransmission>> RecordEbillingTransmission([FromBody] RecordEbillingTransmissionRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireFinancialObjectAuthorizationAsync(request.InvoiceId, request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
 
             var normalizedProviderKey = NormalizeRequiredKey(request.ProviderKey, 64);
             if (normalizedProviderKey == null)
@@ -335,9 +382,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ebilling/events")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingEbillingResultEvent>> RecordEbillingResultEvent([FromBody] RecordEbillingResultEventRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireFinancialObjectAuthorizationAsync(request.InvoiceId, request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
 
             var normalizedProviderKey = NormalizeRequiredKey(request.ProviderKey, 64);
             if (normalizedProviderKey == null)
@@ -439,6 +489,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ebilling/transmissions/{transmissionId}/repair")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingEbillingTransmission>> RepairEbillingTransmission(string transmissionId, [FromBody] RepairEbillingTransmissionRequest? request, CancellationToken ct)
         {
             var transmission = await _context.BillingEbillingTransmissions.FirstOrDefaultAsync(t => t.Id == transmissionId, ct);
@@ -446,6 +497,9 @@ namespace JurisFlow.Server.Controllers
             {
                 return NotFound(new { message = "Transmission not found." });
             }
+
+            var auth = await RequireFinancialObjectAuthorizationAsync(transmission.InvoiceId, transmission.MatterId, transmission.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
 
             var currentStatus = (transmission.Status ?? string.Empty).Trim().ToLowerInvariant();
             if (currentStatus is not ("rejected" or "error" or "partial"))
@@ -509,9 +563,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ledger/adjustment")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingLedgerEntry>> PostLedgerAdjustment([FromBody] ManualLedgerEntryRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireFinancialObjectAuthorizationAsync(request.InvoiceId, request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var entry = await _billingEngine.PostManualLedgerEntryAsync(request, GetUserId(), ct);
@@ -525,8 +582,11 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("ledger/{ledgerEntryId}/reverse")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingLedgerEntry>> ReverseLedgerEntry(string ledgerEntryId, [FromBody] LedgerReversalRequest? request, CancellationToken ct)
         {
+            var auth = await RequireLedgerEntryAuthorizationAsync(ledgerEntryId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var reversal = await _billingEngine.ReverseLedgerEntryAsync(ledgerEntryId, request ?? new LedgerReversalRequest(), GetUserId(), ct);
@@ -552,9 +612,12 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("allocations")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingPaymentAllocation>> ApplyAllocation([FromBody] ApplyPaymentAllocationRequest request, CancellationToken ct)
         {
             if (request == null) return BadRequest(new { message = "Request body is required." });
+            var auth = await RequireFinancialObjectAuthorizationAsync(request.InvoiceId, request.MatterId, request.ClientId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var allocation = await _billingEngine.ApplyPaymentAllocationAsync(request, GetUserId(), ct);
@@ -570,8 +633,11 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("allocations/{allocationId}/reverse")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult<BillingPaymentAllocation>> ReverseAllocation(string allocationId, [FromBody] ReversePaymentAllocationRequest? request, CancellationToken ct)
         {
+            var auth = await RequireAllocationAuthorizationAsync(allocationId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var allocation = await _billingEngine.ReversePaymentAllocationAsync(allocationId, request ?? new ReversePaymentAllocationRequest(), GetUserId(), ct);
@@ -587,8 +653,11 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("allocations/{allocationId}/finalize-trust")]
+        [Authorize(Policy = "BillingFinalize")]
         public async Task<ActionResult<BillingPaymentAllocation>> FinalizePendingTrustAllocation(string allocationId, CancellationToken ct)
         {
+            var auth = await RequireAllocationAuthorizationAsync(allocationId, requireWrite: true, ct);
+            if (auth != null) return auth;
             try
             {
                 var allocation = await _billingEngine.FinalizePendingTrustAllocationAsync(allocationId, GetUserId(), ct);
@@ -1306,6 +1375,134 @@ namespace JurisFlow.Server.Controllers
         {
             return User.FindFirst("sub")?.Value ??
                    User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        }
+
+        private async Task<ActionResult?> RequireMatterAuthorizationAsync(string? matterId, bool requireWrite, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(matterId))
+            {
+                return BadRequest(new { message = "MatterId is required." });
+            }
+
+            var exists = await _context.Matters.AsNoTracking().AnyAsync(m => m.Id == matterId, ct);
+            if (!exists)
+            {
+                return NotFound(new { message = "Matter not found." });
+            }
+
+            var allowed = requireWrite
+                ? await _billingAuthorization.CanManageMatterAsync(matterId, User, ct)
+                : await _billingAuthorization.CanReadMatterAsync(matterId, User, ct);
+
+            return allowed ? null : Forbid();
+        }
+
+        private async Task<ActionResult?> RequireOptionalMatterClientAuthorizationAsync(string? matterId, string? clientId, bool requireWrite, CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(matterId))
+            {
+                var matterAuth = await RequireMatterAuthorizationAsync(matterId, requireWrite, ct);
+                if (matterAuth != null) return matterAuth;
+            }
+
+            if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                var exists = await _context.Clients.AsNoTracking().AnyAsync(c => c.Id == clientId, ct);
+                if (!exists)
+                {
+                    return NotFound(new { message = "Client not found." });
+                }
+
+                var allowed = requireWrite
+                    ? await _billingAuthorization.CanManageClientAsync(clientId, User, ct)
+                    : await _billingAuthorization.CanReadClientAsync(clientId, User, ct);
+                if (!allowed) return Forbid();
+            }
+
+            return null;
+        }
+
+        private async Task<ActionResult?> RequireFinancialObjectAuthorizationAsync(string? invoiceId, string? matterId, string? clientId, bool requireWrite, CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(invoiceId))
+            {
+                var invoice = await _context.Invoices.AsNoTracking().FirstOrDefaultAsync(i => i.Id == invoiceId, ct);
+                if (invoice == null)
+                {
+                    return NotFound(new { message = "Invoice not found." });
+                }
+
+                if (!string.IsNullOrWhiteSpace(matterId) &&
+                    !string.Equals(invoice.MatterId, matterId, StringComparison.Ordinal))
+                {
+                    return BadRequest(new { message = "MatterId does not match invoice." });
+                }
+
+                if (!string.IsNullOrWhiteSpace(clientId) &&
+                    !string.Equals(invoice.ClientId, clientId, StringComparison.Ordinal))
+                {
+                    return BadRequest(new { message = "ClientId does not match invoice." });
+                }
+
+                var allowed = requireWrite
+                    ? await _billingAuthorization.CanManageInvoiceAsync(invoice, User, ct)
+                    : await _billingAuthorization.CanReadInvoiceAsync(invoice, User, ct);
+                return allowed ? null : Forbid();
+            }
+
+            var targetAuth = await RequireOptionalMatterClientAuthorizationAsync(matterId, clientId, requireWrite, ct);
+            if (targetAuth != null) return targetAuth;
+
+            if (string.IsNullOrWhiteSpace(matterId) && string.IsNullOrWhiteSpace(clientId) && !_billingAuthorization.IsPrivileged(User))
+            {
+                return BadRequest(new { message = "InvoiceId, MatterId, or ClientId is required for non-privileged billing operations." });
+            }
+
+            return null;
+        }
+
+        private async Task<ActionResult?> RequirePrebillAuthorizationAsync(string prebillId, bool requireWrite, CancellationToken ct)
+        {
+            var batch = await _context.BillingPrebillBatches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == prebillId, ct);
+            if (batch == null)
+            {
+                return NotFound();
+            }
+
+            return await RequireMatterAuthorizationAsync(batch.MatterId, requireWrite, ct);
+        }
+
+        private async Task<ActionResult?> RequirePrebillLineAuthorizationAsync(string prebillLineId, bool requireWrite, CancellationToken ct)
+        {
+            var line = await _context.BillingPrebillLines.AsNoTracking().FirstOrDefaultAsync(l => l.Id == prebillLineId, ct);
+            if (line == null)
+            {
+                return NotFound();
+            }
+
+            return await RequireMatterAuthorizationAsync(line.MatterId, requireWrite, ct);
+        }
+
+        private async Task<ActionResult?> RequireLedgerEntryAuthorizationAsync(string ledgerEntryId, bool requireWrite, CancellationToken ct)
+        {
+            var entry = await _context.BillingLedgerEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Id == ledgerEntryId, ct);
+            if (entry == null)
+            {
+                return NotFound();
+            }
+
+            return await RequireFinancialObjectAuthorizationAsync(entry.InvoiceId, entry.MatterId, entry.ClientId, requireWrite, ct);
+        }
+
+        private async Task<ActionResult?> RequireAllocationAuthorizationAsync(string allocationId, bool requireWrite, CancellationToken ct)
+        {
+            var allocation = await _context.BillingPaymentAllocations.AsNoTracking().FirstOrDefaultAsync(a => a.Id == allocationId, ct);
+            if (allocation == null)
+            {
+                return NotFound();
+            }
+
+            return await RequireFinancialObjectAuthorizationAsync(allocation.InvoiceId, allocation.MatterId, allocation.ClientId, requireWrite, ct);
         }
 
         private Task TryTriggerOutcomeFeePlannerAsync(string? matterId, string triggerType, string entityType, string entityId, CancellationToken ct)

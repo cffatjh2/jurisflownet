@@ -11,7 +11,7 @@ namespace JurisFlow.Server.Controllers
     public class ClientsController : ControllerBase
     {
         private const int DefaultReadModelPageSize = 100;
-        private const int MaxReadModelPageSize = 250;
+        private const int MaxReadModelPageSize = 100;
         private readonly ClientApplicationService _service;
 
         public ClientsController(ClientApplicationService service)
@@ -20,9 +20,16 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetClients()
+        public async Task<ActionResult<ClientReadModelCollectionResponse>> GetClients(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultReadModelPageSize,
+            [FromQuery] string? search = null,
+            [FromQuery] string? status = null)
         {
-            return Ok(await _service.GetClientsAsync());
+            var normalizedPage = Math.Max(1, page);
+            var normalizedPageSize = NormalizeReadModelPageSize(pageSize);
+            var result = await _service.GetClientReadModelPageAsync(normalizedPage, normalizedPageSize, search, status);
+            return Ok(result);
         }
 
         [HttpGet("read-model")]

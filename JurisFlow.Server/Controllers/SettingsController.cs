@@ -44,6 +44,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("billing")]
+        [Authorize(Policy = "BillingRead")]
         public async Task<IActionResult> GetBillingSettings()
         {
             var settings = await GetBillingSettingsForReadAsync();
@@ -51,6 +52,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPut("billing")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> UpdateBillingSettings([FromBody] BillingSettings dto)
         {
             var settings = await GetBillingSettingsForWriteAsync();
@@ -78,6 +80,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("firm")]
+        [Authorize(Policy = "BillingRead")]
         public async Task<IActionResult> GetFirmSettings()
         {
             var settings = await GetFirmSettingsForReadAsync();
@@ -85,6 +88,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPut("firm")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> UpdateFirmSettings([FromBody] FirmSettings dto)
         {
             var settings = await GetFirmSettingsForWriteAsync();
@@ -107,6 +111,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("integrations")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> GetIntegrations()
         {
             var settings = await GetFirmSettingsForWriteAsync();
@@ -116,6 +121,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet("integrations/catalog")]
+        [Authorize(Policy = "BillingRead")]
         public IActionResult GetIntegrationsCatalog()
         {
             var catalog = IntegrationProviderCatalog.Items
@@ -139,6 +145,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPut("integrations")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> UpdateIntegrations([FromBody] IntegrationsUpdateDto dto)
         {
             var settings = await GetFirmSettingsForWriteAsync();
@@ -219,6 +226,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("integrations/{providerKey}/connect")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> ConnectIntegration(
             string providerKey,
             [FromBody] IntegrationConnectPayload? payload,
@@ -298,6 +306,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("integrations/{providerKey}/validate")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> ValidateIntegration(
             string providerKey,
             [FromBody] IntegrationConnectPayload? payload,
@@ -350,6 +359,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpPost("integrations/{providerKey}/sync")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> SyncIntegration(string providerKey, CancellationToken cancellationToken)
         {
             var provider = IntegrationProviderCatalog.Find(providerKey);
@@ -415,6 +425,7 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpDelete("integrations/{providerKey}")]
+        [Authorize(Policy = "BillingSettingsWrite")]
         public async Task<IActionResult> DisconnectIntegration(string providerKey, CancellationToken cancellationToken)
         {
             var provider = IntegrationProviderCatalog.Find(providerKey);

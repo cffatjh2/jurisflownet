@@ -478,15 +478,15 @@ namespace JurisFlow.Server.Controllers
             }
 
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            var periodStartKey = periodStart.ToString("yyyy-MM-dd");
-            var periodEndKey = periodEnd.ToString("yyyy-MM-dd");
+            var periodStartValue = periodStart.ToDateTime(TimeOnly.MinValue);
+            var periodEndValue = periodEnd.ToDateTime(TimeOnly.MinValue);
 
             await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
             var lockExists = await TenantScope(_context.BillingLocks)
                 .AsNoTracking()
                 .AnyAsync(b =>
-                    string.Compare(b.PeriodStart, periodEndKey) <= 0 &&
-                    string.Compare(b.PeriodEnd, periodStartKey) >= 0);
+                    b.PeriodStart <= periodEndValue &&
+                    b.PeriodEnd >= periodStartValue);
             if (lockExists)
             {
                 return BadRequest(new { message = "An overlapping billing lock already exists." });
@@ -494,8 +494,8 @@ namespace JurisFlow.Server.Controllers
 
             var record = new BillingLock
             {
-                PeriodStart = periodStartKey,
-                PeriodEnd = periodEndKey,
+                PeriodStart = periodStartValue,
+                PeriodEnd = periodEndValue,
                 LockedByUserId = userId,
                 LockedAt = DateTime.UtcNow,
                 Notes = dto.Notes
@@ -504,9 +504,9 @@ namespace JurisFlow.Server.Controllers
             _context.BillingLocks.Add(record);
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
-            await _auditLogger.LogAsync(HttpContext, "billing.lock.create", "BillingLock", record.Id, $"Period {record.PeriodStart} to {record.PeriodEnd}");
+            await _auditLogger.LogAsync(HttpContext, "billing.lock.create", "BillingLock", record.Id, $"Period {record.PeriodStart:yyyy-MM-dd} to {record.PeriodEnd:yyyy-MM-dd}");
 
-            return Ok(record);
+            return Ok(ToBillingLockResponse(record));
         }
 
         // GET: api/admin/billing-locks
@@ -518,7 +518,7 @@ namespace JurisFlow.Server.Controllers
                 .AsNoTracking()
                 .OrderByDescending(b => b.LockedAt)
                 .ToListAsync();
-            return Ok(locks);
+            return Ok(locks.Select(ToBillingLockResponse));
         }
 
         // GET: api/admin/audit-logs
@@ -808,6 +808,19 @@ namespace JurisFlow.Server.Controllers
             }
 
             return DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+        }
+
+        private static object ToBillingLockResponse(BillingLock record)
+        {
+            return new
+            {
+                record.Id,
+                periodStart = record.PeriodStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                periodEnd = record.PeriodEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                record.LockedByUserId,
+                record.LockedAt,
+                record.Notes
+            };
         }
 
         private static bool TryParseUtcDateTime(string? input, out DateTime utcDateTime)

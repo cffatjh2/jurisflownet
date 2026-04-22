@@ -25,6 +25,7 @@ Hazir repo artefaktlari:
 | `ASPNETCORE_ENVIRONMENT` | `Production` |
 | `Database__Provider` | `postgres` |
 | `Database__BootstrapMode` | `migrate` |
+| `Database__ApplyMigrationsOnStartup` | `false` |
 | `ConnectionStrings__DefaultConnection` | Supabase session pooler DSN |
 | `Storage__Provider` | `supabase` |
 | `Storage__Supabase__Url` | canonical staging project URL |
@@ -35,9 +36,7 @@ Hazir repo artefaktlari:
 | `Jwt__Audience` | `JurisFlowClient` |
 | `Tenancy__DefaultTenantSlug` | staging tenant slug |
 | `Tenancy__DefaultTenantName` | staging tenant display name |
-| `Seed__Enabled` | `true` |
-| `Seed__AdminEmail` | staging admin email |
-| `Seed__AdminPassword` | staging admin password |
+| `Seed__Enabled` | `false` |
 
 ## Guvenlik Env'leri
 

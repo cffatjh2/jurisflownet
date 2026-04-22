@@ -16,8 +16,8 @@ namespace JurisFlow.Server.Models
         [Required]
         public string Name { get; set; } = string.Empty;
 
-        public double TotalAmount { get; set; }
-        public double InstallmentAmount { get; set; }
+        public decimal TotalAmount { get; set; }
+        public decimal InstallmentAmount { get; set; }
 
         public string Frequency { get; set; } = "Monthly";
 
@@ -25,7 +25,7 @@ namespace JurisFlow.Server.Models
         public DateTime NextRunDate { get; set; } = DateTime.UtcNow;
         public DateTime? EndDate { get; set; }
 
-        public double RemainingAmount { get; set; }
+        public decimal RemainingAmount { get; set; }
 
         public string Status { get; set; } = "Active";
 

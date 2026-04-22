@@ -828,7 +828,8 @@ namespace JurisFlow.Server.Controllers
         {
             if (!TryGetClientId(out var clientId)) return Unauthorized();
 
-            if (dto.InstallmentAmount <= 0)
+            var installmentAmount = MoneyMath.Normalize(dto.InstallmentAmount);
+            if (installmentAmount <= 0m)
             {
                 return BadRequest(new { message = "Installment amount must be positive." });
             }
@@ -843,13 +844,13 @@ namespace JurisFlow.Server.Controllers
                 }
             }
 
-            var total = dto.TotalAmount ?? ((double?)invoice?.Balance ?? 0d);
-            if (total <= 0)
+            var total = MoneyMath.Normalize(dto.TotalAmount ?? invoice?.Balance ?? 0m);
+            if (total <= 0m)
             {
                 return BadRequest(new { message = "Total amount must be greater than 0." });
             }
 
-            if (dto.InstallmentAmount > total + 0.01)
+            if (installmentAmount > total)
             {
                 return BadRequest(new { message = "Installment amount cannot exceed total amount." });
             }
@@ -867,7 +868,7 @@ namespace JurisFlow.Server.Controllers
                 InvoiceId = dto.InvoiceId,
                 Name = string.IsNullOrWhiteSpace(dto.Name) ? $"Payment Plan {DateTime.UtcNow:yyyyMMdd}" : dto.Name.Trim(),
                 TotalAmount = total,
-                InstallmentAmount = dto.InstallmentAmount,
+                InstallmentAmount = installmentAmount,
                 Frequency = string.IsNullOrWhiteSpace(dto.Frequency) ? "Monthly" : dto.Frequency.Trim(),
                 StartDate = startDate,
                 NextRunDate = startDate,
@@ -1682,8 +1683,8 @@ namespace JurisFlow.Server.Controllers
     {
         public string? InvoiceId { get; set; }
         public string? Name { get; set; }
-        public double? TotalAmount { get; set; }
-        public double InstallmentAmount { get; set; }
+        public decimal? TotalAmount { get; set; }
+        public decimal InstallmentAmount { get; set; }
         public string? Frequency { get; set; }
         public DateTime? StartDate { get; set; }
         public bool AutoPayEnabled { get; set; } = false;

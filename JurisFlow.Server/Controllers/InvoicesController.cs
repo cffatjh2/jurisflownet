@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
+using JurisFlow.Server.DTOs;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
@@ -16,6 +17,8 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class InvoicesController : ControllerBase
     {
+        private const int DefaultPageSize = 100;
+        private const int MaxPageSize = 100;
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly BillingPeriodLockService _billingPeriodLockService;
@@ -51,12 +54,37 @@ namespace JurisFlow.Server.Controllers
             invoice.Balance = total - invoice.AmountPaid;
         }
 
+        private void ApplyLineItemValues(InvoiceLineItem target, InvoiceLineItemDto source, DateTime now, bool isNew)
+        {
+            target.Type = source.Type ?? "time";
+            target.Description = source.Description ?? string.Empty;
+            target.ServiceDate = source.ServiceDate;
+            target.Quantity = source.Quantity ?? 1m;
+            target.Rate = source.Rate ?? 0m;
+            target.Amount = target.Quantity * target.Rate;
+            target.TaskCode = NormalizeUtbmsCode(source.TaskCode);
+            target.ExpenseCode = NormalizeUtbmsCode(source.ExpenseCode);
+            target.ActivityCode = NormalizeUtbmsCode(source.ActivityCode);
+            if (isNew)
+            {
+                target.CreatedAt = now;
+            }
+
+            target.UpdatedAt = now;
+        }
+
         // GET: api/Invoices
         [HttpGet]
-        public async Task<IActionResult> GetInvoices([FromQuery] string? entityId, [FromQuery] string? officeId)
+        public async Task<IActionResult> GetInvoices(
+            [FromQuery] string? entityId,
+            [FromQuery] string? officeId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultPageSize)
         {
             var query = _context.Invoices.AsNoTracking().AsQueryable();
             var isPrivileged = _matterAccess.IsPrivileged(User);
+            var normalizedPage = Math.Max(1, page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
 
             if (!string.IsNullOrWhiteSpace(entityId))
             {
@@ -74,11 +102,43 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(i => !string.IsNullOrWhiteSpace(i.MatterId) && readableBillingMatterIds.Contains(i.MatterId!));
             }
 
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
             var invoices = await query
                 .OrderByDescending(i => i.IssueDate)
-                .ToListAsync();
-            await RedactSharedInvoiceNotesAsync(invoices);
-            return Ok(invoices);
+                .ThenByDescending(i => i.CreatedAt)
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(i => new InvoiceListItemDto
+                {
+                    Id = i.Id,
+                    Number = i.Number,
+                    ClientId = i.ClientId,
+                    MatterId = i.MatterId,
+                    EntityId = i.EntityId,
+                    OfficeId = i.OfficeId,
+                    Status = i.Status,
+                    IssueDate = i.IssueDate,
+                    DueDate = i.DueDate,
+                    Subtotal = i.Subtotal,
+                    Tax = i.Tax,
+                    Discount = i.Discount,
+                    Total = i.Total,
+                    AmountPaid = i.AmountPaid,
+                    Balance = i.Balance,
+                    LineItemCount = i.LineItems.Count,
+                    CreatedAt = i.CreatedAt,
+                    UpdatedAt = i.UpdatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            return Ok(new PagedCollectionResponse<InvoiceListItemDto>
+            {
+                Items = invoices,
+                TotalCount = totalCount,
+                Page = normalizedPage,
+                PageSize = normalizedPageSize,
+                HasMore = normalizedPage * normalizedPageSize < totalCount
+            });
         }
 
         // GET: api/Invoices/{id}
@@ -304,27 +364,10 @@ namespace JurisFlow.Server.Controllers
                         return BadRequest(new { message = "UTBMS codes are required for this invoice.", issues });
                     }
                 }
-
-                _context.InvoiceLineItems.RemoveRange(invoice.LineItems);
-                invoice.LineItems.Clear();
-                foreach (var li in dto.LineItems)
+                var patchResult = await PatchInvoiceLineItemsAsync(invoice, dto.LineItems);
+                if (patchResult != null)
                 {
-                    invoice.LineItems.Add(new InvoiceLineItem
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        InvoiceId = invoice.Id,
-                        Type = li.Type ?? "time",
-                        Description = li.Description ?? string.Empty,
-                        ServiceDate = li.ServiceDate,
-                        Quantity = li.Quantity ?? 1m,
-                        Rate = li.Rate ?? 0m,
-                        Amount = (li.Quantity ?? 1m) * (li.Rate ?? 0m),
-                        TaskCode = NormalizeUtbmsCode(li.TaskCode),
-                        ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
-                        ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
-                    });
+                    return patchResult;
                 }
             }
 
@@ -596,12 +639,179 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Billing period is locked. Cannot delete invoice." });
             }
 
+            var invoiceLineIds = invoice.LineItems.Select(li => li.Id).ToList();
+            if (invoiceLineIds.Count > 0)
+            {
+                var blockers = await GetInvoiceLineDeletionBlockersAsync(invoice.Id, invoiceLineIds);
+                if (blockers.Count > 0)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Invoice cannot be deleted because one or more line items have downstream billing allocations, ledger links, or e-billing bindings.",
+                        blockedLineItemIds = blockers.Select(b => b.LineItemId).Distinct(StringComparer.Ordinal).ToList(),
+                        blockers = blockers.Select(ToDeletionBlockerPayload).ToList()
+                    });
+                }
+            }
+
             _context.InvoiceLineItems.RemoveRange(invoice.LineItems);
             _context.Invoices.Remove(invoice);
             await _context.SaveChangesAsync();
             await TryAuditAsync("invoice.delete", "Invoice", id, "Deleted invoice");
 
             return NoContent();
+        }
+
+        private async Task<IActionResult?> PatchInvoiceLineItemsAsync(Invoice invoice, IReadOnlyList<InvoiceLineItemDto> requestedLineItems)
+        {
+            var now = DateTime.UtcNow;
+            var existingLineItems = invoice.LineItems
+                .OrderBy(li => li.CreatedAt)
+                .ThenBy(li => li.Id)
+                .ToList();
+            var existingById = existingLineItems.ToDictionary(li => li.Id, StringComparer.Ordinal);
+            var matchedExistingIds = new HashSet<string>(StringComparer.Ordinal);
+            var positionalCandidates = new Queue<InvoiceLineItem>(existingLineItems);
+
+            foreach (var lineItemDto in requestedLineItems)
+            {
+                var requestedLineId = NormalizeLineItemId(lineItemDto.Id);
+                if (requestedLineId != null)
+                {
+                    if (!existingById.TryGetValue(requestedLineId, out var existingLine))
+                    {
+                        return BadRequest(new { message = $"Invoice line item '{requestedLineId}' was not found on this invoice." });
+                    }
+
+                    ApplyLineItemValues(existingLine, lineItemDto, now, isNew: false);
+                    matchedExistingIds.Add(existingLine.Id);
+                    continue;
+                }
+
+                while (positionalCandidates.Count > 0 && matchedExistingIds.Contains(positionalCandidates.Peek().Id))
+                {
+                    positionalCandidates.Dequeue();
+                }
+
+                if (positionalCandidates.Count > 0)
+                {
+                    var existingLine = positionalCandidates.Dequeue();
+                    ApplyLineItemValues(existingLine, lineItemDto, now, isNew: false);
+                    matchedExistingIds.Add(existingLine.Id);
+                    continue;
+                }
+
+                var newLine = new InvoiceLineItem
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    InvoiceId = invoice.Id
+                };
+                ApplyLineItemValues(newLine, lineItemDto, now, isNew: true);
+                invoice.LineItems.Add(newLine);
+            }
+
+            var lineIdsToDelete = existingLineItems
+                .Where(li => !matchedExistingIds.Contains(li.Id))
+                .Select(li => li.Id)
+                .ToList();
+
+            if (lineIdsToDelete.Count > 0)
+            {
+                var blockers = await GetInvoiceLineDeletionBlockersAsync(invoice.Id, lineIdsToDelete);
+                if (blockers.Count > 0)
+                {
+                    return BadRequest(new
+                    {
+                        message = "One or more invoice line items cannot be deleted because they have downstream billing allocations, ledger links, or e-billing bindings.",
+                        blockedLineItemIds = blockers.Select(b => b.LineItemId).Distinct(StringComparer.Ordinal).ToList(),
+                        blockers = blockers.Select(ToDeletionBlockerPayload).ToList()
+                    });
+                }
+
+                var linesToDelete = existingLineItems
+                    .Where(li => lineIdsToDelete.Contains(li.Id, StringComparer.Ordinal))
+                    .ToList();
+
+                _context.InvoiceLineItems.RemoveRange(linesToDelete);
+                foreach (var lineToDelete in linesToDelete)
+                {
+                    invoice.LineItems.Remove(lineToDelete);
+                }
+            }
+
+            return null;
+        }
+
+        private async Task<List<InvoiceLineDeletionBlocker>> GetInvoiceLineDeletionBlockersAsync(string invoiceId, IReadOnlyCollection<string> lineIds)
+        {
+            if (lineIds.Count == 0)
+            {
+                return new List<InvoiceLineDeletionBlocker>();
+            }
+
+            var payorAllocationRows = await _context.InvoiceLinePayorAllocations
+                .AsNoTracking()
+                .Where(a => a.InvoiceId == invoiceId && lineIds.Contains(a.InvoiceLineItemId))
+                .Select(a => new { a.InvoiceLineItemId, HasEbillingProfile = !string.IsNullOrWhiteSpace(a.EbillingProfileJson) })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            var paymentAllocationRows = await _context.BillingPaymentAllocations
+                .AsNoTracking()
+                .Where(a => a.InvoiceId == invoiceId && a.InvoiceLineItemId != null && lineIds.Contains(a.InvoiceLineItemId))
+                .Select(a => a.InvoiceLineItemId!)
+                .ToListAsync(HttpContext.RequestAborted);
+
+            var ledgerRows = await _context.BillingLedgerEntries
+                .AsNoTracking()
+                .Where(a => a.InvoiceId == invoiceId && a.InvoiceLineItemId != null && lineIds.Contains(a.InvoiceLineItemId))
+                .Select(a => a.InvoiceLineItemId!)
+                .ToListAsync(HttpContext.RequestAborted);
+
+            var blockers = new Dictionary<string, InvoiceLineDeletionBlocker>(StringComparer.Ordinal);
+
+            foreach (var lineId in lineIds)
+            {
+                blockers[lineId] = new InvoiceLineDeletionBlocker(lineId);
+            }
+
+            foreach (var row in payorAllocationRows)
+            {
+                var blocker = blockers[row.InvoiceLineItemId];
+                blocker.InvoiceLinePayorAllocationCount++;
+                blocker.HasEbillingBinding |= row.HasEbillingProfile;
+            }
+
+            foreach (var lineId in paymentAllocationRows)
+            {
+                blockers[lineId].BillingPaymentAllocationCount++;
+            }
+
+            foreach (var lineId in ledgerRows)
+            {
+                blockers[lineId].BillingLedgerEntryCount++;
+            }
+
+            return blockers.Values
+                .Where(b => b.InvoiceLinePayorAllocationCount > 0 || b.BillingPaymentAllocationCount > 0 || b.BillingLedgerEntryCount > 0 || b.HasEbillingBinding)
+                .OrderBy(b => b.LineItemId, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private static object ToDeletionBlockerPayload(InvoiceLineDeletionBlocker blocker)
+        {
+            return new
+            {
+                lineItemId = blocker.LineItemId,
+                invoiceLinePayorAllocations = blocker.InvoiceLinePayorAllocationCount,
+                billingPaymentAllocations = blocker.BillingPaymentAllocationCount,
+                billingLedgerEntries = blocker.BillingLedgerEntryCount,
+                hasEbillingBinding = blocker.HasEbillingBinding
+            };
+        }
+
+        private static string? NormalizeLineItemId(string? lineItemId)
+        {
+            return string.IsNullOrWhiteSpace(lineItemId) ? null : lineItemId.Trim();
         }
 
         private static string? ResolveInvoiceClientId(string? requestedClientId, Matter? matter)
@@ -618,6 +828,16 @@ namespace JurisFlow.Server.Controllers
             }
 
             return matter.ClientId;
+        }
+
+        private static int NormalizePageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultPageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxPageSize);
         }
 
         private async Task QueueClientInvoiceNotificationAsync(Invoice invoice)
@@ -891,6 +1111,7 @@ namespace JurisFlow.Server.Controllers
     // DTOs
     public class InvoiceLineItemDto
     {
+        public string? Id { get; set; }
         public string? Type { get; set; }
         public string? Description { get; set; }
         public DateTime? ServiceDate { get; set; }
@@ -936,5 +1157,19 @@ namespace JurisFlow.Server.Controllers
     public class InvoiceCancelDto
     {
         public string? Reason { get; set; }
+    }
+
+    internal sealed class InvoiceLineDeletionBlocker
+    {
+        public InvoiceLineDeletionBlocker(string lineItemId)
+        {
+            LineItemId = lineItemId;
+        }
+
+        public string LineItemId { get; }
+        public int InvoiceLinePayorAllocationCount { get; set; }
+        public int BillingPaymentAllocationCount { get; set; }
+        public int BillingLedgerEntryCount { get; set; }
+        public bool HasEbillingBinding { get; set; }
     }
 }

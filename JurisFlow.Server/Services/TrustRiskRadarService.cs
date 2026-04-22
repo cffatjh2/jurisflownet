@@ -2811,26 +2811,10 @@ namespace JurisFlow.Server.Services
 
         private async Task<bool> IsDateInLockedPeriodAsync(DateOnly day, CancellationToken ct)
         {
-            var locks = await _context.BillingLocks.AsNoTracking()
-                .Select(l => new { l.PeriodStart, l.PeriodEnd })
-                .ToListAsync(ct);
-            foreach (var item in locks)
-            {
-                if (!TryParseDateOnly(item.PeriodStart, out var start) || !TryParseDateOnly(item.PeriodEnd, out var end))
-                {
-                    continue;
-                }
-                if (day >= start && day <= end)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            var normalizedDay = day.ToDateTime(TimeOnly.MinValue);
+            return await _context.BillingLocks.AsNoTracking()
+                .AnyAsync(l => l.PeriodStart <= normalizedDay && l.PeriodEnd >= normalizedDay, ct);
         }
-
-        private static bool TryParseDateOnly(string? value, out DateOnly date) =>
-            DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
 
         private static decimal ApplyRoundDollarRule(decimal absoluteAmount, List<object> reasons, IReadOnlyDictionary<string, decimal> weights)
         {

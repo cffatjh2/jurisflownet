@@ -26,6 +26,7 @@ Hazir repo artefaktlari:
 | `ASPNETCORE_ENVIRONMENT` | `Production` |
 | `Database__Provider` | `postgres` |
 | `Database__BootstrapMode` | `migrate` |
+| `Database__ApplyMigrationsOnStartup` | `false` |
 | `ConnectionStrings__DefaultConnection` | yeni canonical prod Supabase session pooler DSN |
 | `Storage__Provider` | `supabase` |
 | `Storage__Supabase__Url` | canonical prod project URL |

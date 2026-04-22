@@ -195,6 +195,40 @@ const buildIfMatchHeaders = (rowVersion?: string) =>
         ? { 'If-Match': `"${rowVersion}"` }
         : {};
 
+const isPaginatedResult = <T>(value: any): value is PaginatedResult<T> => {
+    return !!value
+        && typeof value === 'object'
+        && Array.isArray(value.items)
+        && typeof value.page === 'number'
+        && typeof value.pageSize === 'number';
+};
+
+const fetchAllPages = async <T>(
+    buildEndpoint: (page: number, pageSize: number) => string,
+    pageSize: number = 100,
+    maxPages: number = 20
+): Promise<T[] | null> => {
+    const items: T[] = [];
+
+    for (let page = 1; page <= maxPages; page++) {
+        const payload = await fetchJson(buildEndpoint(page, pageSize));
+        if (payload == null) {
+            return null;
+        }
+
+        if (!isPaginatedResult<T>(payload)) {
+            return Array.isArray(payload) ? payload as T[] : null;
+        }
+
+        items.push(...payload.items);
+        if (!payload.hasMore || payload.items.length === 0) {
+            return items;
+        }
+    }
+
+    return items;
+};
+
 const fetchFile = async (endpoint: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const tenantSlug = getTenantSlug();
@@ -795,12 +829,12 @@ export const api = {
         fetchJson('/tasks/from-template', { method: 'POST', body: JSON.stringify(data) }),
 
     // Time & Expenses
-    getTimeEntries: () => fetchJson('/time-entries'),
+    getTimeEntries: () => fetchAllPages<TimeEntry>((page, pageSize) => `/time-entries?page=${page}&pageSize=${pageSize}`),
     createTimeEntry: (data: Partial<TimeEntry>) => fetchJson('/time-entries', { method: 'POST', body: JSON.stringify(data) }),
     approveTimeEntry: (id: string) => fetchJson(`/time-entries/${id}/approve`, { method: 'POST' }),
     rejectTimeEntry: (id: string, reason?: string) =>
         fetchJson(`/time-entries/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
-    getExpenses: () => fetchJson('/expenses'),
+    getExpenses: () => fetchAllPages<Expense>((page, pageSize) => `/expenses?page=${page}&pageSize=${pageSize}`),
     createExpense: (data: Partial<Expense>) => fetchJson('/expenses', { method: 'POST', body: JSON.stringify(data) }),
     approveExpense: (id: string) => fetchJson(`/expenses/${id}/approve`, { method: 'POST' }),
     rejectExpense: (id: string, reason?: string) =>
@@ -808,7 +842,7 @@ export const api = {
     markAsBilled: (matterId: string) => fetchJson('/billing/mark-billed', { method: 'POST', body: JSON.stringify({ matterId }) }),
 
     // CRM
-    getClients: () => fetchJson('/clients'),
+    getClients: () => fetchAllPages<Client>((page, pageSize) => `/clients?page=${page}&pageSize=${pageSize}`),
     getCrmClients: (params?: { page?: number; pageSize?: number; search?: string; status?: string }) => {
         const query = new URLSearchParams();
         if (typeof params?.page === 'number') query.set('page', String(params.page));
@@ -852,11 +886,14 @@ export const api = {
 
     // Invoices
     getInvoices: (params?: { entityId?: string; officeId?: string }) => {
-        const qs = new URLSearchParams();
-        if (params?.entityId) qs.set('entityId', params.entityId);
-        if (params?.officeId) qs.set('officeId', params.officeId);
-        const query = qs.toString() ? `?${qs.toString()}` : '';
-        return fetchJson(`/invoices${query}`);
+        return fetchAllPages<Invoice>((page, pageSize) => {
+            const qs = new URLSearchParams();
+            qs.set('page', String(page));
+            qs.set('pageSize', String(pageSize));
+            if (params?.entityId) qs.set('entityId', params.entityId);
+            if (params?.officeId) qs.set('officeId', params.officeId);
+            return `/invoices?${qs.toString()}`;
+        });
     },
     getInvoice: (id: string) => fetchJson(`/invoices/${id}`),
     createInvoice: (data: any) => {
@@ -1150,12 +1187,15 @@ export const api = {
     // Payment Plans
     paymentPlans: {
         list: (params?: { clientId?: string; invoiceId?: string; status?: string }) => {
-            const qs = new URLSearchParams();
-            if (params?.clientId) qs.set('clientId', params.clientId);
-            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
-            if (params?.status) qs.set('status', params.status);
-            const query = qs.toString() ? `?${qs.toString()}` : '';
-            return fetchJson(`/payment-plans${query}`);
+            return fetchAllPages<any>((page, pageSize) => {
+                const qs = new URLSearchParams();
+                qs.set('page', String(page));
+                qs.set('pageSize', String(pageSize));
+                if (params?.clientId) qs.set('clientId', params.clientId);
+                if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+                if (params?.status) qs.set('status', params.status);
+                return `/payment-plans?${qs.toString()}`;
+            });
         },
         create: (data: any) => fetchJson('/payment-plans', { method: 'POST', body: JSON.stringify(data) }),
         update: (id: string, data: any) => fetchJson(`/payment-plans/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

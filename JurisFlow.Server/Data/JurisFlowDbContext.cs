@@ -37,6 +37,7 @@ namespace JurisFlow.Server.Data
         public DbSet<TrustJournalEntry> TrustJournalEntries { get; set; }
         public DbSet<TrustPostingBatch> TrustPostingBatches { get; set; }
         public DbSet<TrustCommandDeduplication> TrustCommandDeduplications { get; set; }
+        public DbSet<PaymentCommandDeduplication> PaymentCommandDeduplications { get; set; }
         public DbSet<TrustStatementImport> TrustStatementImports { get; set; }
         public DbSet<TrustStatementLine> TrustStatementLines { get; set; }
         public DbSet<TrustEvidenceFile> TrustEvidenceFiles { get; set; }
@@ -334,7 +335,13 @@ namespace JurisFlow.Server.Data
                 .IsUnique();
 
             modelBuilder.Entity<BillingLock>()
-                .HasIndex(b => new { b.PeriodStart, b.PeriodEnd });
+                .HasIndex("TenantId", nameof(BillingLock.PeriodStart), nameof(BillingLock.PeriodEnd));
+            modelBuilder.Entity<BillingLock>()
+                .Property(b => b.PeriodStart)
+                .HasColumnType("date");
+            modelBuilder.Entity<BillingLock>()
+                .Property(b => b.PeriodEnd)
+                .HasColumnType("date");
 
             modelBuilder.Entity<MatterBillingPolicy>()
                 .HasIndex("TenantId", nameof(MatterBillingPolicy.MatterId), nameof(MatterBillingPolicy.Status))
@@ -1054,6 +1061,11 @@ namespace JurisFlow.Server.Data
                 .IsUnique();
             modelBuilder.Entity<TrustCommandDeduplication>()
                 .HasIndex("TenantId", nameof(TrustCommandDeduplication.ResultEntityType), nameof(TrustCommandDeduplication.ResultEntityId));
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .HasIndex("TenantId", nameof(PaymentCommandDeduplication.CommandName), nameof(PaymentCommandDeduplication.IdempotencyKey))
+                .IsUnique();
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .HasIndex("TenantId", nameof(PaymentCommandDeduplication.ResultEntityType), nameof(PaymentCommandDeduplication.ResultEntityId));
 
             modelBuilder.Entity<PaymentTransaction>()
                 .HasIndex(p => p.PaymentPlanId);
@@ -1063,6 +1075,15 @@ namespace JurisFlow.Server.Data
 
             modelBuilder.Entity<PaymentPlan>()
                 .HasIndex(p => p.NextRunDate);
+            modelBuilder.Entity<PaymentPlan>()
+                .Property(p => p.TotalAmount)
+                .HasColumnType("decimal(18,2)");
+            modelBuilder.Entity<PaymentPlan>()
+                .Property(p => p.InstallmentAmount)
+                .HasColumnType("decimal(18,2)");
+            modelBuilder.Entity<PaymentPlan>()
+                .Property(p => p.RemainingAmount)
+                .HasColumnType("decimal(18,2)");
 
             modelBuilder.Entity<SignatureAuditEntry>()
                 .HasIndex(a => new { a.SignatureRequestId, a.CreatedAt });
@@ -1514,6 +1535,18 @@ namespace JurisFlow.Server.Data
                 .HasConversion(converter);
             modelBuilder.Entity<PaymentTransaction>()
                 .Property(p => p.CardBrand)
+                .HasConversion(converter);
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .Property(p => p.CorrelationId)
+                .HasConversion(converter);
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .Property(p => p.ErrorCode)
+                .HasConversion(converter);
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .Property(p => p.ResponsePayloadJson)
+                .HasConversion(converter);
+            modelBuilder.Entity<PaymentCommandDeduplication>()
+                .Property(p => p.ResponseContentType)
                 .HasConversion(converter);
 
             modelBuilder.Entity<PaymentPlan>()

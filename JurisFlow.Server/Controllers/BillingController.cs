@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
+using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using System.Data;
 using System.Globalization;
@@ -10,21 +11,28 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/billing")]
     [ApiController]
-    [Authorize(Policy = "StaffOnly")]
+    [Authorize(Policy = "BillingRead")]
     public class BillingController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly TenantContext _tenantContext;
+        private readonly BillingObjectAuthorizationService _billingAuthorization;
 
-        public BillingController(JurisFlowDbContext context, AuditLogger auditLogger, TenantContext tenantContext)
+        public BillingController(
+            JurisFlowDbContext context,
+            AuditLogger auditLogger,
+            TenantContext tenantContext,
+            BillingObjectAuthorizationService billingAuthorization)
         {
             _context = context;
             _auditLogger = auditLogger;
             _tenantContext = tenantContext;
+            _billingAuthorization = billingAuthorization;
         }
 
         [HttpPost("mark-billed")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<IActionResult> MarkAsBilled([FromBody] MarkBilledDto? dto)
         {
             if (dto == null)
@@ -37,7 +45,6 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "MatterId is required." });
             }
 
-            var tenantId = RequireTenantId();
             var now = DateTime.UtcNow;
             var normalizedApproved = "APPROVED";
 
@@ -54,6 +61,11 @@ namespace JurisFlow.Server.Controllers
             if (matter == null)
             {
                 return NotFound(new { message = "Matter not found for this tenant." });
+            }
+
+            if (!await _billingAuthorization.CanManageMatterAsync(dto.MatterId, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             var eligibleTimeQuery = TenantScope(_context.TimeEntries)
@@ -86,12 +98,7 @@ namespace JurisFlow.Server.Controllers
                     (string.IsNullOrWhiteSpace(e.ApprovalStatus) ||
                      e.ApprovalStatus.Trim().ToUpper() == normalizedApproved));
 
-            var eligibleEntryDates = await eligibleTimeQuery
-                .Select(t => t.Date)
-                .Concat(eligibleExpenseQuery.Select(e => e.Date))
-                .ToListAsync();
-
-            if (await HasLockedPeriodConflictAsync(tenantId, eligibleEntryDates))
+            if (await HasLockedPeriodConflictAsync(eligibleTimeQuery, eligibleExpenseQuery))
             {
                 return BadRequest(new { message = "Billing period is locked. Cannot mark entries as billed." });
             }
@@ -124,42 +131,20 @@ namespace JurisFlow.Server.Controllers
             });
         }
 
-        private async Task<bool> HasLockedPeriodConflictAsync(string tenantId, IEnumerable<DateTime> dates)
+        private async Task<bool> HasLockedPeriodConflictAsync(IQueryable<TimeEntry> eligibleTimeQuery, IQueryable<Expense> eligibleExpenseQuery)
         {
-            var normalizedDates = dates
-                .Select(d => DateOnly.FromDateTime(d))
+            var eligibleDays = await eligibleTimeQuery
+                .Select(t => t.Date.Date)
+                .Concat(eligibleExpenseQuery.Select(e => e.Date.Date))
                 .Distinct()
-                .ToList();
-            if (normalizedDates.Count == 0)
-            {
-                return false;
-            }
-
-            var lockRows = await TenantScope(_context.BillingLocks)
-                .AsNoTracking()
-                .Select(b => new { b.PeriodStart, b.PeriodEnd })
                 .ToListAsync();
 
-            var ranges = new List<(DateOnly start, DateOnly end)>();
-            foreach (var row in lockRows)
+            foreach (var day in eligibleDays)
             {
-                if (!TryParseBillingLockDate(row.PeriodStart, out var start) ||
-                    !TryParseBillingLockDate(row.PeriodEnd, out var end))
-                {
-                    throw new InvalidOperationException($"Billing lock data is invalid for tenant {tenantId}.");
-                }
-
-                if (end < start)
-                {
-                    throw new InvalidOperationException($"Billing lock range is invalid for tenant {tenantId}.");
-                }
-
-                ranges.Add((start, end));
-            }
-
-            foreach (var date in normalizedDates)
-            {
-                if (ranges.Any(r => date >= r.start && date <= r.end))
+                var locked = await TenantScope(_context.BillingLocks)
+                    .AsNoTracking()
+                    .AnyAsync(b => b.PeriodStart <= day && b.PeriodEnd >= day);
+                if (locked)
                 {
                     return true;
                 }
@@ -185,16 +170,6 @@ namespace JurisFlow.Server.Controllers
             return tenantId;
         }
 
-        private static bool TryParseBillingLockDate(string? value, out DateOnly date)
-        {
-            date = default;
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return false;
-            }
-
-            return DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
-        }
     }
 
     public class MarkBilledDto

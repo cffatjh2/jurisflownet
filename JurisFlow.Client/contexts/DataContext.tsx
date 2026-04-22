@@ -1009,6 +1009,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
               applyBootstrapPayload(bootstrap);
               initialLoaded = true;
               console.log('Initial data loaded via bootstrap endpoint');
+              runWhenBrowserIdle(() => {
+                if (!disposed) {
+                  void loadInitialFallback();
+                }
+              }, 1200);
             }
           } catch (bootstrapError) {
             console.warn('Initial bootstrap unavailable, falling back to endpoint calls', bootstrapError);
@@ -1027,6 +1032,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
               applyBootstrapPayload(bootstrap);
               deferredLoaded = true;
               console.log('Deferred data loaded via bootstrap endpoint');
+              runWhenBrowserIdle(() => {
+                if (!disposed) {
+                  void loadDeferredFallback();
+                }
+              }, 1500);
             }
           } catch (bootstrapError) {
             console.warn('Deferred bootstrap unavailable, falling back to endpoint calls', bootstrapError);

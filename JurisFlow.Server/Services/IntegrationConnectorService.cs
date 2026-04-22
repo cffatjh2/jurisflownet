@@ -9150,12 +9150,12 @@ namespace JurisFlow.Server.Services
             var ranges = new List<(DateOnly start, DateOnly end)>(locks.Count);
             foreach (var row in locks)
             {
-                if (!TryParseBillingLockRange(row.PeriodStart, row.PeriodEnd, out var range))
+                if (row.PeriodEnd < row.PeriodStart)
                 {
                     continue;
                 }
 
-                ranges.Add(range);
+                ranges.Add((DateOnly.FromDateTime(row.PeriodStart), DateOnly.FromDateTime(row.PeriodEnd)));
             }
 
             return ranges;
@@ -9180,28 +9180,11 @@ namespace JurisFlow.Server.Services
             return false;
         }
 
-        private static bool TryParseBillingLockRange(string? periodStart, string? periodEnd, out (DateOnly start, DateOnly end) range)
+        private static bool TryParseBillingLockRange(DateTime periodStart, DateTime periodEnd, out (DateOnly start, DateOnly end) range)
         {
             range = default;
-            if (!DateOnly.TryParseExact(
-                    periodStart,
-                    "yyyy-MM-dd",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None,
-                    out var start))
-            {
-                return false;
-            }
-
-            if (!DateOnly.TryParseExact(
-                    periodEnd,
-                    "yyyy-MM-dd",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None,
-                    out var end))
-            {
-                return false;
-            }
+            var start = DateOnly.FromDateTime(periodStart);
+            var end = DateOnly.FromDateTime(periodEnd);
 
             if (end < start)
             {

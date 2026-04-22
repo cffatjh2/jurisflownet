@@ -60,6 +60,7 @@ $requiredEtlFiles = @(
 
 $expectedEnvKeys = @(
     "ConnectionStrings__DefaultConnection",
+    "Database__ApplyMigrationsOnStartup",
     "Storage__Supabase__Url",
     "Storage__Supabase__ServiceRoleKey",
     "Storage__Supabase__Bucket",
@@ -69,8 +70,6 @@ $expectedEnvKeys = @(
     "Tenancy__DefaultTenantSlug",
     "Tenancy__DefaultTenantName",
     "Seed__Enabled",
-    "Seed__AdminEmail",
-    "Seed__AdminPassword",
     "Security__DocumentEncryptionKey",
     "Security__DbEncryptionKey",
     "Security__AuditLogKey"
@@ -97,6 +96,8 @@ $checks = @(
     [pscustomobject]@{ Name = "healthcheck_path"; Status = ($programContent -match 'MapHealthChecks\("/health"\)'); Detail = "/health maplenmis olmali" },
     [pscustomobject]@{ Name = "tenant_middleware"; Status = ($programContent -match 'UseMiddleware<TenantResolutionMiddleware>'); Detail = "TenantResolutionMiddleware aktif olmali" },
     [pscustomobject]@{ Name = "canonical_bootstrap_mode"; Status = ($renderTemplate -match 'Database__BootstrapMode' -and $renderTemplate -match 'value:\s*migrate'); Detail = "Canonical staging blueprint migrate kullanmali" },
+    [pscustomobject]@{ Name = "canonical_startup_migrations_disabled"; Status = ($renderTemplate -match 'Database__ApplyMigrationsOnStartup' -and $renderTemplate -match 'value:\s*false'); Detail = "Canonical staging blueprint deploy migration job modelini kullanmali" },
+    [pscustomobject]@{ Name = "canonical_seed_disabled"; Status = ($renderTemplate -match 'Seed__Enabled' -and $renderTemplate -match 'value:\s*false'); Detail = "Canonical staging blueprint seed kapali olmali" },
     [pscustomobject]@{ Name = "canonical_healthcheck_path"; Status = ($renderTemplate -match 'healthCheckPath:\s*/health'); Detail = "Canonical staging blueprint /health kullanmali" },
     [pscustomobject]@{ Name = "smoke_manifest_present"; Status = ($manifest.surfaces.Count -ge 10); Detail = "Smoke manifest yeterli coverage icermeli" }
 )

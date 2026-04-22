@@ -3,6 +3,7 @@ using System;
 using JurisFlow.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace JurisFlow.Server.Migrations
 {
     [DbContext(typeof(JurisFlowDbContext))]
-    partial class JurisFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260422095041_StandardizePaymentPlanMoney")]
+    partial class StandardizePaymentPlanMoney
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.2");
@@ -1130,11 +1133,13 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTime>("PeriodEnd")
-                        .HasColumnType("date");
+                    b.Property<string>("PeriodEnd")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
-                    b.Property<DateTime>("PeriodStart")
-                        .HasColumnType("date");
+                    b.Property<string>("PeriodStart")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("TenantId")
                         .HasMaxLength(64)
@@ -1144,7 +1149,7 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.HasIndex("TenantId", "PeriodStart", "PeriodEnd");
+                    b.HasIndex("PeriodStart", "PeriodEnd");
 
                     b.ToTable("BillingLocks");
                 });
@@ -5918,9 +5923,6 @@ namespace JurisFlow.Server.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("ResponsibleEmployeeId")
-                        .HasColumnType("TEXT");
-
                     b.Property<bool>("ShareBillingWithFirm")
                         .HasColumnType("INTEGER");
 
@@ -5958,8 +5960,6 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("TenantId", "ShareWithFirm");
 
                     b.HasIndex("TenantId", "CreatedByUserId", "OpenDate");
-
-                    b.HasIndex("TenantId", "ResponsibleEmployeeId", "OpenDate");
 
                     b.HasIndex("TenantId", "ShareWithFirm", "OpenDate");
 
@@ -6180,80 +6180,6 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("TenantId", "MatterId", "UpdatedAt");
 
                     b.ToTable("MatterNotes");
-                });
-
-            modelBuilder.Entity("JurisFlow.Server.Models.MessageAttachment", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ClientId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("FilePath")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MessageEmployeeId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MessageId")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MessageType")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MimeType")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RecipientEmployeeId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("SenderEmployeeId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("SenderUserId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("Size")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("StoredFileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TenantId")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "StoredFileName")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "ClientId", "StoredFileName");
-
-                    b.HasIndex("TenantId", "MessageEmployeeId", "StoredFileName");
-
-                    b.HasIndex("TenantId", "SenderEmployeeId", "RecipientEmployeeId", "StoredFileName");
-
-                    b.ToTable("MessageAttachments", (string)null);
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.MfaChallenge", b =>
@@ -7143,87 +7069,6 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("OutcomeFeeUpdateEvents");
                 });
 
-            modelBuilder.Entity("JurisFlow.Server.Models.PaymentCommandDeduplication", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ActorUserId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("CommandName")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("CorrelationId")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ErrorCode")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("IdempotencyKey")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RequestFingerprint")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResponseContentType")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResponsePayloadJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResultEntityId")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResultEntityType")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("ResultStatusCode")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(24)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TenantId")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "CommandName", "IdempotencyKey")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "ResultEntityType", "ResultEntityId");
-
-                    b.ToTable("PaymentCommandDeduplications");
-                });
-
             modelBuilder.Entity("JurisFlow.Server.Models.PaymentPlan", b =>
                 {
                     b.Property<string>("Id")
@@ -7994,10 +7839,6 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("CreatedByUserId")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
@@ -8019,12 +7860,6 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<bool>("ReminderSent")
                         .HasColumnType("INTEGER");
-
-                    b.Property<string>("RowVersion")
-                        .IsConcurrencyToken()
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -8051,66 +7886,9 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("TenantId", "CreatedAt");
 
-                    b.HasIndex("TenantId", "CreatedByUserId", "UpdatedAt");
-
                     b.HasIndex("TenantId", "MatterId", "CreatedAt");
 
-                    b.HasIndex("TenantId", "ReminderSent", "ReminderAt");
-
-                    b.HasIndex("TenantId", "Status", "DueDate");
-
-                    b.HasIndex("TenantId", "AssignedEmployeeId", "Status", "UpdatedAt");
-
-                    b.ToTable("Tasks", t =>
-                        {
-                            t.HasCheckConstraint("CK_Tasks_ReminderAt_OnOrBeforeDueDate", "\"ReminderAt\" IS NULL OR \"DueDate\" IS NULL OR \"ReminderAt\" <= \"DueDate\"");
-                        });
-                });
-
-            modelBuilder.Entity("JurisFlow.Server.Models.TaskTemplate", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Category")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Definition")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(1000)
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TenantId")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "UpdatedAt");
-
-                    b.HasIndex("TenantId", "IsActive", "Category", "Name");
-
-                    b.ToTable("TaskTemplates");
+                    b.ToTable("Tasks");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.Tenant", b =>

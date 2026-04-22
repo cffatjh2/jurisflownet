@@ -39,7 +39,8 @@ namespace JurisFlow.Server.Services
                 return null;
             }
 
-            if (plan.RemainingAmount <= 0)
+            plan.RemainingAmount = MoneyMath.ZeroFloor(plan.RemainingAmount);
+            if (plan.RemainingAmount <= 0m)
             {
                 plan.Status = "Completed";
                 plan.AutoPayEnabled = false;
@@ -48,8 +49,8 @@ namespace JurisFlow.Server.Services
                 return null;
             }
 
-            var amount = Math.Min((decimal)plan.InstallmentAmount, (decimal)plan.RemainingAmount);
-            if (amount <= 0)
+            var amount = MoneyMath.Normalize(Math.Min(plan.InstallmentAmount, plan.RemainingAmount));
+            if (amount <= 0m)
             {
                 return null;
             }
@@ -242,9 +243,8 @@ namespace JurisFlow.Server.Services
         private static void ApplyPaymentToInvoice(Invoice? invoice, decimal amount, DateTime now)
         {
             if (invoice == null) return;
-            invoice.AmountPaid += amount;
-            invoice.Balance -= amount;
-            if (invoice.Balance < 0) invoice.Balance = 0;
+            invoice.AmountPaid = MoneyMath.Normalize(invoice.AmountPaid + amount);
+            invoice.Balance = MoneyMath.ZeroFloor(invoice.Balance - amount);
 
             if (invoice.Balance == 0)
             {
@@ -260,11 +260,11 @@ namespace JurisFlow.Server.Services
 
         private void UpdatePlanAfterSuccess(PaymentPlan plan, decimal amount, DateTime now)
         {
-            plan.RemainingAmount -= (double)amount;
+            plan.RemainingAmount = MoneyMath.ZeroFloor(plan.RemainingAmount - amount);
             plan.UpdatedAt = now;
-            if (plan.RemainingAmount <= 0)
+            if (plan.RemainingAmount <= 0m)
             {
-                plan.RemainingAmount = 0;
+                plan.RemainingAmount = 0m;
                 plan.Status = "Completed";
                 plan.AutoPayEnabled = false;
             }

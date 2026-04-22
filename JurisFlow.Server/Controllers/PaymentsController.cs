@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Enums;
@@ -9,6 +10,9 @@ using Stripe;
 using System.Data;
 using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Task = System.Threading.Tasks.Task;
 
@@ -16,15 +20,18 @@ namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Policy = "StaffOnly")]
+    [Authorize(Policy = "BillingRead")]
     public class PaymentsController : ControllerBase
     {
+        private static readonly JsonSerializerOptions StoredResponseJsonOptions = new(JsonSerializerDefaults.Web);
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly BillingPeriodLockService _billingPeriodLockService;
         private readonly MatterWorkflowTriggerDispatcher _workflowTriggerDispatcher;
         private readonly StripePaymentService _stripePaymentService;
         private readonly TenantContext _tenantContext;
+        private readonly BillingObjectAuthorizationService _billingAuthorization;
+        private readonly PaymentCommandIdempotencyService _paymentCommandIdempotency;
         private readonly HashSet<string> _allowedCurrencies;
         private readonly ILogger<PaymentsController> _logger;
 
@@ -36,6 +43,8 @@ namespace JurisFlow.Server.Controllers
             MatterWorkflowTriggerDispatcher workflowTriggerDispatcher,
             StripePaymentService stripePaymentService,
             TenantContext tenantContext,
+            BillingObjectAuthorizationService billingAuthorization,
+            PaymentCommandIdempotencyService paymentCommandIdempotency,
             ILogger<PaymentsController> logger)
         {
             _context = context;
@@ -44,6 +53,8 @@ namespace JurisFlow.Server.Controllers
             _workflowTriggerDispatcher = workflowTriggerDispatcher;
             _stripePaymentService = stripePaymentService;
             _tenantContext = tenantContext;
+            _billingAuthorization = billingAuthorization;
+            _paymentCommandIdempotency = paymentCommandIdempotency;
             _allowedCurrencies = LoadAllowedCurrencies(configuration);
             _logger = logger;
         }
@@ -61,6 +72,7 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/create-checkout
         [HttpPost("create-checkout")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult> CreateCheckoutSession([FromBody] CreateCheckoutDto dto)
         {
             if (dto == null)
@@ -69,7 +81,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var userId = User.FindFirst("sub")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            var normalizedAmount = NormalizeMoney(dto.Amount);
+            var normalizedAmount = MoneyMath.Normalize(dto.Amount);
             if (normalizedAmount <= 0m)
             {
                 return BadRequest(new { message = "Amount must be greater than zero." });
@@ -104,10 +116,16 @@ namespace JurisFlow.Server.Controllers
                     return BadRequest(new { message = "Invoice not found for this tenant." });
                 }
 
-                if (normalizedAmount > NormalizeMoney(invoice.Balance))
+                if (normalizedAmount > MoneyMath.Normalize(invoice.Balance))
                 {
                     return BadRequest(new { message = "Charge amount exceeds invoice balance. Surcharges are not allowed." });
                 }
+            }
+
+            var targetAuthorization = await AuthorizePaymentTargetAsync(invoice, dto.MatterId, dto.ClientId, requireWrite: true);
+            if (targetAuthorization != null)
+            {
+                return targetAuthorization;
             }
 
             var payorTarget = await ResolvePaymentPayorTargetAsync(invoice, dto.PayorClientId, dto.InvoicePayorAllocationId);
@@ -202,6 +220,7 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/create-intent
         [HttpPost("create-intent")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult> CreatePaymentIntent([FromBody] CreatePaymentIntentDto dto)
         {
             if (dto == null)
@@ -210,7 +229,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var userId = User.FindFirst("sub")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            var normalizedAmount = NormalizeMoney(dto.Amount);
+            var normalizedAmount = MoneyMath.Normalize(dto.Amount);
             if (normalizedAmount <= 0m)
             {
                 return BadRequest(new { message = "Amount must be greater than zero." });
@@ -242,10 +261,16 @@ namespace JurisFlow.Server.Controllers
                     return BadRequest(new { message = "Invoice not found for this tenant." });
                 }
 
-                if (normalizedAmount > NormalizeMoney(invoice.Balance))
+                if (normalizedAmount > MoneyMath.Normalize(invoice.Balance))
                 {
                     return BadRequest(new { message = "Charge amount exceeds invoice balance. Surcharges are not allowed." });
                 }
+            }
+
+            var targetAuthorization = await AuthorizePaymentTargetAsync(invoice, dto.MatterId, dto.ClientId, requireWrite: true);
+            if (targetAuthorization != null)
+            {
+                return targetAuthorization;
             }
 
             var payorTarget = await ResolvePaymentPayorTargetAsync(invoice, dto.PayorClientId, dto.InvoicePayorAllocationId);
@@ -333,6 +358,7 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/confirm
         [HttpPost("confirm")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult> ConfirmPayment([FromBody] ConfirmPaymentIntentDto dto)
         {
             if (dto == null)
@@ -359,6 +385,11 @@ namespace JurisFlow.Server.Controllers
             if (transaction == null)
             {
                 return NotFound(new { message = "Payment transaction not found." });
+            }
+
+            if (!await _billingAuthorization.CanManagePaymentTransactionAsync(transaction, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             if (IsRefundedStatus(transaction.Status))
@@ -440,7 +471,7 @@ namespace JurisFlow.Server.Controllers
             if (string.Equals(intent.Status, "succeeded", StringComparison.OrdinalIgnoreCase))
             {
                 transaction.ProcessedAt ??= DateTime.UtcNow;
-                await ApplyInvoicePaymentAsync(transaction, NormalizeMoney(transaction.Amount));
+                await ApplyInvoicePaymentAsync(transaction, MoneyMath.Normalize(transaction.Amount));
             }
 
             transaction.UpdatedAt = DateTime.UtcNow;
@@ -461,6 +492,7 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/setup-intent
         [HttpPost("setup-intent")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult> CreateSetupIntent([FromBody] CreateSetupIntentDto dto)
         {
             if (dto == null)
@@ -471,6 +503,12 @@ namespace JurisFlow.Server.Controllers
             if (!_stripePaymentService.IsConfigured)
             {
                 return StatusCode(501, new { message = "Stripe is not configured." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.ClientId) &&
+                !await _billingAuthorization.CanManageClientAsync(dto.ClientId, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             var customer = await _stripePaymentService.GetOrCreateCustomerAsync(dto.CustomerId, dto.Email, dto.Name);
@@ -499,6 +537,7 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/autopay/setup
         [HttpPost("autopay/setup")]
+        [Authorize(Policy = "BillingWrite")]
         public async Task<ActionResult> SetupAutoPay([FromBody] SetupAutoPayDto dto)
         {
             if (dto == null)
@@ -518,6 +557,10 @@ namespace JurisFlow.Server.Controllers
 
             var plan = await GetPaymentPlanByIdAsync(dto.PaymentPlanId);
             if (plan == null) return NotFound(new { message = "Payment plan not found." });
+            if (!await _billingAuthorization.CanManagePaymentPlanAsync(plan, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
 
             var customer = await _stripePaymentService.GetOrCreateCustomerAsync(dto.CustomerId, dto.Email, dto.Name);
             await _stripePaymentService.AttachPaymentMethodAsync(dto.PaymentMethodId, customer.Id);
@@ -551,6 +594,11 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
+            if (!await _billingAuthorization.CanReadPaymentTransactionAsync(transaction, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             return Ok(transaction);
         }
 
@@ -558,6 +606,17 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("invoice/{invoiceId}")]
         public async Task<ActionResult<IEnumerable<PaymentTransaction>>> GetInvoicePayments(string invoiceId)
         {
+            var invoice = await GetInvoiceByIdAsync(invoiceId);
+            if (invoice == null)
+            {
+                return NotFound();
+            }
+
+            if (!await _billingAuthorization.CanReadInvoiceAsync(invoice, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var payments = await TenantScope(_context.PaymentTransactions)
                 .Where(p => p.InvoiceId == invoiceId)
                 .OrderByDescending(p => p.CreatedAt)
@@ -570,6 +629,17 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("matter/{matterId}")]
         public async Task<ActionResult<IEnumerable<PaymentTransaction>>> GetMatterPayments(string matterId)
         {
+            var matterExists = await TenantScope(_context.Matters).AsNoTracking().AnyAsync(m => m.Id == matterId);
+            if (!matterExists)
+            {
+                return NotFound();
+            }
+
+            if (!await _billingAuthorization.CanReadMatterAsync(matterId, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var payments = await TenantScope(_context.PaymentTransactions)
                 .Where(p => p.MatterId == matterId)
                 .OrderByDescending(p => p.CreatedAt)
@@ -582,6 +652,17 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("client/{clientId}")]
         public async Task<ActionResult<IEnumerable<PaymentTransaction>>> GetClientPayments(string clientId)
         {
+            var clientExists = await TenantScope(_context.Clients).AsNoTracking().AnyAsync(c => c.Id == clientId);
+            if (!clientExists)
+            {
+                return NotFound();
+            }
+
+            if (!await _billingAuthorization.CanReadClientAsync(clientId, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
             var payments = await TenantScope(_context.PaymentTransactions)
                 .Where(p => p.ClientId == clientId)
                 .OrderByDescending(p => p.CreatedAt)
@@ -592,6 +673,8 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/{id}/complete
         [HttpPost("{id}/complete")]
+        [Authorize(Policy = "BillingWrite")]
+        [EnableRateLimiting("PaymentMutation")]
         public async Task<IActionResult> CompletePayment(string id, [FromBody] CompletePaymentDto dto)
         {
             if (dto == null)
@@ -603,6 +686,11 @@ namespace JurisFlow.Server.Controllers
             if (transaction == null)
             {
                 return NotFound();
+            }
+
+            if (!await _billingAuthorization.CanManagePaymentTransactionAsync(transaction, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
@@ -633,7 +721,7 @@ namespace JurisFlow.Server.Controllers
             transaction.ProcessedAt = DateTime.UtcNow;
             transaction.UpdatedAt = DateTime.UtcNow;
 
-            await ApplyInvoicePaymentAsync(transaction, NormalizeMoney(transaction.Amount));
+            await ApplyInvoicePaymentAsync(transaction, MoneyMath.Normalize(transaction.Amount));
             await _context.SaveChangesAsync();
 
             await _auditLogger.LogAsync(HttpContext, "payment.complete", "PaymentTransaction", transaction.Id, $"ExternalId={dto.ExternalTransactionId}, Amount={transaction.Amount}");
@@ -644,6 +732,8 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/{id}/fail
         [HttpPost("{id}/fail")]
+        [Authorize(Policy = "BillingWrite")]
+        [EnableRateLimiting("PaymentMutation")]
         public async Task<IActionResult> FailPayment(string id, [FromBody] FailPaymentDto dto)
         {
             if (dto == null)
@@ -655,6 +745,11 @@ namespace JurisFlow.Server.Controllers
             if (transaction == null)
             {
                 return NotFound();
+            }
+
+            if (!await _billingAuthorization.CanManagePaymentTransactionAsync(transaction, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
             }
 
             if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
@@ -685,11 +780,19 @@ namespace JurisFlow.Server.Controllers
 
         // POST: api/payments/{id}/refund
         [HttpPost("{id}/refund")]
+        [Authorize(Policy = "BillingRefund")]
+        [EnableRateLimiting("PaymentMutation")]
         public async Task<IActionResult> RefundPayment(string id, [FromBody] RefundPaymentDto dto)
         {
+            var correlationId = EnsureCorrelationId();
             if (dto == null)
             {
-                return BadRequest(new { message = "Request body is required." });
+                return CreateProblemResponse(
+                    StatusCodes.Status400BadRequest,
+                    "Refund request body is required.",
+                    "Request body is required.",
+                    "payment_refund_request_required",
+                    correlationId);
             }
 
             var transaction = await GetTransactionByIdAsync(id);
@@ -698,42 +801,129 @@ namespace JurisFlow.Server.Controllers
                 return NotFound();
             }
 
+            if (!await _billingAuthorization.CanManagePaymentTransactionAsync(transaction, User, HttpContext.RequestAborted))
+            {
+                return Forbid();
+            }
+
+            var userId = ResolveActorUserId();
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return CreateProblemResponse(
+                    StatusCodes.Status401Unauthorized,
+                    "Authentication required.",
+                    "An authenticated user id is required to refund a payment.",
+                    "payment_refund_auth_required",
+                    correlationId);
+            }
+
+            var idempotencyKey = ResolveRequiredIdempotencyKey(dto.IdempotencyKey);
+            if (idempotencyKey == null)
+            {
+                return CreateProblemResponse(
+                    StatusCodes.Status400BadRequest,
+                    "Idempotency key is required.",
+                    "Provide an Idempotency-Key header or body field when refunding a payment.",
+                    "payment_refund_idempotency_required",
+                    correlationId);
+            }
+
+            var idempotency = await _paymentCommandIdempotency.BeginAsync(
+                "payment-refund",
+                userId,
+                idempotencyKey,
+                ComputeRequestFingerprint(
+                    "payment-refund",
+                    transaction.Id,
+                    dto.Amount.HasValue ? MoneyMath.Normalize(dto.Amount.Value).ToString("0.00", CultureInfo.InvariantCulture) : "full_remaining",
+                    dto.Reason),
+                correlationId,
+                HttpContext.RequestAborted);
+
+            var replay = ReplayStoredResponse(
+                idempotency,
+                correlationId,
+                "payment_refund_idempotency_conflict",
+                "The same idempotency key was reused with a different refund request.",
+                "payment_refund_in_progress",
+                "A refund with the same idempotency key is already being processed.");
+            if (replay != null)
+            {
+                return replay;
+            }
+
             if (string.Equals(transaction.Status, PaymentStatuses.Refunded, StringComparison.OrdinalIgnoreCase))
             {
-                return BadRequest(new { message = "Payment is already fully refunded." });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "Payment is already refunded.",
+                    "Payment is already fully refunded.",
+                    "payment_already_refunded",
+                    correlationId);
             }
 
             if (!string.Equals(transaction.Status, PaymentStatuses.Succeeded, StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(transaction.Status, PaymentStatuses.PartiallyRefunded, StringComparison.OrdinalIgnoreCase))
             {
-                return BadRequest(new { message = "Can only refund completed payments" });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "Payment cannot be refunded.",
+                    "Can only refund completed payments.",
+                    "payment_refund_invalid_status",
+                    correlationId);
             }
 
             if (await _billingPeriodLockService.IsLockedAsync(DateTime.UtcNow, HttpContext.RequestAborted))
             {
-                return BadRequest(new { message = "Billing period is locked. Cannot refund in locked period." });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "Billing period is locked.",
+                    "Billing period is locked. Cannot refund in locked period.",
+                    "payment_refund_locked_period",
+                    correlationId);
             }
 
-            var totalPaid = NormalizeMoney(transaction.Amount);
-            var alreadyRefunded = NormalizeMoney(transaction.RefundAmount ?? 0m);
+            var totalPaid = MoneyMath.Normalize(transaction.Amount);
+            var alreadyRefunded = MoneyMath.Normalize(transaction.RefundAmount ?? 0m);
             var remainingRefundable = totalPaid - alreadyRefunded;
             if (remainingRefundable <= 0m)
             {
-                return BadRequest(new { message = "No refundable amount remaining." });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "No refundable amount remains.",
+                    "No refundable amount remaining.",
+                    "payment_refund_exhausted",
+                    correlationId);
             }
 
             var requestedRefund = dto.Amount.HasValue
-                ? NormalizeMoney(dto.Amount.Value)
+                ? MoneyMath.Normalize(dto.Amount.Value)
                 : remainingRefundable;
 
             if (requestedRefund <= 0m)
             {
-                return BadRequest(new { message = "Refund amount must be greater than zero." });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "Refund amount is invalid.",
+                    "Refund amount must be greater than zero.",
+                    "payment_refund_amount_invalid",
+                    correlationId);
             }
 
             if (requestedRefund > remainingRefundable)
             {
-                return BadRequest(new { message = "Refund amount exceeds remaining refundable amount." });
+                return await CompleteProblemResponseAsync(
+                    idempotency.Record,
+                    StatusCodes.Status400BadRequest,
+                    "Refund amount exceeds remaining balance.",
+                    "Refund amount exceeds remaining refundable amount.",
+                    "payment_refund_amount_exceeds_remaining",
+                    correlationId);
             }
 
             if (_stripePaymentService.IsConfigured && string.Equals(transaction.PaymentMethod, "Stripe", StringComparison.OrdinalIgnoreCase))
@@ -745,7 +935,14 @@ namespace JurisFlow.Server.Controllers
                 }
                 catch (Exception ex)
                 {
-                    return BadRequest(new { message = "Refund failed.", details = ex.Message });
+                    _logger.LogWarning(ex, "Provider refund failed for payment transaction {TransactionId}", transaction.Id);
+                    return await CompleteProblemResponseAsync(
+                        idempotency.Record,
+                        StatusCodes.Status502BadGateway,
+                        "Refund failed.",
+                        "The payment provider rejected the refund request. Retry with a new idempotency key after checking provider status.",
+                        "payment_refund_provider_failed",
+                        correlationId);
                 }
             }
 
@@ -762,7 +959,22 @@ namespace JurisFlow.Server.Controllers
             await _auditLogger.LogAsync(HttpContext, "payment.refund", "PaymentTransaction", transaction.Id, $"RefundAmount={requestedRefund}, TotalRefunded={cumulativeRefunded}, Reason={dto.Reason}");
             await TryTriggerOutcomeFeePlannerAsync(transaction, "payment_refund");
 
-            return Ok(new { message = "Refund processed", refundAmount = requestedRefund, totalRefunded = cumulativeRefunded });
+            var response = new
+            {
+                message = "Refund processed",
+                refundAmount = requestedRefund,
+                totalRefunded = cumulativeRefunded
+            };
+            await _paymentCommandIdempotency.CompleteAsync(
+                idempotency.Record,
+                StatusCodes.Status200OK,
+                nameof(PaymentTransaction),
+                transaction.Id,
+                null,
+                JsonSerializer.Serialize(response, StoredResponseJsonOptions),
+                "application/json",
+                HttpContext.RequestAborted);
+            return Ok(response);
         }
 
         // POST: api/payments/webhook (Stripe webhook endpoint)
@@ -887,7 +1099,9 @@ namespace JurisFlow.Server.Controllers
         [HttpGet("stats")]
         public async Task<ActionResult> GetPaymentStats([FromQuery] string? from = null, [FromQuery] string? to = null)
         {
-            var query = TenantScope(_context.PaymentTransactions).AsQueryable();
+            var query = _billingAuthorization.ApplyReadablePaymentTransactionScope(
+                TenantScope(_context.PaymentTransactions).AsQueryable(),
+                User);
 
             if (TryParseUtcDateTime(from, out var fromDate))
             {
@@ -940,7 +1154,7 @@ namespace JurisFlow.Server.Controllers
             {
                 transaction.Status = PaymentStatuses.Succeeded;
                 transaction.ProcessedAt ??= DateTime.UtcNow;
-                await ApplyInvoicePaymentAsync(transaction, NormalizeMoney(transaction.Amount));
+                await ApplyInvoicePaymentAsync(transaction, MoneyMath.Normalize(transaction.Amount));
             }
             else
             {
@@ -978,7 +1192,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             transaction.UpdatedAt = DateTime.UtcNow;
-            await ApplyInvoicePaymentAsync(transaction, NormalizeMoney(transaction.Amount));
+            await ApplyInvoicePaymentAsync(transaction, MoneyMath.Normalize(transaction.Amount));
             await _context.SaveChangesAsync();
         }
 
@@ -1006,7 +1220,7 @@ namespace JurisFlow.Server.Controllers
                 t.ProviderChargeId == charge.Id || t.ProviderPaymentIntentId == charge.PaymentIntentId);
             if (transaction == null) return;
 
-            var cumulativeRefunded = NormalizeMoney((decimal)charge.AmountRefunded / 100m);
+            var cumulativeRefunded = MoneyMath.Normalize((decimal)charge.AmountRefunded / 100m);
             transaction.Status = charge.Refunded ? PaymentStatuses.Refunded : PaymentStatuses.PartiallyRefunded;
             transaction.RefundAmount = cumulativeRefunded;
             transaction.ProviderRefundId = charge.Refunds?.Data?.FirstOrDefault()?.Id;
@@ -1053,33 +1267,33 @@ namespace JurisFlow.Server.Controllers
             var invoice = await GetInvoiceByIdAsync(transaction.InvoiceId);
             if (invoice == null) return;
 
-            var targetApplied = NormalizeMoney(amount);
+            var targetApplied = MoneyMath.Normalize(amount);
             if (targetApplied <= 0m)
             {
                 return;
             }
 
-            var alreadyApplied = NormalizeMoney(transaction.InvoiceAppliedAmount);
+            var alreadyApplied = MoneyMath.Normalize(transaction.InvoiceAppliedAmount);
             if (targetApplied <= alreadyApplied)
             {
                 return;
             }
 
             var delta = targetApplied - alreadyApplied;
-            var nextAmountPaid = NormalizeMoney(invoice.AmountPaid) + delta;
-            var nextBalance = NormalizeMoney(invoice.Balance) - delta;
+            var nextAmountPaid = MoneyMath.Normalize(invoice.AmountPaid) + delta;
+            var nextBalance = MoneyMath.Normalize(invoice.Balance) - delta;
 
             if (nextBalance < 0m) nextBalance = 0m;
             if (nextAmountPaid < 0m) nextAmountPaid = 0m;
 
-            invoice.AmountPaid = NormalizeMoney(nextAmountPaid);
-            invoice.Balance = NormalizeMoney(nextBalance);
+            invoice.AmountPaid = MoneyMath.Normalize(nextAmountPaid);
+            invoice.Balance = MoneyMath.Normalize(nextBalance);
 
-            if (NormalizeMoney(invoice.Balance) == 0m)
+            if (MoneyMath.Normalize(invoice.Balance) == 0m)
             {
                 invoice.Status = InvoiceStatus.Paid;
             }
-            else if (NormalizeMoney(invoice.AmountPaid) > 0m)
+            else if (MoneyMath.Normalize(invoice.AmountPaid) > 0m)
             {
                 invoice.Status = InvoiceStatus.PartiallyPaid;
             }
@@ -1102,36 +1316,36 @@ namespace JurisFlow.Server.Controllers
                 return;
             }
 
-            var totalAppliedPayment = NormalizeMoney(transaction.InvoiceAppliedAmount);
+            var totalAppliedPayment = MoneyMath.Normalize(transaction.InvoiceAppliedAmount);
             if (totalAppliedPayment <= 0m)
             {
                 return;
             }
 
-            var targetRefundApplied = Math.Min(totalAppliedPayment, NormalizeMoney(cumulativeRefundAmount));
-            var alreadyRefundApplied = NormalizeMoney(transaction.InvoiceRefundAppliedAmount);
+            var targetRefundApplied = Math.Min(totalAppliedPayment, MoneyMath.Normalize(cumulativeRefundAmount));
+            var alreadyRefundApplied = MoneyMath.Normalize(transaction.InvoiceRefundAppliedAmount);
             if (targetRefundApplied <= alreadyRefundApplied)
             {
                 return;
             }
 
             var delta = targetRefundApplied - alreadyRefundApplied;
-            var nextAmountPaid = NormalizeMoney(invoice.AmountPaid) - delta;
-            var nextBalance = NormalizeMoney(invoice.Balance) + delta;
-            var maxBalance = NormalizeMoney(invoice.Total);
+            var nextAmountPaid = MoneyMath.Normalize(invoice.AmountPaid) - delta;
+            var nextBalance = MoneyMath.Normalize(invoice.Balance) + delta;
+            var maxBalance = MoneyMath.Normalize(invoice.Total);
 
             if (nextAmountPaid < 0m) nextAmountPaid = 0m;
             if (nextBalance < 0m) nextBalance = 0m;
             if (nextBalance > maxBalance) nextBalance = maxBalance;
 
-            invoice.AmountPaid = NormalizeMoney(nextAmountPaid);
-            invoice.Balance = NormalizeMoney(nextBalance);
+            invoice.AmountPaid = MoneyMath.Normalize(nextAmountPaid);
+            invoice.Balance = MoneyMath.Normalize(nextBalance);
 
-            if (NormalizeMoney(invoice.Balance) == 0m)
+            if (MoneyMath.Normalize(invoice.Balance) == 0m)
             {
                 invoice.Status = InvoiceStatus.Paid;
             }
-            else if (NormalizeMoney(invoice.AmountPaid) > 0m)
+            else if (MoneyMath.Normalize(invoice.AmountPaid) > 0m)
             {
                 invoice.Status = InvoiceStatus.PartiallyPaid;
             }
@@ -1373,6 +1587,76 @@ namespace JurisFlow.Server.Controllers
             return TenantScope(_context.PaymentPlans).FirstOrDefaultAsync(p => p.Id == id);
         }
 
+        private async Task<ActionResult?> AuthorizePaymentTargetAsync(
+            JurisFlow.Server.Models.Invoice? invoice,
+            string? matterId,
+            string? clientId,
+            bool requireWrite)
+        {
+            if (invoice != null)
+            {
+                if (!string.IsNullOrWhiteSpace(matterId) &&
+                    !string.Equals(invoice.MatterId, matterId, StringComparison.Ordinal))
+                {
+                    return BadRequest(new { message = "MatterId does not match invoice." });
+                }
+
+                if (!string.IsNullOrWhiteSpace(clientId) &&
+                    !string.Equals(invoice.ClientId, clientId, StringComparison.Ordinal))
+                {
+                    return BadRequest(new { message = "ClientId does not match invoice." });
+                }
+
+                var allowed = requireWrite
+                    ? await _billingAuthorization.CanManageInvoiceAsync(invoice, User, HttpContext.RequestAborted)
+                    : await _billingAuthorization.CanReadInvoiceAsync(invoice, User, HttpContext.RequestAborted);
+                return allowed ? null : Forbid();
+            }
+
+            if (!string.IsNullOrWhiteSpace(matterId))
+            {
+                var matterExists = await TenantScope(_context.Matters).AsNoTracking().AnyAsync(m => m.Id == matterId, HttpContext.RequestAborted);
+                if (!matterExists)
+                {
+                    return BadRequest(new { message = "Matter not found for this tenant." });
+                }
+
+                var allowed = requireWrite
+                    ? await _billingAuthorization.CanManageMatterAsync(matterId, User, HttpContext.RequestAborted)
+                    : await _billingAuthorization.CanReadMatterAsync(matterId, User, HttpContext.RequestAborted);
+                if (!allowed)
+                {
+                    return Forbid();
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                var clientExists = await TenantScope(_context.Clients).AsNoTracking().AnyAsync(c => c.Id == clientId, HttpContext.RequestAborted);
+                if (!clientExists)
+                {
+                    return BadRequest(new { message = "Client not found for this tenant." });
+                }
+
+                var allowed = requireWrite
+                    ? await _billingAuthorization.CanManageClientAsync(clientId, User, HttpContext.RequestAborted)
+                    : await _billingAuthorization.CanReadClientAsync(clientId, User, HttpContext.RequestAborted);
+                if (!allowed)
+                {
+                    return Forbid();
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(matterId) && string.IsNullOrWhiteSpace(clientId))
+            {
+                return _billingAuthorization.IsPrivileged(User)
+                    ? null
+                    : BadRequest(new { message = "InvoiceId, MatterId, or ClientId is required for non-privileged billing operations." });
+            }
+
+            return null;
+        }
+
         private Task TryTriggerOutcomeFeePlannerAsync(PaymentTransaction transaction, string triggerType)
         {
             if (transaction == null || (string.IsNullOrWhiteSpace(transaction.MatterId) && string.IsNullOrWhiteSpace(transaction.Id)))
@@ -1413,11 +1697,6 @@ namespace JurisFlow.Server.Controllers
             return User.FindFirst("sub")?.Value
                 ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
                 ?? "system";
-        }
-
-        private static decimal NormalizeMoney(decimal value)
-        {
-            return Math.Round(value, 2, MidpointRounding.AwayFromZero);
         }
 
         private static string? NormalizePaymentRail(string? paymentRail)
@@ -1563,6 +1842,129 @@ namespace JurisFlow.Server.Controllers
                 _ => PaymentStatuses.Processing
             };
         }
+
+        private IActionResult? ReplayStoredResponse(
+            PaymentCommandIdempotencyResult idempotency,
+            string fallbackCorrelationId,
+            string conflictCode,
+            string conflictDetail,
+            string inProgressCode,
+            string inProgressDetail)
+        {
+            var correlationId = idempotency.Record.CorrelationId ?? fallbackCorrelationId;
+
+            return idempotency.State switch
+            {
+                PaymentCommandIdempotencyState.Started => null,
+                PaymentCommandIdempotencyState.Conflict => CreateProblemResponse(
+                    StatusCodes.Status409Conflict,
+                    "Idempotency key conflict.",
+                    conflictDetail,
+                    conflictCode,
+                    correlationId),
+                PaymentCommandIdempotencyState.InProgressDuplicate => CreateProblemResponse(
+                    StatusCodes.Status409Conflict,
+                    "Request already in progress.",
+                    inProgressDetail,
+                    inProgressCode,
+                    correlationId),
+                PaymentCommandIdempotencyState.CompletedDuplicate => BuildStoredResponse(idempotency.Record, correlationId),
+                _ => null
+            };
+        }
+
+        private async Task<ObjectResult> CompleteProblemResponseAsync(
+            PaymentCommandDeduplication record,
+            int statusCode,
+            string title,
+            string detail,
+            string code,
+            string correlationId)
+        {
+            var response = CreateProblemResponse(statusCode, title, detail, code, correlationId);
+            await _paymentCommandIdempotency.FailAsync(
+                record,
+                statusCode,
+                code,
+                JsonSerializer.Serialize(response.Value, StoredResponseJsonOptions),
+                "application/problem+json",
+                HttpContext.RequestAborted);
+            return response;
+        }
+
+        private ObjectResult CreateProblemResponse(int statusCode, string title, string detail, string code, string correlationId)
+        {
+            AuditTraceContext.SetCorrelation(HttpContext, correlationId);
+            Response.Headers["X-Correlation-Id"] = correlationId;
+
+            var problem = new ProblemDetails
+            {
+                Status = statusCode,
+                Title = title,
+                Detail = detail
+            };
+            problem.Extensions["code"] = code;
+            problem.Extensions["correlationId"] = correlationId;
+
+            return StatusCode(statusCode, problem);
+        }
+
+        private ContentResult BuildStoredResponse(PaymentCommandDeduplication record, string correlationId)
+        {
+            AuditTraceContext.SetCorrelation(HttpContext, correlationId);
+            Response.Headers["X-Correlation-Id"] = correlationId;
+
+            return new ContentResult
+            {
+                StatusCode = record.ResultStatusCode ?? StatusCodes.Status200OK,
+                ContentType = record.ResponseContentType ?? "application/json",
+                Content = record.ResponsePayloadJson ?? "{}"
+            };
+        }
+
+        private string EnsureCorrelationId()
+        {
+            var correlationId = Request.Headers["X-Correlation-Id"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(correlationId))
+            {
+                correlationId = string.IsNullOrWhiteSpace(HttpContext.TraceIdentifier)
+                    ? Guid.NewGuid().ToString("N")
+                    : HttpContext.TraceIdentifier;
+            }
+
+            AuditTraceContext.SetCorrelation(HttpContext, correlationId);
+            Response.Headers["X-Correlation-Id"] = correlationId;
+            return correlationId;
+        }
+
+        private string? ResolveRequiredIdempotencyKey(string? requestValue = null)
+        {
+            var value = requestValue;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                value = Request.Headers["Idempotency-Key"].FirstOrDefault();
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            var trimmed = value.Trim();
+            return trimmed.Length <= 160 ? trimmed : trimmed[..160];
+        }
+
+        private string? ResolveActorUserId()
+        {
+            return User.FindFirst("sub")?.Value
+                ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        }
+
+        private static string ComputeRequestFingerprint(params string?[] parts)
+        {
+            var normalized = string.Join("|", parts.Select(part => part?.Trim() ?? string.Empty));
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        }
     }
 
     // DTOs
@@ -1645,5 +2047,6 @@ namespace JurisFlow.Server.Controllers
     {
         public decimal? Amount { get; set; }
         public string? Reason { get; set; }
+        public string? IdempotencyKey { get; set; }
     }
 }

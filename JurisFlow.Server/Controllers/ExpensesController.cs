@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using JurisFlow.Server.Data;
+using JurisFlow.Server.DTOs;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
 using Task = System.Threading.Tasks.Task;
@@ -15,6 +16,8 @@ namespace JurisFlow.Server.Controllers
     [Authorize(Policy = "StaffOnly")]
     public class ExpensesController : ControllerBase
     {
+        private const int DefaultPageSize = 100;
+        private const int MaxPageSize = 100;
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
         private readonly ILogger<ExpensesController> _logger;
@@ -31,12 +34,18 @@ namespace JurisFlow.Server.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetExpenses([FromQuery] string? matterId = null, [FromQuery] string? approvalStatus = null)
+        public async Task<IActionResult> GetExpenses(
+            [FromQuery] string? matterId = null,
+            [FromQuery] string? approvalStatus = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultPageSize)
         {
             var query = _context.Expenses.AsNoTracking().AsQueryable();
             var currentUserId = _matterAccess.GetCurrentUserId(User);
             var isPrivileged = _matterAccess.IsPrivileged(User);
             var readableMatterIds = _matterAccess.BuildReadableMatterIdsQuery(User);
+            var normalizedPage = Math.Max(1, page);
+            var normalizedPageSize = NormalizePageSize(pageSize);
 
             if (!string.IsNullOrWhiteSpace(matterId))
             {
@@ -59,8 +68,41 @@ namespace JurisFlow.Server.Controllers
                 query = query.Where(e => e.ApprovalStatus == approvalStatus);
             }
 
-            var items = await query.OrderByDescending(e => e.Date).ToListAsync();
-            return Ok(items);
+            var totalCount = await query.CountAsync(HttpContext.RequestAborted);
+            var items = await query
+                .OrderByDescending(e => e.Date)
+                .ThenByDescending(e => e.CreatedAt)
+                .Skip((normalizedPage - 1) * normalizedPageSize)
+                .Take(normalizedPageSize)
+                .Select(e => new ExpenseListItemDto
+                {
+                    Id = e.Id,
+                    MatterId = e.MatterId,
+                    Description = e.Description,
+                    Amount = e.Amount,
+                    Date = e.Date,
+                    Category = e.Category,
+                    Billed = e.Billed,
+                    Type = e.Type,
+                    ExpenseCode = e.ExpenseCode,
+                    ApprovalStatus = e.ApprovalStatus,
+                    SubmittedAt = e.SubmittedAt,
+                    ApprovedAt = e.ApprovedAt,
+                    RejectedAt = e.RejectedAt,
+                    RejectionReason = e.RejectionReason,
+                    CreatedAt = e.CreatedAt,
+                    UpdatedAt = e.UpdatedAt
+                })
+                .ToListAsync(HttpContext.RequestAborted);
+
+            return Ok(new PagedCollectionResponse<ExpenseListItemDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = normalizedPage,
+                PageSize = normalizedPageSize,
+                HasMore = normalizedPage * normalizedPageSize < totalCount
+            });
         }
 
         [HttpPost]
@@ -285,6 +327,16 @@ namespace JurisFlow.Server.Controllers
             var currentUserId = _matterAccess.GetCurrentUserId(User);
             return !string.IsNullOrWhiteSpace(currentUserId) &&
                 string.Equals(expense.SubmittedBy, currentUserId, StringComparison.Ordinal);
+        }
+
+        private static int NormalizePageSize(int pageSize)
+        {
+            if (pageSize <= 0)
+            {
+                return DefaultPageSize;
+            }
+
+            return Math.Clamp(pageSize, 1, MaxPageSize);
         }
     }
 

@@ -12,7 +12,9 @@ services:
       - key: Database__Provider
         value: postgres
       - key: Database__BootstrapMode
-        value: ensure-created
+        value: migrate
+      - key: Database__ApplyMigrationsOnStartup
+        value: false
       - key: Cors__AllowedOriginsCsv
         sync: false
       - key: ConnectionStrings__DefaultConnection
@@ -31,6 +33,8 @@ services:
         sync: false
       - key: Jwt__Audience
         sync: false
+      - key: Seed__Enabled
+        value: false
       - key: Security__DocumentEncryptionKey
         sync: false
       - key: Security__DbEncryptionKey
@@ -51,7 +55,9 @@ services:
       - key: Database__Provider
         value: postgres
       - key: Database__BootstrapMode
-        value: ensure-created
+        value: migrate
+      - key: Database__ApplyMigrationsOnStartup
+        value: false
       - key: Cors__AllowedOriginsCsv
         sync: false
       - key: ConnectionStrings__DefaultConnection
@@ -70,6 +76,8 @@ services:
         sync: false
       - key: Jwt__Audience
         sync: false
+      - key: Seed__Enabled
+        value: false
       - key: Security__DocumentEncryptionKey
         sync: false
       - key: Security__DbEncryptionKey
