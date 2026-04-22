@@ -1,0 +1,88 @@
+name: EF Database Migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target database environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      apply:
+        description: Apply migrations after generating the idempotent SQL script
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  migrate:
+    name: Generate or Apply EF Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install dotnet-ef
+        shell: bash
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.2
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Select target connection string
+        shell: bash
+        run: |
+          if [ "${{ github.event.inputs.target }}" = "production" ]; then
+            echo "DEFAULT_CONNECTION=${{ secrets.SUPABASE_PRODUCTION_CONNECTION_STRING }}" >> "$GITHUB_ENV"
+          else
+            echo "DEFAULT_CONNECTION=${{ secrets.SUPABASE_STAGING_CONNECTION_STRING }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Guard missing secret
+        shell: bash
+        run: |
+          test -n "$DEFAULT_CONNECTION"
+
+      - name: Restore server
+        run: dotnet restore JurisFlow.Server/JurisFlow.Server.csproj
+
+      - name: Build server
+        run: dotnet build JurisFlow.Server/JurisFlow.Server.csproj --configuration Release --no-restore
+
+      - name: Generate idempotent SQL script
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Database__Provider: postgres
+          ConnectionStrings__DefaultConnection: ${{ env.DEFAULT_CONNECTION }}
+        run: >
+          dotnet ef migrations script
+          --project JurisFlow.Server/JurisFlow.Server.csproj
+          --startup-project JurisFlow.Server/JurisFlow.Server.csproj
+          --context JurisFlow.Server.Data.JurisFlowDbContext
+          --idempotent
+          --output ef-migrations.sql
+
+      - name: Upload SQL script artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ef-migrations-${{ github.event.inputs.target }}
+          path: ef-migrations.sql
+
+      - name: Apply migrations
+        if: ${{ github.event.inputs.apply == 'true' }}
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Database__Provider: postgres
+          ConnectionStrings__DefaultConnection: ${{ env.DEFAULT_CONNECTION }}
+        run: >
+          dotnet ef database update
+          --project JurisFlow.Server/JurisFlow.Server.csproj
+          --startup-project JurisFlow.Server/JurisFlow.Server.csproj
+          --context JurisFlow.Server.Data.JurisFlowDbContext
