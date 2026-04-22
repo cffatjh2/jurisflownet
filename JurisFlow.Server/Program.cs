@@ -1121,7 +1121,6 @@ static void EnsureProductionSecurityRequirements(IConfiguration configuration)
     RequireBase64Key(configuration, "Security:AuditLogKey", exactBytes: null, minBytes: 32, errors);
     RequireIntegrationSecretProtection(configuration, errors);
     RequireForwardedHeadersTrustBoundary(configuration, errors);
-    RequireForwardedHeadersTrustBoundary(configuration, errors);
     RequireProductionSeedDisabled(configuration, errors);
     RequireProductionMigrationMode(configuration, errors);
 

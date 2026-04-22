@@ -19,6 +19,10 @@ services:
         sync: false
       - key: ConnectionStrings__DefaultConnection
         sync: false
+      - key: ForwardedHeaders__TrustAllProxies
+        value: true
+      - key: ForwardedHeaders__AllowTrustAllProxiesInProduction
+        value: true
       - key: Storage__Provider
         value: supabase
       - key: Storage__Supabase__Url
@@ -58,6 +62,10 @@ services:
         value: migrate
       - key: Database__ApplyMigrationsOnStartup
         value: false
+      - key: ForwardedHeaders__TrustAllProxies
+        value: true
+      - key: ForwardedHeaders__AllowTrustAllProxiesInProduction
+        value: true
       - key: Cors__AllowedOriginsCsv
         sync: false
       - key: ConnectionStrings__DefaultConnection
@@ -78,6 +86,28 @@ services:
         sync: false
       - key: Seed__Enabled
         value: false
+      - key: Seed__PortalClientEnabled
+        value: false
+      - key: Seed__ResetPasswords
+        value: false
+      - key: Seed__AdminEmail
+        value: ""
+      - key: Seed__AdminPassword
+        value: ""
+      - key: Seed__PortalClientEmail
+        value: ""
+      - key: Seed__PortalClientPassword
+        value: ""
+      - key: Security__MfaEnforced
+        value: true
+      - key: Security__DocumentEncryptionEnabled
+        value: true
+      - key: Security__DbEncryptionEnabled
+        value: true
+      - key: Security__AuditLogImmutable
+        value: true
+      - key: Security__AuditLogFailClosed
+        value: true
       - key: Security__DocumentEncryptionKey
         sync: false
       - key: Security__DbEncryptionKey

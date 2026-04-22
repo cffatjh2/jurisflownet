@@ -18,6 +18,10 @@ services:
         value: migrate
       - key: Database__ApplyMigrationsOnStartup
         value: false
+      - key: ForwardedHeaders__TrustAllProxies
+        value: true
+      - key: ForwardedHeaders__AllowTrustAllProxiesInProduction
+        value: true
       - key: ConnectionStrings__DefaultConnection
         sync: false
       - key: Cors__AllowedOriginsCsv
@@ -42,6 +46,18 @@ services:
         sync: false
       - key: Seed__Enabled
         value: false
+      - key: Seed__PortalClientEnabled
+        value: false
+      - key: Seed__ResetPasswords
+        value: false
+      - key: Seed__AdminEmail
+        value: ""
+      - key: Seed__AdminPassword
+        value: ""
+      - key: Seed__PortalClientEmail
+        value: ""
+      - key: Seed__PortalClientPassword
+        value: ""
       - key: Security__MfaEnforced
         value: true
       - key: Security__DocumentEncryptionEnabled
