@@ -56,7 +56,27 @@ jobs:
       - name: Build server
         run: dotnet build JurisFlow.Server/JurisFlow.Server.csproj --configuration Release --no-restore
 
+      - name: Build bootstrap tool
+        run: dotnet build JurisFlow.DbBootstrap/JurisFlow.DbBootstrap.csproj --configuration Release
+
+      - name: Bootstrap fresh PostgreSQL schema if needed
+        id: bootstrap
+        shell: bash
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Database__Provider: postgres
+          ConnectionStrings__DefaultConnection: ${{ env.DEFAULT_CONNECTION }}
+        run: >
+          dotnet run
+          --project JurisFlow.DbBootstrap/JurisFlow.DbBootstrap.csproj
+          --configuration Release
+          --no-build
+          --
+          --github-output
+          "$GITHUB_OUTPUT"
+
       - name: Generate idempotent SQL script
+        if: steps.bootstrap.outputs.bootstrapped != 'true'
         env:
           ASPNETCORE_ENVIRONMENT: Development
           Database__Provider: postgres
@@ -72,13 +92,14 @@ jobs:
           --output ef-migrations.sql
 
       - name: Upload SQL script artifact
+        if: steps.bootstrap.outputs.bootstrapped != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ef-migrations-${{ github.event.inputs.target }}
           path: ef-migrations.sql
 
       - name: Apply migrations
-        if: ${{ github.event.inputs.apply == 'true' }}
+        if: ${{ steps.bootstrap.outputs.bootstrapped != 'true' && github.event.inputs.apply == 'true' }}
         env:
           ASPNETCORE_ENVIRONMENT: Development
           Database__Provider: postgres
