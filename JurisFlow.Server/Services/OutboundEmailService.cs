@@ -20,14 +20,39 @@ namespace JurisFlow.Server.Services
             _logger = logger;
         }
 
-        public async Task<OutboundEmail> QueueAsync(OutboundEmail email)
+        public async Task<OutboundEmail> QueueAsync(OutboundEmail email, CancellationToken cancellationToken = default)
         {
             email.Id = Guid.NewGuid().ToString();
             email.Status = "Queued";
             email.CreatedAt = DateTime.UtcNow;
             email.UpdatedAt = DateTime.UtcNow;
             _context.OutboundEmails.Add(email);
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(cancellationToken);
+            return email;
+        }
+
+        public async Task<OutboundEmail> DeliverQueuedAsync(OutboundEmail email, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await SendAsync(email, cancellationToken);
+                email.Status = "Sent";
+                email.SentAt = DateTime.UtcNow;
+                email.ErrorMessage = null;
+            }
+            catch (Exception ex)
+            {
+                email.Status = "Failed";
+                email.ErrorMessage = ex.Message;
+                _logger.LogWarning(ex, "Failed to send email {EmailId}", email.Id);
+                throw;
+            }
+            finally
+            {
+                email.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+
             return email;
         }
 
@@ -45,7 +70,7 @@ namespace JurisFlow.Server.Services
             {
                 try
                 {
-                    await SendAsync(email);
+                    await SendAsync(email, CancellationToken.None);
                     email.Status = "Sent";
                     email.SentAt = DateTime.UtcNow;
                     email.ErrorMessage = null;
@@ -65,7 +90,7 @@ namespace JurisFlow.Server.Services
             return sent;
         }
 
-        private async Task SendAsync(OutboundEmail email)
+        private async Task SendAsync(OutboundEmail email, CancellationToken cancellationToken)
         {
             var enabled = _configuration.GetValue("Email:Enabled", false);
             if (!enabled)
@@ -104,7 +129,7 @@ namespace JurisFlow.Server.Services
                 client.Credentials = new NetworkCredential(username, password);
             }
 
-            await client.SendMailAsync(message);
+            await client.SendMailAsync(message, cancellationToken);
         }
     }
 }

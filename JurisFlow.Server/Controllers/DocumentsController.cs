@@ -1167,13 +1167,9 @@ namespace JurisFlow.Server.Controllers
                     CreatedAt = DateTime.UtcNow
                 };
 
-                await using (var tx = await _context.Database.BeginTransactionAsync())
-                {
-                    _context.Documents.Add(document);
-                    _context.DocumentVersions.Add(version);
-                    await _context.SaveChangesAsync();
-                    await tx.CommitAsync();
-                }
+                _context.Documents.Add(document);
+                _context.DocumentVersions.Add(version);
+                await _context.SaveChangesAsync();
 
                 try
                 {
@@ -1568,13 +1564,9 @@ namespace JurisFlow.Server.Controllers
                     UploadedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
                     CreatedAt = DateTime.UtcNow
                 };
-                await using (var tx = await _context.Database.BeginTransactionAsync())
-                {
-                    _context.DocumentVersions.Add(version);
-                    _context.Documents.Remove(document);
-                    await _context.SaveChangesAsync();
-                    await tx.CommitAsync();
-                }
+                _context.DocumentVersions.Add(version);
+                _context.Documents.Remove(document);
+                await _context.SaveChangesAsync();
 
                 await _fileStorage.DeleteIfExistsAsync(fullPath);
 
