@@ -40,7 +40,9 @@ public class TestApplicationFactory : WebApplicationFactory<Program>
                 ["Jwt:Audience"] = "JurisFlowClient",
                 ["Security:DisableSessionValidation"] = "true",
                 ["Seed:Enabled"] = "false",
-                ["Intake:AutoCreateLeadOnPublicSubmit"] = "true"
+                ["Intake:AutoCreateLeadOnPublicSubmit"] = "true",
+                ["Email:Enabled"] = "true",
+                ["Email:FromAddress"] = "no-reply@test.example"
             };
             config.AddInMemoryCollection(settings);
         });

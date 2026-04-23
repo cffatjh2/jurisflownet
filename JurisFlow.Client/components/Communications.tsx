@@ -1,15 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { Message, Employee, StaffMessage, Client, Matter } from '../types';
+import { Employee, StaffMessage, Client, Matter } from '../types';
 import { Mail, Search, Plus, Send, X, ArrowLeft } from './Icons';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
-import { gmailService } from '../services/gmailService';
 import { toast } from './Toast';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useRef } from 'react';
-import { clearOAuthTokens, getOAuthAccessToken } from '../services/oauthSecurity';
+import { startEmailAccountOAuth } from '../services/emailAccountOAuthService';
 import { getCurrentAppReturnPath } from '../services/returnPath';
+
+type ConnectedEmailAccount = {
+  id: string;
+  provider: string;
+  emailAddress: string;
+  displayName?: string | null;
+  isActive: boolean;
+  syncEnabled?: boolean;
+  lastSyncAt?: string | null;
+  syncError?: string | null;
+};
 
 const Communications: React.FC = () => {
   const { t } = useTranslation();
@@ -18,10 +28,10 @@ const Communications: React.FC = () => {
   const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'sent'>('inbox');
   const [showCompose, setShowCompose] = useState(false);
-  const [isGmailConnected, setIsGmailConnected] = useState(false);
-  const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(
-    typeof window !== 'undefined' ? getOAuthAccessToken('gmail') : null
-  );
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailAccounts, setEmailAccounts] = useState<ConnectedEmailAccount[]>([]);
+  const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
+  const [selectedEmailAccountId, setSelectedEmailAccountId] = useState<string | null>(null);
 
   const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
 
@@ -74,9 +84,37 @@ const Communications: React.FC = () => {
     window.open(url, '_blank', 'noreferrer');
   };
 
+  const loadEmailAccounts = async () => {
+    setEmailAccountsLoading(true);
+    try {
+      const accounts = await api.emails.accounts.list();
+      const normalized = Array.isArray(accounts) ? accounts as ConnectedEmailAccount[] : [];
+      setEmailAccounts(normalized);
+    } catch (error) {
+      console.error('Failed to load email accounts', error);
+      toast.error('Could not load connected mailboxes.');
+    } finally {
+      setEmailAccountsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    setIsGmailConnected(!!gmailAccessToken);
-  }, [gmailAccessToken]);
+    if (mode !== 'email') return;
+    void loadEmailAccounts();
+  }, [mode]);
+
+  useEffect(() => {
+    if (emailAccounts.length === 0) {
+      setSelectedEmailAccountId(null);
+      return;
+    }
+
+    if (selectedEmailAccountId && emailAccounts.some(account => account.id === selectedEmailAccountId)) {
+      return;
+    }
+
+    setSelectedEmailAccountId(emailAccounts[0].id);
+  }, [emailAccounts, selectedEmailAccountId]);
 
   // Load employees when switching to direct messaging
   useEffect(() => {
@@ -135,45 +173,29 @@ const Communications: React.FC = () => {
     loadClientThread();
   }, [mode, selectedClient]);
 
-  const handleGmailConnect = async () => {
+  const handleConnectMailbox = async (provider: 'gmail' | 'outlook') => {
     try {
-      const authUrl = await gmailService.getAuthUrl({
-        target: 'gmail',
-        returnPath: getCurrentAppReturnPath('/#communications')
-      });
-      if (!authUrl) {
-        toast.error('Google OAuth is not configured.');
-        return;
-      }
-      window.location.href = authUrl;
+      await startEmailAccountOAuth(provider, getCurrentAppReturnPath('/#communications'));
     } catch (error) {
-      console.error('Failed to initialize Gmail OAuth', error);
-      toast.error('Failed to start Gmail connection. Please try again.');
+      console.error('Failed to initialize mailbox OAuth', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to start mailbox connection.');
     }
   };
 
-  const handleGmailSync = async () => {
-    if (!gmailAccessToken) return;
-    
+  const handleSyncMailbox = async (accountId?: string | null) => {
+    const targetAccountId = accountId || selectedEmailAccountId;
+    if (!targetAccountId) {
+      toast.error('Select a connected mailbox first.');
+      return;
+    }
+
     try {
-      const gmailMessages = await gmailService.getMessages(gmailAccessToken, 20);
-      gmailMessages.forEach(gmailMsg => {
-        const parsed = gmailService.parseMessage(gmailMsg);
-        addMessage({
-          id: gmailMsg.id,
-          from: parsed.from,
-          subject: parsed.subject,
-          preview: parsed.preview,
-          date: parsed.date,
-          read: false
-        });
-      });
-      toast.success('Gmail messages synced successfully!');
+      await api.emails.accounts.sync(targetAccountId);
+      await loadEmailAccounts();
+      toast.success('Mailbox sync completed.');
     } catch (error) {
-      console.error('Gmail sync error:', error);
-      toast.error('Failed to sync Gmail messages. Please reconnect.');
-      clearOAuthTokens('gmail');
-      setGmailAccessToken(null);
+      console.error('Mailbox sync error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to sync mailbox.');
     }
   };
 
@@ -206,20 +228,43 @@ const Communications: React.FC = () => {
     markMessageRead(id);
   };
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
      e.preventDefault();
-     addMessage({
-        id: `msg${Date.now()}`,
-        from: 'Me',
-        subject: composeData.subject,
-        preview: composeData.body.substring(0, 50) + '...',
-        date: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        read: true
-     });
-     
-     setShowCompose(false);
-     setComposeData({ to: '', subject: '', body: '' });
-     setActiveTab('sent');
+     if (sendingEmail) return;
+     if (!selectedEmailAccountId) {
+       toast.error('Connect and select a mailbox before sending.');
+       return;
+     }
+
+     setSendingEmail(true);
+     try {
+       const response = await api.emails.send({
+         toAddress: composeData.to.trim(),
+         subject: composeData.subject.trim(),
+         bodyText: composeData.body,
+         emailAccountId: selectedEmailAccountId || undefined
+       });
+
+       addMessage({
+          id: response?.emailId || `msg${Date.now()}`,
+          from: 'Me',
+          subject: composeData.subject,
+          preview: composeData.body.substring(0, 50) + '...',
+          date: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+          read: true
+       });
+
+       toast.success(response?.message || 'Email queued for delivery.');
+       setShowCompose(false);
+       setComposeData({ to: '', subject: '', body: '' });
+       setActiveTab('sent');
+       await loadEmailAccounts();
+     } catch (error) {
+       console.error('Failed to send email', error);
+       toast.error(error instanceof Error ? error.message : 'Could not send email.');
+     } finally {
+       setSendingEmail(false);
+     }
   };
 
   const handleSendDm = async (e?: React.FormEvent) => {
@@ -312,6 +357,8 @@ const Communications: React.FC = () => {
     setSelectedEmployee(null);
     setSelectedClient(null);
   };
+
+  const selectedEmailAccount = emailAccounts.find(account => account.id === selectedEmailAccountId) || null;
 
   return (
     <div className="h-full flex flex-col lg:flex-row bg-white relative">
@@ -509,32 +556,38 @@ const Communications: React.FC = () => {
                 <h3 className="text-lg font-semibold text-gray-500">Select a message</h3>
                 <p className="text-sm">Securely communicate with clients and staff.</p>
                 <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg max-w-sm text-center">
-                    {isGmailConnected ? (
+                    {emailAccountsLoading ? (
+                      <p className="text-xs text-blue-700">Loading connected mailboxes...</p>
+                    ) : emailAccounts.length > 0 ? (
                       <>
-                        <p className="text-xs text-blue-800 font-bold mb-2">Gmail Connected</p>
-                        <p className="text-xs text-blue-700 mb-3">Your Gmail account is connected. Click below to sync messages.</p>
-                        <button onClick={handleGmailSync} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">
-                          Sync Gmail Messages
-                        </button>
-                        <button 
-                          onClick={() => {
-                            clearOAuthTokens('gmail');
-                            setGmailAccessToken(null);
-                            setIsGmailConnected(false);
-                          }}
-                          className="mt-2 px-4 py-2 bg-white border border-gray-200 text-xs font-bold text-gray-700 rounded shadow-sm hover:bg-gray-50 block w-full"
-                        >
-                          Disconnect
-                        </button>
+                        <p className="text-xs text-blue-800 font-bold mb-2">Connected mailbox</p>
+                        <p className="text-xs text-blue-700 mb-2">
+                          {selectedEmailAccount?.displayName || selectedEmailAccount?.emailAddress || `${emailAccounts.length} mailbox connected`}
+                        </p>
+                        <p className="text-[11px] text-gray-500 mb-3">
+                          Email is sent as the connected Gmail or Outlook account, not from platform SMTP.
+                        </p>
+                        <div className="flex flex-wrap justify-center gap-2">
+                          <button onClick={() => handleSyncMailbox()} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">
+                            Sync mailbox
+                          </button>
+                          <button onClick={() => setShowCompose(true)} className="px-4 py-2 bg-white border border-gray-200 text-xs font-bold text-gray-700 rounded shadow-sm hover:bg-gray-50">
+                            Compose
+                          </button>
+                        </div>
                       </>
                     ) : (
                       <>
-                        <p className="text-xs text-blue-800 font-bold mb-2">Gmail Integration</p>
-                        <p className="text-xs text-blue-700 mb-3">Connect your Gmail account to sync emails directly into JurisFlow.</p>
-                        <button onClick={handleGmailConnect} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">
-                          Connect Gmail
-                        </button>
-                        <p className="text-xs text-gray-500 mt-2">Note: Requires Google Cloud Console OAuth2 setup</p>
+                        <p className="text-xs text-blue-800 font-bold mb-2">Connect a mailbox</p>
+                        <p className="text-xs text-blue-700 mb-3">Each staff member can connect Gmail or Outlook and send from their own mailbox.</p>
+                        <div className="flex flex-wrap justify-center gap-2">
+                          <button onClick={() => handleConnectMailbox('gmail')} className="px-4 py-2 bg-red-500 text-white text-xs font-bold rounded shadow-sm hover:bg-red-600">
+                            Connect Gmail
+                          </button>
+                          <button onClick={() => handleConnectMailbox('outlook')} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">
+                            Connect Outlook
+                          </button>
+                        </div>
                       </>
                     )}
                 </div>
@@ -775,6 +828,41 @@ const Communications: React.FC = () => {
                  <form onSubmit={handleSend} className="flex-1 flex flex-col">
                     <div className="p-6 space-y-4 flex-1 overflow-y-auto">
                         <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">From</label>
+                           {emailAccounts.length > 1 ? (
+                             <select
+                               required
+                               className="w-full border border-gray-300 bg-white text-slate-900 rounded-lg p-2.5 text-sm outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400"
+                               value={selectedEmailAccountId || ''}
+                               onChange={e => setSelectedEmailAccountId(e.target.value)}
+                             >
+                               <option value="" disabled>Select a mailbox</option>
+                               {emailAccounts.map(account => (
+                                 <option key={account.id} value={account.id}>
+                                   {account.provider} - {account.emailAddress}
+                                 </option>
+                               ))}
+                             </select>
+                           ) : selectedEmailAccount ? (
+                             <div className="w-full border border-gray-200 bg-gray-50 text-slate-700 rounded-lg p-2.5 text-sm">
+                               {selectedEmailAccount.provider} - {selectedEmailAccount.emailAddress}
+                             </div>
+                           ) : (
+                             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                               <p className="text-xs font-semibold text-amber-900">No mailbox connected</p>
+                               <p className="text-xs text-amber-800 mt-1">Connect Gmail or Outlook first. Mail is sent as the connected staff mailbox.</p>
+                               <div className="flex flex-wrap gap-2 mt-3">
+                                 <button type="button" onClick={() => handleConnectMailbox('gmail')} className="px-3 py-1.5 text-xs font-semibold text-white bg-red-500 rounded hover:bg-red-600">
+                                   Connect Gmail
+                                 </button>
+                                 <button type="button" onClick={() => handleConnectMailbox('outlook')} className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded hover:bg-blue-700">
+                                   Connect Outlook
+                                 </button>
+                               </div>
+                             </div>
+                           )}
+                        </div>
+                        <div>
                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">{t('to')}</label>
                            <input required type="email" placeholder="client@example.com" className="w-full border border-gray-300 bg-white text-slate-900 rounded-lg p-2.5 text-sm outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-400" value={composeData.to} onChange={e => setComposeData({...composeData, to: e.target.value})} />
                         </div>
@@ -790,9 +878,9 @@ const Communications: React.FC = () => {
                     <div className="p-4 border-t border-gray-100 flex justify-between items-center bg-gray-50">
                        <button type="button" onClick={() => window.open(`mailto:${composeData.to}`)} className="text-xs text-gray-500 hover:text-primary-600 underline">{t('open_external')}</button>
                        <div className="flex gap-3">
-                           <button type="button" onClick={() => setShowCompose(false)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg">{t('cancel')}</button>
-                           <button type="submit" className="px-6 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg flex items-center gap-2">
-                               <Send className="w-4 h-4" /> {t('send')}
+                           <button type="button" onClick={() => setShowCompose(false)} disabled={sendingEmail} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-60">{t('cancel')}</button>
+                           <button type="submit" disabled={sendingEmail || !selectedEmailAccountId} className="px-6 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg flex items-center gap-2 disabled:opacity-60">
+                               <Send className="w-4 h-4" /> {sendingEmail ? 'Sending...' : t('send')}
                            </button>
                        </div>
                     </div>

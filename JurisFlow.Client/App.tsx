@@ -6,11 +6,13 @@ import { ClientAuthProvider, useClientAuth } from './contexts/ClientAuthContext'
 import { LanguageProvider } from './contexts/LanguageContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { hasPendingEmailAccountOAuth } from './services/emailAccountOAuthService';
 
 const GoogleAuthCallback = React.lazy(() => import('./components/GoogleAuthCallback'));
 const MicrosoftAuthCallback = React.lazy(() => import('./components/MicrosoftAuthCallback'));
 const ZoomAuthCallback = React.lazy(() => import('./components/ZoomAuthCallback'));
 const IntegrationOAuthCallback = React.lazy(() => import('./components/IntegrationOAuthCallback'));
+const EmailAccountOAuthCallback = React.lazy(() => import('./components/EmailAccountOAuthCallback'));
 const ForgotPassword = React.lazy(() => import('./components/ForgotPassword'));
 const ResetPassword = React.lazy(() => import('./components/ResetPassword'));
 const AttorneyRegister = React.lazy(() => import('./components/AttorneyRegister'));
@@ -53,8 +55,16 @@ const AppContent = () => {
   }, []);
 
   const urlParams = new URLSearchParams(window.location.search);
+  const state = urlParams.get('state');
+  const isPendingMailboxOAuth = hasPendingEmailAccountOAuth(state);
   if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/google/callback')) {
+    if (isPendingMailboxOAuth) {
+      return renderLazy(EmailAccountOAuthCallback);
+    }
     return renderLazy(GoogleAuthCallback);
+  }
+  if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/outlook/callback')) {
+    return renderLazy(EmailAccountOAuthCallback);
   }
   if ((urlParams.get('code') || urlParams.get('error')) && window.location.pathname.includes('/auth/microsoft/callback')) {
     return renderLazy(MicrosoftAuthCallback);

@@ -19,6 +19,7 @@ import {
   isIntegrationOAuthProviderKey,
   startIntegrationOAuth
 } from '../services/integrationOAuthService';
+import { startEmailAccountOAuth } from '../services/emailAccountOAuthService';
 import { getCurrentAppReturnPath } from '../services/returnPath';
 
 const SETTINGS_TR_TEXT_MAP: Record<string, string> = {
@@ -462,7 +463,6 @@ const Settings: React.FC = () => {
   const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
   const [emailConnectOpen, setEmailConnectOpen] = useState(false);
   const [emailConnectProvider, setEmailConnectProvider] = useState<'Gmail' | 'Outlook'>('Gmail');
-  const [emailConnectForm, setEmailConnectForm] = useState({ email: '', displayName: '' });
 
   // Organization (entities/offices)
   const [entities, setEntities] = useState<FirmEntity[]>([]);
@@ -859,7 +859,6 @@ const Settings: React.FC = () => {
 
   const closeEmailModal = () => {
     setEmailConnectOpen(false);
-    setEmailConnectForm({ email: '', displayName: '' });
   };
 
   const handleDisconnectIntegration = async (integration: IntegrationItem) => {
@@ -900,31 +899,15 @@ const Settings: React.FC = () => {
   };
 
   const handleConnectEmailAccount = async () => {
-    if (!emailConnectForm.email.trim()) {
-      toast.error('Email address is required.');
-      return;
-    }
     try {
-      setEmailAccountsLoading(true);
-      if (emailConnectProvider === 'Gmail') {
-        await api.emails.accounts.connectGmail({
-          email: emailConnectForm.email.trim(),
-          displayName: emailConnectForm.displayName.trim() || undefined
-        });
-      } else {
-        await api.emails.accounts.connectOutlook({
-          email: emailConnectForm.email.trim(),
-          displayName: emailConnectForm.displayName.trim() || undefined
-        });
-      }
+      await startEmailAccountOAuth(
+        emailConnectProvider === 'Gmail' ? 'gmail' : 'outlook',
+        getCurrentAppReturnPath('/#settings-integrations')
+      );
       closeEmailModal();
-      await loadEmailAccounts();
-      toast.success('Email account connected.');
     } catch (error) {
       console.error('Failed to connect email account', error);
-      toast.error('Failed to connect email account.');
-    } finally {
-      setEmailAccountsLoading(false);
+      toast.error(error instanceof Error ? error.message : 'Failed to start email account connection.');
     }
   };
 
@@ -3029,13 +3012,13 @@ const Settings: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => { setEmailConnectProvider('Gmail'); setEmailConnectForm({ email: '', displayName: '' }); setEmailConnectOpen(true); }}
+                      onClick={() => { setEmailConnectProvider('Gmail'); setEmailConnectOpen(true); }}
                       className="px-3 py-1 text-xs font-semibold text-white bg-red-500 rounded hover:bg-red-600"
                     >
                       Connect Gmail
                     </button>
                     <button
-                      onClick={() => { setEmailConnectProvider('Outlook'); setEmailConnectForm({ email: '', displayName: '' }); setEmailConnectOpen(true); }}
+                      onClick={() => { setEmailConnectProvider('Outlook'); setEmailConnectOpen(true); }}
                       className="px-3 py-1 text-xs font-semibold text-white bg-blue-600 rounded hover:bg-blue-700"
                     >
                       Connect Outlook
@@ -3253,24 +3236,15 @@ const Settings: React.FC = () => {
                       </button>
                     </div>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">Email Address</label>
-                        <input
-                          type="email"
-                          className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
-                          placeholder="attorney@yourfirm.com"
-                          value={emailConnectForm.email}
-                          onChange={(e) => setEmailConnectForm(prev => ({ ...prev, email: e.target.value }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-500 mb-1">Display Name</label>
-                        <input
-                          className="w-full border border-gray-300 rounded-lg p-2.5 text-sm"
-                          placeholder="Primary Inbox"
-                          value={emailConnectForm.displayName}
-                          onChange={(e) => setEmailConnectForm(prev => ({ ...prev, displayName: e.target.value }))}
-                        />
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-sm font-semibold text-slate-800">Bring your own mailbox</p>
+                        <p className="text-xs text-gray-500 mt-2">
+                          JurisFlow will redirect you to {emailConnectProvider} and read the mailbox identity from the provider profile.
+                          No tenant-level SMTP setup is required.
+                        </p>
+                        <p className="text-xs text-gray-500 mt-2">
+                          After approval, mail is sent as the connected staff mailbox and saved back to Sent items.
+                        </p>
                       </div>
                     </div>
                     <div className="flex items-center justify-end gap-2 mt-6">
@@ -3282,10 +3256,9 @@ const Settings: React.FC = () => {
                       </button>
                       <button
                         onClick={handleConnectEmailAccount}
-                        disabled={emailAccountsLoading}
-                        className="px-4 py-2 text-sm font-semibold text-white bg-slate-800 rounded-lg hover:bg-slate-900 disabled:opacity-50"
+                        className="px-4 py-2 text-sm font-semibold text-white bg-slate-800 rounded-lg hover:bg-slate-900"
                       >
-                        {emailAccountsLoading ? 'Saving...' : 'Connect'}
+                        Start OAuth
                       </button>
                     </div>
                   </div>

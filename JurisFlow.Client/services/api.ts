@@ -1258,6 +1258,8 @@ export const api = {
             return fetchJson(`/emails?${query.toString()}`);
         },
         get: (id: string) => fetchJson(`/emails/${id}`),
+        send: (data: { toAddress: string; subject: string; bodyText: string; emailAccountId?: string; matterId?: string; clientId?: string }) =>
+            fetchJson('/emails/send', { method: 'POST', body: JSON.stringify(data) }),
         link: (id: string, data: { matterId?: string; clientId?: string }) =>
             fetchJson(`/emails/${id}/link`, { method: 'POST', body: JSON.stringify(data) }),
         unlink: (id: string) => fetchJson(`/emails/${id}/unlink`, { method: 'POST' }),
@@ -1266,9 +1268,13 @@ export const api = {
         // Accounts
         accounts: {
             list: () => fetchJson('/emails/accounts'),
-            connectOutlook: (data: { email: string; displayName?: string; accessToken?: string; refreshToken?: string }) =>
+            getOutlookAuthorization: () =>
+                fetchJson('/emails/accounts/connect/outlook/authorization') as Promise<{ authorizationUrl: string; state: string; codeVerifier: string; redirectUri: string } | null>,
+            getGmailAuthorization: () =>
+                fetchJson('/emails/accounts/connect/gmail/authorization') as Promise<{ authorizationUrl: string; state: string; codeVerifier: string; redirectUri: string } | null>,
+            connectOutlook: (data: { email?: string; displayName?: string; accessToken?: string; refreshToken?: string; authorizationCode?: string; redirectUri?: string; state?: string; codeVerifier?: string }) =>
                 fetchJson('/emails/accounts/connect/outlook', { method: 'POST', body: JSON.stringify(data) }),
-            connectGmail: (data: { email: string; displayName?: string; accessToken?: string; refreshToken?: string }) =>
+            connectGmail: (data: { email?: string; displayName?: string; accessToken?: string; refreshToken?: string; authorizationCode?: string; redirectUri?: string; state?: string; codeVerifier?: string }) =>
                 fetchJson('/emails/accounts/connect/gmail', { method: 'POST', body: JSON.stringify(data) }),
             sync: (id: string) => fetchJson(`/emails/accounts/${id}/sync`, { method: 'POST' }),
             disconnect: (id: string) => fetchJson(`/emails/accounts/${id}`, { method: 'DELETE' }),

@@ -1,7 +1,8 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Mail;
 using System.Security.Cryptography;
+using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
 using JurisFlow.Server.Data;
@@ -252,6 +253,137 @@ namespace JurisFlow.Server.Controllers
             return Ok(new { message = "Email unlinked" });
         }
 
+        // POST: api/emails/send
+        [HttpPost("send")]
+        [EnableRateLimiting("StaffMessagingSend")]
+        public async Task<IActionResult> SendEmail([FromBody] SendEmailDto dto)
+        {
+            var userId = GetUserId();
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return Unauthorized();
+            }
+
+            var toAddress = dto.ToAddress?.Trim();
+            var subject = dto.Subject?.Trim();
+            var bodyText = dto.BodyText?.Trim();
+            if (string.IsNullOrWhiteSpace(toAddress) || string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(bodyText))
+            {
+                return BadRequest(new { message = "ToAddress, Subject, and BodyText are required." });
+            }
+
+            if (!IsValidEmailAddress(toAddress))
+            {
+                return BadRequest(new { message = "Recipient email address is invalid." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.MatterId) && !await MatterExistsAsync(dto.MatterId))
+            {
+                return BadRequest(new { message = "Matter not found." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.ClientId) && !await ClientExistsAsync(dto.ClientId))
+            {
+                return BadRequest(new { message = "Client not found." });
+            }
+
+            var account = await ResolveSendAccountAsync(userId, dto.EmailAccountId);
+            if (account == null)
+            {
+                var accountCount = await TenantScope(_context.EmailAccounts)
+                    .CountAsync(a => a.UserId == userId && a.IsActive);
+
+                return BadRequest(new
+                {
+                    message = accountCount == 0
+                        ? "Connect a Gmail or Outlook mailbox before sending email."
+                        : "Select a connected mailbox to send from.",
+                    requiresAccountSelection = accountCount > 1
+                });
+            }
+
+            if (!account.IsActive)
+            {
+                return BadRequest(new { message = "Selected mailbox is inactive. Reconnect this account." });
+            }
+
+            try
+            {
+                var tokens = await EnsureValidTokensAsync(account, HttpContext.RequestAborted);
+                if (string.IsNullOrWhiteSpace(tokens.accessToken))
+                {
+                    return BadRequest(new { message = "Selected mailbox is missing an access token. Reconnect this account." });
+                }
+
+                var sendResult = await SendViaProviderAsync(
+                    account,
+                    tokens.accessToken,
+                    toAddress,
+                    subject,
+                    bodyText,
+                    HttpContext.RequestAborted);
+
+                var sentAt = sendResult.sentAtUtc;
+                var emailMessage = new EmailMessage
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    ExternalId = sendResult.externalId,
+                    Provider = account.Provider,
+                    EmailAccountId = account.Id,
+                    MatterId = dto.MatterId?.Trim(),
+                    ClientId = dto.ClientId?.Trim(),
+                    Subject = subject,
+                    FromAddress = account.EmailAddress,
+                    FromName = account.DisplayName ?? account.EmailAddress,
+                    ToAddresses = toAddress,
+                    BodyText = bodyText,
+                    BodyHtml = BuildHtmlBody(bodyText),
+                    Folder = "Sent",
+                    IsRead = true,
+                    HasAttachments = false,
+                    AttachmentCount = 0,
+                    Importance = "Normal",
+                    ReceivedAt = sentAt,
+                    SentAt = sentAt,
+                    SyncedAt = sentAt,
+                    CreatedAt = sentAt
+                };
+
+                _context.EmailMessages.Add(emailMessage);
+                await _context.SaveChangesAsync();
+
+                await _auditLogger.LogAsync(
+                    HttpContext,
+                    "email.send",
+                    nameof(EmailMessage),
+                    emailMessage.Id,
+                    $"To={toAddress}; AccountId={account.Id}; Provider={account.Provider}");
+
+                return Ok(new
+                {
+                    message = "Email sent.",
+                    emailId = emailMessage.Id,
+                    status = "Sent",
+                    accountId = account.Id,
+                    fromAddress = account.EmailAddress
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                await _auditLogger.LogAsync(
+                    HttpContext,
+                    "email.send_failed",
+                    nameof(EmailAccount),
+                    account.Id,
+                    $"To={toAddress}; Provider={account.Provider}; Reason={ex.Message}");
+
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    message = ex.Message
+                });
+            }
+        }
+
         // GET: api/emails/accounts
         [HttpGet("accounts")]
         public async Task<ActionResult<IEnumerable<EmailAccount>>> GetEmailAccounts()
@@ -298,7 +430,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var redirectUri = ResolveRedirectUri(_configuration["Integrations:Outlook:RedirectUri"], "/auth/outlook/callback");
-            var scopes = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read User.Read";
+            var scopes = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read Mail.Send User.Read";
             var codeVerifier = GeneratePkceVerifier();
             var state = CreateOAuthState("outlook", userId, codeVerifier);
             var codeChallenge = BuildPkceChallenge(codeVerifier);
@@ -334,7 +466,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var redirectUri = ResolveRedirectUri(_configuration["Integrations:Google:RedirectUri"], "/auth/google/callback");
-            var scopes = _configuration["Integrations:Google:Scopes"] ?? "openid email profile https://www.googleapis.com/auth/gmail.readonly";
+            var scopes = _configuration["Integrations:Google:Scopes"] ?? "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
             var codeVerifier = GeneratePkceVerifier();
             var state = CreateOAuthState("gmail", userId, codeVerifier);
             var codeChallenge = BuildPkceChallenge(codeVerifier);
@@ -364,11 +496,6 @@ namespace JurisFlow.Server.Controllers
                 return Unauthorized();
             }
 
-            if (string.IsNullOrWhiteSpace(dto.Email))
-            {
-                return BadRequest(new { message = "Email is required." });
-            }
-
             if (!ValidateOAuthState("outlook", userId, dto.State, dto.CodeVerifier))
             {
                 return BadRequest(new { message = "OAuth state validation failed." });
@@ -380,11 +507,24 @@ namespace JurisFlow.Server.Controllers
                 return StatusCode(StatusCodes.Status502BadGateway, new { message = "Outlook token exchange failed." });
             }
 
+            var profile = await ResolveOutlookMailboxIdentityAsync(token.Value.accessToken, HttpContext.RequestAborted);
+            var emailAddress = string.IsNullOrWhiteSpace(dto.Email)
+                ? profile.emailAddress
+                : dto.Email.Trim();
+            var displayName = string.IsNullOrWhiteSpace(dto.DisplayName)
+                ? profile.displayName
+                : dto.DisplayName.Trim();
+
+            if (string.IsNullOrWhiteSpace(emailAddress))
+            {
+                return BadRequest(new { message = "Unable to determine Outlook mailbox identity." });
+            }
+
             var account = await UpsertEmailAccountAsync(
                 provider: "Outlook",
                 userId,
-                dto.Email,
-                dto.DisplayName,
+                emailAddress,
+                displayName,
                 token.Value.accessToken,
                 token.Value.refreshToken,
                 token.Value.expiresAt);
@@ -403,11 +543,6 @@ namespace JurisFlow.Server.Controllers
                 return Unauthorized();
             }
 
-            if (string.IsNullOrWhiteSpace(dto.Email))
-            {
-                return BadRequest(new { message = "Email is required." });
-            }
-
             if (!ValidateOAuthState("gmail", userId, dto.State, dto.CodeVerifier))
             {
                 return BadRequest(new { message = "OAuth state validation failed." });
@@ -419,11 +554,24 @@ namespace JurisFlow.Server.Controllers
                 return StatusCode(StatusCodes.Status502BadGateway, new { message = "Gmail token exchange failed." });
             }
 
+            var profile = await ResolveGmailMailboxIdentityAsync(token.Value.accessToken, HttpContext.RequestAborted);
+            var emailAddress = string.IsNullOrWhiteSpace(dto.Email)
+                ? profile.emailAddress
+                : dto.Email.Trim();
+            var displayName = string.IsNullOrWhiteSpace(dto.DisplayName)
+                ? profile.displayName
+                : dto.DisplayName.Trim();
+
+            if (string.IsNullOrWhiteSpace(emailAddress))
+            {
+                return BadRequest(new { message = "Unable to determine Gmail mailbox identity." });
+            }
+
             var account = await UpsertEmailAccountAsync(
                 provider: "Gmail",
                 userId,
-                dto.Email,
-                dto.DisplayName,
+                emailAddress,
+                displayName,
                 token.Value.accessToken,
                 token.Value.refreshToken,
                 token.Value.expiresAt);
@@ -645,6 +793,25 @@ namespace JurisFlow.Server.Controllers
                    User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         }
 
+        private static bool IsValidEmailAddress(string emailAddress)
+        {
+            try
+            {
+                _ = new MailAddress(emailAddress);
+                return true;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+        }
+
+        private static string BuildHtmlBody(string bodyText)
+        {
+            var encoded = WebUtility.HtmlEncode(bodyText);
+            return $"<div>{encoded.Replace(Environment.NewLine, "<br />", StringComparison.Ordinal).Replace("\n", "<br />", StringComparison.Ordinal)}</div>";
+        }
+
         private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
         {
             var tenantId = RequireTenantId();
@@ -700,6 +867,25 @@ namespace JurisFlow.Server.Controllers
             }
 
             return TenantScope(_context.Clients).AnyAsync(c => c.Id == normalized);
+        }
+
+        private async Task<EmailAccount?> ResolveSendAccountAsync(string userId, string? requestedAccountId)
+        {
+            var query = TenantScope(_context.EmailAccounts)
+                .Where(a => a.UserId == userId && a.IsActive);
+
+            if (!string.IsNullOrWhiteSpace(requestedAccountId))
+            {
+                var normalizedAccountId = requestedAccountId.Trim();
+                return await query.FirstOrDefaultAsync(a => a.Id == normalizedAccountId);
+            }
+
+            var accounts = await query
+                .OrderByDescending(a => a.LastSyncAt ?? a.UpdatedAt)
+                .Take(2)
+                .ToListAsync();
+
+            return accounts.Count == 1 ? accounts[0] : null;
         }
 
         private async Task<EmailAccount> UpsertEmailAccountAsync(
@@ -781,7 +967,7 @@ namespace JurisFlow.Server.Controllers
             }
 
             var redirectUri = ResolveRedirectUri(_configuration["Integrations:Outlook:RedirectUri"], "/auth/outlook/callback");
-            var scopes = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read User.Read";
+            var scopes = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read Mail.Send User.Read";
             var form = new Dictionary<string, string>
             {
                 ["grant_type"] = "authorization_code",
@@ -900,7 +1086,7 @@ namespace JurisFlow.Server.Controllers
                 ["client_id"] = clientId,
                 ["client_secret"] = clientSecret,
                 ["redirect_uri"] = ResolveRedirectUri(_configuration["Integrations:Outlook:RedirectUri"], "/auth/outlook/callback"),
-                ["scope"] = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read User.Read"
+                ["scope"] = _configuration["Integrations:Outlook:Scopes"] ?? "offline_access Mail.Read Mail.Send User.Read"
             };
 
             var tokenUrl = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
@@ -925,6 +1111,143 @@ namespace JurisFlow.Server.Controllers
             };
 
             return await ExchangeTokenAsync("https://oauth2.googleapis.com/token", form, cancellationToken);
+        }
+
+        private async Task<(string externalId, DateTime sentAtUtc)> SendViaProviderAsync(
+            EmailAccount account,
+            string accessToken,
+            string toAddress,
+            string subject,
+            string bodyText,
+            CancellationToken cancellationToken)
+        {
+            if (string.Equals(account.Provider, "Gmail", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SendGmailMessageAsync(account, accessToken, toAddress, subject, bodyText, cancellationToken);
+            }
+
+            if (string.Equals(account.Provider, "Outlook", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SendOutlookMessageAsync(accessToken, toAddress, subject, bodyText, cancellationToken);
+            }
+
+            throw new InvalidOperationException($"Unsupported provider: {account.Provider}");
+        }
+
+        private async Task<(string externalId, DateTime sentAtUtc)> SendGmailMessageAsync(
+            EmailAccount account,
+            string accessToken,
+            string toAddress,
+            string subject,
+            string bodyText,
+            CancellationToken cancellationToken)
+        {
+            var rawMessage = string.Join("\r\n", new[]
+            {
+                $"From: {FormatMailAddress(account.EmailAddress, account.DisplayName)}",
+                $"To: {toAddress}",
+                $"Subject: {subject}",
+                "MIME-Version: 1.0",
+                "Content-Type: text/html; charset=utf-8",
+                string.Empty,
+                BuildHtmlBody(bodyText)
+            });
+
+            var encodedMessage = Convert.ToBase64String(Encoding.UTF8.GetBytes(rawMessage))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new { raw = encodedMessage }),
+                Encoding.UTF8,
+                "application/json");
+
+            var client = _httpClientFactory.CreateClient();
+            using var response = await client.SendAsync(request, cancellationToken);
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw CreateProviderSendException(response.StatusCode, "Gmail", payload);
+            }
+
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payload) ? "{}" : payload);
+            var externalId = GetString(doc.RootElement, "id") ?? Guid.NewGuid().ToString();
+            var sentAtUtc = DateTime.UtcNow;
+            return (externalId, sentAtUtc);
+        }
+
+        private async Task<(string externalId, DateTime sentAtUtc)> SendOutlookMessageAsync(
+            string accessToken,
+            string toAddress,
+            string subject,
+            string bodyText,
+            CancellationToken cancellationToken)
+        {
+            var body = new
+            {
+                message = new
+                {
+                    subject,
+                    body = new
+                    {
+                        contentType = "HTML",
+                        content = BuildHtmlBody(bodyText)
+                    },
+                    toRecipients = new[]
+                    {
+                        new
+                        {
+                            emailAddress = new
+                            {
+                                address = toAddress
+                            }
+                        }
+                    }
+                },
+                saveToSentItems = true
+            };
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/sendMail");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+
+            var client = _httpClientFactory.CreateClient();
+            using var response = await client.SendAsync(request, cancellationToken);
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw CreateProviderSendException(response.StatusCode, "Outlook", payload);
+            }
+
+            return (Guid.NewGuid().ToString(), DateTime.UtcNow);
+        }
+
+        private async Task<(string? emailAddress, string? displayName)> ResolveGmailMailboxIdentityAsync(string accessToken, CancellationToken cancellationToken)
+        {
+            var profileDoc = await GetJsonAsync("https://gmail.googleapis.com/gmail/v1/users/me/profile", accessToken, cancellationToken);
+            var emailAddress = GetString(profileDoc.RootElement, "emailAddress");
+            return (emailAddress, emailAddress);
+        }
+
+        private async Task<(string? emailAddress, string? displayName)> ResolveOutlookMailboxIdentityAsync(string accessToken, CancellationToken cancellationToken)
+        {
+            var profileDoc = await GetJsonAsync("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", accessToken, cancellationToken);
+            var emailAddress = GetString(profileDoc.RootElement, "mail") ?? GetString(profileDoc.RootElement, "userPrincipalName");
+            var displayName = GetString(profileDoc.RootElement, "displayName");
+            return (emailAddress, displayName);
+        }
+
+        private static InvalidOperationException CreateProviderSendException(HttpStatusCode statusCode, string provider, string? payload)
+        {
+            if (statusCode == HttpStatusCode.Forbidden || statusCode == HttpStatusCode.Unauthorized)
+            {
+                return new InvalidOperationException($"{provider} mailbox needs reconnect or send permission approval.");
+            }
+
+            return new InvalidOperationException($"{provider} rejected the send request.");
         }
 
         private async Task<(string accessToken, string? refreshToken, DateTime? expiresAt)?> ExchangeTokenAsync(
@@ -1546,6 +1869,16 @@ namespace JurisFlow.Server.Controllers
             }
         }
 
+        private static string FormatMailAddress(string address, string? displayName)
+        {
+            if (string.IsNullOrWhiteSpace(displayName))
+            {
+                return address;
+            }
+
+            return new MailAddress(address, displayName.Trim()).ToString();
+        }
+
         private sealed class ProviderEmailMessage
         {
             public string ExternalId { get; set; } = string.Empty;
@@ -1574,9 +1907,19 @@ namespace JurisFlow.Server.Controllers
         public string? ClientId { get; set; }
     }
 
+    public class SendEmailDto
+    {
+        public string ToAddress { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string BodyText { get; set; } = string.Empty;
+        public string? EmailAccountId { get; set; }
+        public string? MatterId { get; set; }
+        public string? ClientId { get; set; }
+    }
+
     public class ConnectOutlookDto
     {
-        public string Email { get; set; } = string.Empty;
+        public string? Email { get; set; }
         public string? DisplayName { get; set; }
         public string? AccessToken { get; set; }
         public string? RefreshToken { get; set; }
@@ -1588,7 +1931,7 @@ namespace JurisFlow.Server.Controllers
 
     public class ConnectGmailDto
     {
-        public string Email { get; set; } = string.Empty;
+        public string? Email { get; set; }
         public string? DisplayName { get; set; }
         public string? AccessToken { get; set; }
         public string? RefreshToken { get; set; }
