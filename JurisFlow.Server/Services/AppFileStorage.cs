@@ -275,13 +275,14 @@ namespace JurisFlow.Server.Services
             var client = CreateSupabaseClient();
             using var request = CreateSupabaseRequest(HttpMethod.Get, BuildObjectRoute("object/info", normalizedPath));
             using var response = await client.SendAsync(request, cancellationToken);
+            var body = await ReadResponseBodyAsync(response);
 
-            if (response.StatusCode == HttpStatusCode.NotFound)
+            if (IsSupabaseObjectMissingResponse(response.StatusCode, body))
             {
                 return false;
             }
 
-            await EnsureSuccessAsync(response, $"check object '{normalizedPath}' in Supabase");
+            await EnsureSuccessAsync(response, $"check object '{normalizedPath}' in Supabase", body);
             return true;
         }
 
@@ -432,6 +433,19 @@ namespace JurisFlow.Server.Services
 
             return body.Contains("already exists", StringComparison.OrdinalIgnoreCase)
                 || body.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSupabaseObjectMissingResponse(HttpStatusCode statusCode, string body)
+        {
+            if (statusCode == HttpStatusCode.NotFound)
+            {
+                return true;
+            }
+
+            return body.Contains("object not found", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"error\":\"not_found\"", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"statusCode\":\"404\"", StringComparison.OrdinalIgnoreCase)
+                || body.Contains("\"statusCode\":404", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool ShouldFallbackToLocal(Exception ex)

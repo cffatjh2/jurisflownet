@@ -30,6 +30,7 @@ const Documents: React.FC = () => {
   const [docObjectUrl, setDocObjectUrl] = useState<string | null>(null);
   const [showMatterModal, setShowMatterModal] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [selectedMatterForUpload, setSelectedMatterForUpload] = useState<string>('');
   const [editingDoc, setEditingDoc] = useState<DocumentFile | null>(null);
   const [editMatterId, setEditMatterId] = useState<string>('');
@@ -174,6 +175,7 @@ const Documents: React.FC = () => {
   const handleConfirmUpload = async () => {
     if (!pendingFile) return;
 
+    setIsUploading(true);
     try {
       // Upload to server
       const uploadedDoc = await api.uploadDocument(
@@ -204,6 +206,8 @@ const Documents: React.FC = () => {
       }
 
       toast.error('File upload failed: ' + errorMessage);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -698,54 +702,127 @@ const Documents: React.FC = () => {
     clearSelected();
   };
 
+  const totalDocuments = documents.length;
+  const assignedDocuments = documents.filter(doc => !!doc.matterId).length;
+  const unassignedDocuments = totalDocuments - assignedDocuments;
+  const activeScopeLabel = selectedMatter ? getMatterName(selectedMatter) : t('my_files');
+  const currentMatterDocumentCount = selectedMatter
+    ? documents.filter(doc => doc.matterId === selectedMatter).length
+    : totalDocuments;
+
+  const getDocumentTypeLabel = (doc: DocumentFile) => {
+    switch (doc.type) {
+      case 'pdf':
+        return 'PDF';
+      case 'docx':
+        return 'Document';
+      case 'txt':
+        return 'Text';
+      case 'img':
+        return 'Image';
+      default:
+        return 'File';
+    }
+  };
+
+  const getDocumentTypeClasses = (doc: DocumentFile) => {
+    switch (doc.type) {
+      case 'pdf':
+        return 'bg-rose-50 text-rose-600 border-rose-100';
+      case 'docx':
+        return 'bg-blue-50 text-blue-600 border-blue-100';
+      case 'txt':
+        return 'bg-amber-50 text-amber-700 border-amber-100';
+      case 'img':
+        return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+      default:
+        return 'bg-slate-100 text-slate-600 border-slate-200';
+    }
+  };
+
+  const getDocumentSubtitle = (doc: DocumentFile) => {
+    if (doc.description?.trim()) {
+      return doc.description.trim();
+    }
+
+    if (doc.tags && doc.tags.length > 0) {
+      return doc.tags.join(', ');
+    }
+
+    if (doc.matterId) {
+      return getMatterName(doc.matterId);
+    }
+
+    return 'No description or tags';
+  };
+
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="h-full overflow-y-auto bg-slate-50 p-4 md:p-6">
       {/* Header */}
-      <div className="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 bg-white">
+      <div className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm md:px-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:justify-between lg:items-start">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">{t('docs_title')}</h1>
-          <p className="text-sm text-gray-500 mt-1">{t('docs_subtitle')}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Document Hub</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{t('docs_title')}</h1>
+          <p className="mt-2 text-sm text-slate-500">{t('docs_subtitle')}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Visible</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{filteredDocs.length}</p>
+              <p className="mt-1 text-xs text-slate-500">{activeScopeLabel}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Assigned</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{assignedDocuments}</p>
+              <p className="mt-1 text-xs text-slate-500">Linked to a matter</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Unassigned</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{unassignedDocuments}</p>
+              <p className="mt-1 text-xs text-slate-500">Needs sorting</p>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-3 relative">
-          <div className="flex flex-col gap-1 w-full md:w-auto">
-            <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-              <Search className="w-4 h-4 text-gray-400" />
+        <div className="flex flex-wrap gap-3 relative lg:max-w-xl">
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <Search className="w-4 h-4 text-slate-400" />
               <input
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Search by name, tag, or description..."
-                className="bg-transparent outline-none text-sm text-slate-700 placeholder:text-gray-400 w-full md:w-64"
+                className="w-full bg-transparent outline-none text-sm text-slate-700 placeholder:text-slate-400"
               />
             </div>
-            <label className="flex items-center gap-2 text-xs text-gray-500">
+            <label className="flex items-center gap-2 text-xs text-slate-500">
               <input
                 type="checkbox"
-                className="rounded border-gray-300"
+                className="rounded border-slate-300"
                 checked={searchInContent}
                 onChange={e => setSearchInContent(e.target.checked)}
               />
               Search document text (indexed)
               {searchInContent && isSearchingContent && (
-                <span className="text-gray-400">Searching...</span>
+                <span className="text-slate-400">Searching...</span>
               )}
             </label>
           </div>
           <button
             onClick={() => setShowFilter(!showFilter)}
-            className={`flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-medium transition-colors ${showFilter ? 'border-primary-500 text-primary-600' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+            className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition-colors ${showFilter ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
             <Filter className="w-4 h-4" /> {t('filter')}
           </button>
 
           {showFilter && (
-            <div className="absolute top-full right-0 mt-2 w-48 bg-white shadow-xl rounded-lg border border-gray-100 z-10 p-2">
-              <div className="text-xs font-bold text-gray-400 px-2 py-1 uppercase">Type</div>
-              <button onClick={() => { setFilterType('all'); setShowFilter(false); }} className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50 rounded">All Files</button>
-              <button onClick={() => { setFilterType('pdf'); setShowFilter(false); }} className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50 rounded">PDFs</button>
-              <button onClick={() => { setFilterType('docx'); setShowFilter(false); }} className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50 rounded">Documents</button>
+            <div className="absolute top-full right-0 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl z-10">
+              <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Type</div>
+              <button onClick={() => { setFilterType('all'); setShowFilter(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">All Files</button>
+              <button onClick={() => { setFilterType('pdf'); setShowFilter(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">PDFs</button>
+              <button onClick={() => { setFilterType('docx'); setShowFilter(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Documents</button>
 
-              <div className="text-xs font-bold text-gray-400 px-2 py-1 uppercase mt-2">Category</div>
+              <div className="px-2 py-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Category</div>
               {Object.values(DocumentCategory).slice(0, 6).map(cat => (
-                <button key={cat} onClick={() => { setFilterType(cat); setShowFilter(false); }} className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50 rounded">{cat}</button>
+                <button key={cat} onClick={() => { setFilterType(cat); setShowFilter(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">{cat}</button>
               ))}
             </div>
           )}
@@ -754,86 +831,120 @@ const Documents: React.FC = () => {
           {isGoogleDocsConnected && (
             <button
               onClick={handleGoogleDocsSync}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors shadow-sm">
+              className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700">
               <FileText className="w-4 h-4" /> Sync Google Docs
             </button>
           )}
           {!isGoogleDocsConnected && (
             <button
               onClick={handleGoogleDocsConnect}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm">
+              className="flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700">
               <FileText className="w-4 h-4" /> Connect Google Docs
             </button>
           )}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors shadow-sm">
+            className="flex items-center gap-2 rounded-2xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700">
             <Plus className="w-4 h-4" /> {t('upload')}
           </button>
         </div>
       </div>
+      </div>
 
-      <div className="flex flex-1 flex-col lg:flex-row overflow-hidden">
+      <div className="mt-6 grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
         {/* Sidebar Tree */}
-        <div className="w-full lg:w-64 border-b lg:border-b-0 lg:border-r border-gray-100 bg-gray-50 p-4 flex flex-col gap-1 overflow-y-auto max-h-60 lg:max-h-none">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 px-2">Locations</div>
+        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Scope</p>
+            <p className="mt-2 text-lg font-semibold text-slate-900">{activeScopeLabel}</p>
+            <p className="mt-1 text-sm text-slate-500">{currentMatterDocumentCount} documents in this view</p>
+          </div>
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 mt-5 px-2">Locations</div>
           <button
             onClick={() => setSelectedMatter(null)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left ${selectedMatter === null
-              ? 'bg-white border border-gray-200 text-primary-600 shadow-sm'
-              : 'hover:bg-gray-100 text-gray-600'
+            className={`flex items-center justify-between gap-2 px-3 py-3 rounded-2xl text-sm font-medium transition-colors text-left w-full ${selectedMatter === null
+              ? 'bg-slate-50 border border-primary-200 text-primary-700 shadow-sm'
+              : 'hover:bg-slate-50 text-slate-600'
               }`}
           >
-            <Folder className="w-4 h-4" /> {t('my_files')}
+            <span className="flex items-center gap-2">
+              <Folder className="w-4 h-4" /> {t('my_files')}
+            </span>
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-500">{totalDocuments}</span>
           </button>
 
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-6 mb-2 px-2">{t('nav_matters')}</div>
-          {matters.length === 0 && <div className="px-2 text-xs text-gray-400 italic">No matters created.</div>}
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-6 mb-2 px-2">{t('nav_matters')}</div>
+          {matters.length === 0 && <div className="rounded-2xl border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-400">No matters created.</div>}
           {matters.map(m => (
             <button
               key={m.id}
               onClick={() => setSelectedMatter(m.id)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left truncate ${selectedMatter === m.id
-                ? 'bg-white border border-gray-200 text-primary-600 shadow-sm'
-                : 'hover:bg-gray-100 text-gray-600'
+              className={`flex items-center justify-between gap-2 px-3 py-3 rounded-2xl text-sm transition-colors text-left truncate w-full ${selectedMatter === m.id
+                ? 'bg-slate-50 border border-primary-200 text-primary-700 shadow-sm'
+                : 'hover:bg-slate-50 text-slate-600'
                 }`}
             >
-              <Folder className="w-4 h-4 text-gray-400 shrink-0" />
-              <span className="truncate">{m.caseNumber}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                <Folder className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="truncate">{m.caseNumber}</span>
+              </span>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-500">{documents.filter(doc => doc.matterId === m.id).length}</span>
             </button>
           ))}
         </div>
 
         {/* File Grid */}
-        <div className="flex-1 p-4 md:p-6 overflow-y-auto">
+        <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="mb-5 flex flex-col gap-3 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Current View</p>
+              <h2 className="mt-2 text-xl font-semibold text-slate-900">{activeScopeLabel}</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Showing {filteredDocs.length} of {totalDocuments} documents
+                {searchTerm.length >= 2 ? ` matching "${searchQuery.trim()}"` : ''}.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {filterType !== 'all' && (
+                <span className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+                  Filter: {filterType}
+                </span>
+              )}
+              {selectedIds.length > 0 && (
+                <span className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-xs font-medium text-primary-700">
+                  {selectedIds.length} selected
+                </span>
+              )}
+            </div>
+          </div>
           {selectedIds.length > 0 && (
-            <div className="mb-4 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="mb-5 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="text-sm text-indigo-900 font-semibold">
                 {selectedIds.length} documents selected
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={selectAll} className="text-xs px-2 py-1 bg-white border border-indigo-200 rounded text-indigo-600 font-bold hover:bg-indigo-50">
-                  {selectedIds.length === filteredDocs.length ? 'Deselect' : 'Select All'}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button onClick={selectAll} className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
+                  {selectedIds.length === filteredDocs.length ? 'Deselect All' : 'Select All'}
                 </button>
                 <select
                   value={bulkMatterId}
                   onChange={e => setBulkMatterId(e.target.value)}
-                  className="px-3 py-2 border border-indigo-200 rounded-lg bg-white text-sm"
+                  className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-700"
                 >
-                  <option value="">-- Unassigned --</option>
+                  <option value="">Unassigned</option>
                   {matters.map(m => (
                     <option key={m.id} value={m.id}>{m.caseNumber} - {m.name}</option>
                   ))}
                 </select>
                 <button
                   onClick={applyBulkAssign}
-                  className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700"
+                  className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
                 >
                   Assign to Matter
                 </button>
                 <button
                   onClick={clearSelected}
-                  className="px-3 py-2 bg-white border border-indigo-200 text-indigo-700 rounded-lg text-sm font-bold hover:bg-indigo-50"
+                  className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
                 >
                   Clear
                 </button>
@@ -841,61 +952,68 @@ const Documents: React.FC = () => {
             </div>
           )}
           {filteredDocs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-              <Folder className="w-16 h-16 opacity-20 mb-4" />
-              <p>No documents found.</p>
-              <div className="flex gap-3 mt-4">
-                <button onClick={() => fileInputRef.current?.click()} className="px-4 py-2 bg-primary-600 text-white text-sm font-bold rounded-lg hover:bg-primary-700">
+            <div className="flex min-h-[340px] flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center text-slate-400">
+              <Folder className="w-16 h-16 mb-4 text-slate-300" />
+              <p className="text-lg font-semibold text-slate-800">No documents found.</p>
+              <p className="mt-2 max-w-md text-sm text-slate-500">Try another matter, clear the filter, or upload a new file.</p>
+              <div className="flex gap-3 mt-5 flex-wrap justify-center">
+                <button onClick={() => fileInputRef.current?.click()} className="rounded-2xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700">
                   Upload a file
                 </button>
                 {isGoogleDocsConnected ? (
-                  <button onClick={handleGoogleDocsSync} className="px-4 py-2 bg-green-600 text-white text-sm font-bold rounded-lg hover:bg-green-700">
+                  <button onClick={handleGoogleDocsSync} className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700">
                     Sync Google Docs
                   </button>
                 ) : (
-                  <button onClick={handleGoogleDocsConnect} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700">
+                  <button onClick={handleGoogleDocsConnect} className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700">
                     Connect Google Docs
                   </button>
                 )}
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
               {filteredDocs.map(doc => (
-                <div key={doc.id} className="group p-4 bg-white border border-gray-200 rounded-xl hover:shadow-card hover:border-primary-200 transition-all">
-                  <div className="flex flex-col gap-2 mb-3">
+                <div key={doc.id} className="group flex h-full flex-col rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg">
+                  <div className="flex flex-col gap-3 mb-3">
                     <div className="flex justify-between items-start gap-3">
-                      <label className="flex items-center gap-2 text-xs text-gray-500">
+                      <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(doc.id)}
                           onChange={() => toggleSelected(doc.id)}
-                          className="rounded border-gray-300"
+                          className="rounded border-slate-300"
                         />
                         Select
                       </label>
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${doc.type === 'folder' ? 'bg-blue-50 text-blue-500' :
-                        doc.type === 'pdf' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-600'
-                        }`}>
-                        {doc.type === 'folder' ? <Folder className="w-6 h-6" /> : <FileText className="w-6 h-6" />}
+                      <div className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${getDocumentTypeClasses(doc)}`}>
+                        <FileText className="w-5 h-5" />
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button onClick={() => handleOpen(doc)} className="px-2 py-1 text-xs text-primary-600 hover:bg-primary-50 rounded">
+                      <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${getDocumentTypeClasses(doc)}`}>
+                        {getDocumentTypeLabel(doc)}
+                      </span>
+                      {doc.category && (
+                        <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700">{doc.category}</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => handleOpen(doc)} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-950">
                         Open
                       </button>
-                      <button onClick={() => handleDownload(doc)} className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 rounded">
+                      <button onClick={() => handleDownload(doc)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
                         Download
                       </button>
                       <button
                         onClick={() => handleRequestSignature(doc)}
-                        className="px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 rounded"
+                        className="rounded-xl border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
                       >
-                        Request Signature
+                        Signature
                       </button>
                       <button
                         onClick={() => openVersionHistory(doc)}
-                        className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 rounded"
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                       >
                         Versions
                       </button>
@@ -908,7 +1026,7 @@ const Documents: React.FC = () => {
                           setEditStatus(doc.status || '');
                           setEditLegalHoldReason(doc.legalHoldReason || '');
                         }}
-                        className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 rounded"
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                         title="Assign to matter"
                       >
                         Assign
@@ -916,34 +1034,38 @@ const Documents: React.FC = () => {
                       <button
                         onClick={() => handleDelete(doc)}
                         disabled={doc.status === DocumentStatus.OnLegalHold}
-                        className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-50 disabled:hover:bg-transparent"
+                        className="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-50 disabled:hover:bg-transparent"
                         title="Delete"
                       >
                         <Trash2 className="w-3 h-3" /> Delete
                       </button>
                     </div>
                   </div>
-                  <h3 className="font-medium text-slate-800 truncate text-sm" title={doc.name}>{doc.name}</h3>
-                  <div className="mt-2 space-y-1">
+                  <h3 className="line-clamp-2 text-base font-semibold text-slate-900" title={doc.name}>{doc.name}</h3>
+                  <div className="mt-2 flex-1 space-y-2">
+                    <p className="line-clamp-2 text-sm text-slate-500" title={getDocumentSubtitle(doc)}>
+                      {getDocumentSubtitle(doc)}
+                    </p>
                     {doc.matterId && (
-                      <div className="text-xs text-primary-600 font-medium truncate" title={getMatterName(doc.matterId)}>
+                      <div className="hidden text-xs text-primary-600 font-medium truncate" title={getMatterName(doc.matterId)}>
                         📁 {getMatterName(doc.matterId)}
                       </div>
                     )}
                     {doc.tags && doc.tags.length > 0 && (
-                      <div className="text-[11px] text-gray-500 truncate" title={doc.tags.join(', ')}>
+                      <div className="hidden text-[11px] text-gray-500 truncate" title={doc.tags.join(', ')}>
                         🏷️ {doc.tags.join(', ')}
                       </div>
                     )}
-                    <div className="flex justify-between items-center text-xs text-gray-500">
-                      <span>{doc.size || 'Unknown'}</span>
+                    <div className="flex justify-between items-center gap-3 text-xs text-slate-500">
+                      <span className="truncate">{doc.matterId ? getMatterName(doc.matterId) : 'Unassigned'}</span>
+                      <span>{doc.size || 'Unknown size'}</span>
                       <span>{formatDate(doc.updatedAt)}</span>
                     </div>
                     {doc.version && (
-                      <div className="text-[10px] text-gray-400 mt-1">Version v{doc.version}</div>
+                      <div className="text-[10px] text-slate-400 mt-1">Version v{doc.version}</div>
                     )}
                     {(doc.category || doc.status) && (
-                      <div className="mt-1 flex items-center gap-1">
+                      <div className="hidden mt-1 flex items-center gap-1">
                         {doc.category && (
                           <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded border border-indigo-100 font-medium">{doc.category}</span>
                         )}
@@ -1423,20 +1545,30 @@ const Documents: React.FC = () => {
       {/* Matter Selection Modal */}
       {showMatterModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="font-bold text-lg text-slate-800">Select Matter</h3>
-              <p className="text-sm text-gray-500 mt-1">Choose a matter to associate with this document</p>
+          <div className="bg-white rounded-[24px] shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
+              <h3 className="font-bold text-lg text-slate-800">Upload Document</h3>
+              <p className="text-sm text-slate-500 mt-1">Choose a matter or leave it unassigned for later review.</p>
             </div>
 
-            <div className="px-6 py-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Matter</label>
+            <div className="px-6 py-5 space-y-4">
+              {pendingFile && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Selected file</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900 break-all">{pendingFile.name}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {(pendingFile.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+              )}
+
+              <label className="block text-sm font-medium text-slate-700 mb-2">Matter</label>
               <select
                 value={selectedMatterForUpload}
                 onChange={(e) => setSelectedMatterForUpload(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full px-3 py-3 border border-slate-300 rounded-2xl text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
-                <option value="">-- No Matter (Unassigned) --</option>
+                <option value="">No Matter (Unassigned)</option>
                 {matters.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.caseNumber} - {m.name}
@@ -1445,22 +1577,24 @@ const Documents: React.FC = () => {
               </select>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3 bg-white">
               <button
                 onClick={() => {
                   setShowMatterModal(false);
                   setPendingFile(null);
                   setSelectedMatterForUpload('');
                 }}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium"
+                disabled={isUploading}
+                className="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmUpload}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
+                disabled={isUploading}
+                className="px-4 py-2 bg-primary-600 text-white rounded-2xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-60"
               >
-                Upload
+                {isUploading ? 'Uploading...' : 'Upload'}
               </button>
             </div>
           </div>
