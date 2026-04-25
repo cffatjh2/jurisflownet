@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Employee, StaffMessage, Client, Matter } from '../types';
+import { Employee, StaffMessage, Client, Matter, Message } from '../types';
 import { Mail, Search, Plus, Send, X, ArrowLeft } from './Icons';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
@@ -22,6 +22,12 @@ type ConnectedEmailAccount = {
   syncError?: string | null;
 };
 
+type EmailListItem = Message & {
+  folder?: string;
+  fromAddress?: string;
+  toAddresses?: string;
+};
+
 const Communications: React.FC = () => {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -36,10 +42,12 @@ const Communications: React.FC = () => {
   const [selectedEmailAccountId, setSelectedEmailAccountId] = useState<string | null>(null);
   const [syncingMailboxId, setSyncingMailboxId] = useState<string | null>(null);
   const [disconnectingMailboxId, setDisconnectingMailboxId] = useState<string | null>(null);
+  const [emailMessages, setEmailMessages] = useState<EmailListItem[]>([]);
+  const [emailMessagesLoading, setEmailMessagesLoading] = useState(false);
+  const [emailSearch, setEmailSearch] = useState('');
+  const [selectedEmailDetail, setSelectedEmailDetail] = useState<any | null>(null);
 
   const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
-
-  const selectedMessage = messages.find(m => m.id === selectedMsgId);
 
   // Direct messages state
   const [mode, setMode] = useState<'email' | 'direct' | 'client'>('email');
@@ -103,10 +111,68 @@ const Communications: React.FC = () => {
     }
   };
 
+  const formatEmailDate = (value?: string | null) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  const mapSyncedEmail = (email: any): EmailListItem => {
+    const folder = email.folder || email.Folder || 'Inbox';
+    const isSent = folder.toLowerCase() === 'sent';
+    const bodyText = email.bodyText || email.BodyText || '';
+    const fromName = email.fromName || email.FromName || '';
+    const fromAddress = email.fromAddress || email.FromAddress || '';
+    const toAddresses = email.toAddresses || email.ToAddresses || '';
+    return {
+      id: email.id || email.Id,
+      from: isSent ? 'Me' : (fromName || fromAddress || 'Unknown sender'),
+      subject: email.subject || email.Subject || '(No subject)',
+      preview: bodyText || (isSent ? `To: ${toAddresses}` : fromAddress),
+      date: formatEmailDate(email.receivedAt || email.ReceivedAt || email.sentAt || email.SentAt),
+      read: Boolean(email.isRead ?? email.IsRead),
+      matterId: email.matterId || email.MatterId || undefined,
+      folder,
+      fromAddress,
+      toAddresses
+    };
+  };
+
+  const loadSyncedEmails = async (tab: 'inbox' | 'sent' = activeTab) => {
+    if (emailAccounts.length === 0) {
+      setEmailMessages([]);
+      return;
+    }
+
+    setEmailMessagesLoading(true);
+    try {
+      const folder = tab === 'sent' ? 'Sent' : 'Inbox';
+      const payload = await api.emails.list({ folder, limit: 100 });
+      const next = Array.isArray(payload) ? payload.map(mapSyncedEmail) : [];
+      setEmailMessages(next);
+      if (selectedMsgId && !next.some(message => message.id === selectedMsgId)) {
+        setSelectedMsgId(null);
+        setSelectedEmailDetail(null);
+      }
+    } catch (error) {
+      console.error('Failed to load synced emails', error);
+      toast.error(error instanceof Error ? `Could not load synced emails: ${error.message}` : 'Could not load synced emails.');
+    } finally {
+      setEmailMessagesLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (mode !== 'email') return;
     void loadEmailAccounts();
   }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'email') return;
+    void loadSyncedEmails(activeTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, activeTab, emailAccounts.length]);
 
   useEffect(() => {
     if (emailAccounts.length === 0) {
@@ -201,9 +267,12 @@ const Communications: React.FC = () => {
 
     setSyncingMailboxId(targetAccountId);
     try {
-      await api.emails.accounts.sync(targetAccountId);
+      const result = await api.emails.accounts.sync(targetAccountId);
       await loadEmailAccounts();
-      toast.success('Mailbox sync completed.');
+      await loadSyncedEmails(activeTab);
+      const created = typeof result?.created === 'number' ? result.created : 0;
+      const updated = typeof result?.updated === 'number' ? result.updated : 0;
+      toast.success(`Mailbox sync completed. ${created} new, ${updated} updated.`);
     } catch (error) {
       console.error('Mailbox sync error:', error);
       toast.error(error instanceof Error ? `Mailbox sync failed: ${error.message}` : 'Mailbox sync failed. Client messages are unaffected.');
@@ -249,7 +318,14 @@ const Communications: React.FC = () => {
     }
   };
 
-  const filteredMessages = messages.filter(m => {
+  const currentEmailMessages = emailAccounts.length > 0 ? emailMessages : messages;
+  const selectedMessage = currentEmailMessages.find(m => m.id === selectedMsgId);
+  const filteredMessages = currentEmailMessages.filter(m => {
+     if (emailSearch.trim()) {
+       const term = emailSearch.trim().toLowerCase();
+       if (!`${m.from} ${m.subject} ${m.preview}`.toLowerCase().includes(term)) return false;
+     }
+     if (emailAccounts.length > 0) return true;
      if (activeTab === 'sent') return m.from === 'Me';
      return m.from !== 'Me';
   });
@@ -278,9 +354,22 @@ const Communications: React.FC = () => {
   const sortedDmMessages = [...dmMessages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   const sortedClientMessages = [...clientMessages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-  const handleSelectMessage = (id: string) => {
+  const handleSelectMessage = async (id: string) => {
     setSelectedMsgId(id);
-    markMessageRead(id);
+    if (emailAccounts.length === 0) {
+      markMessageRead(id);
+      return;
+    }
+
+    setEmailMessages(prev => prev.map(message => message.id === id ? { ...message, read: true } : message));
+    setSelectedEmailDetail(null);
+    try {
+      const detail = await api.emails.get(id);
+      setSelectedEmailDetail(detail);
+    } catch (error) {
+      console.error('Failed to load email detail', error);
+      toast.error('Could not load email body.');
+    }
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -314,6 +403,7 @@ const Communications: React.FC = () => {
        setComposeData({ to: '', subject: '', body: '' });
        setActiveTab('sent');
        await loadEmailAccounts();
+       await loadSyncedEmails('sent');
      } catch (error) {
        console.error('Failed to send email', error);
        toast.error(error instanceof Error ? error.message : 'Could not send email.');
@@ -496,7 +586,13 @@ const Communications: React.FC = () => {
               </div>
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
-                <input type="text" placeholder="Search messages..." className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-100 focus:border-primary-400 transition-all text-slate-800" />
+                <input
+                  type="text"
+                  value={emailSearch}
+                  onChange={(e) => setEmailSearch(e.target.value)}
+                  placeholder="Search messages..."
+                  className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-100 focus:border-primary-400 transition-all text-slate-800"
+                />
               </div>
             </>
           ) : mode === 'direct' ? (
@@ -526,10 +622,13 @@ const Communications: React.FC = () => {
         <div className="flex-1 overflow-y-auto">
           {mode === 'email' ? (
             <>
-              {filteredMessages.length === 0 && (
+              {emailMessagesLoading && (
+                  <div className="p-4 text-center text-gray-400 text-sm">Loading synced emails...</div>
+              )}
+              {!emailMessagesLoading && filteredMessages.length === 0 && (
                   <div className="p-8 text-center text-gray-400 text-sm">No messages found.</div>
               )}
-              {filteredMessages.map(msg => (
+              {!emailMessagesLoading && filteredMessages.map(msg => (
                 <div 
                   key={msg.id} 
                   onClick={() => handleSelectMessage(msg.id)}
@@ -537,7 +636,7 @@ const Communications: React.FC = () => {
                 >
                   <div className="flex justify-between items-start mb-1">
                     <span className={`text-sm ${!msg.read ? 'font-bold text-slate-900' : 'font-semibold text-slate-600'}`}>{msg.from}</span>
-                    <span className="text-xs text-gray-400">{msg.date}</span>
+                    <span className="shrink-0 text-xs text-gray-400">{msg.date}</span>
                   </div>
                   <h4 className={`text-sm mb-1 truncate ${!msg.read ? 'font-bold text-slate-800' : 'font-medium text-slate-700'}`}>{msg.subject}</h4>
                   <p className="text-xs text-gray-500 line-clamp-2">{msg.preview}</p>
@@ -630,14 +729,16 @@ const Communications: React.FC = () => {
                     </div>
                     <div>
                         <p className="text-sm font-bold text-slate-800">{selectedMessage.from}</p>
-                        <p className="text-xs text-gray-500">to Me</p>
+                        <p className="text-xs text-gray-500">
+                          {emailAccounts.length > 0
+                            ? (activeTab === 'sent' ? `to ${(selectedMessage as EmailListItem).toAddresses || 'recipient'}` : (selectedMessage as EmailListItem).fromAddress || 'to Me')
+                            : 'to Me'}
+                        </p>
                     </div>
                   </div>
                 </div>
                 <div className="p-4 lg:p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap overflow-y-auto">
-                    {selectedMessage.preview}
-                    <br/><br/>
-                    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+                    {selectedEmailDetail?.bodyText || selectedEmailDetail?.BodyText || selectedMessage.preview || 'No email body available.'}
                 </div>
               </div>
             ) : (
