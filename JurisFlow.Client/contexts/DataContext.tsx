@@ -387,11 +387,14 @@ const sanitizeClients = (items: Client[] | null | undefined): Client[] =>
       updatedAt: d.updatedAt || d.createdAt || new Date().toISOString(),
       matterId: d.matterId || undefined,
       filePath: d.filePath || undefined,
+      downloadUrl: d.downloadUrl || undefined,
+      mimeType: d.mimeType || undefined,
       description: d.description || undefined,
       tags: parseDocTags(d.tags),
       category: d.category || undefined,
       status: d.status || undefined,
       version: d.version || undefined,
+      uploadedBy: d.uploadedBy || undefined,
       legalHoldReason: d.legalHoldReason || undefined,
       legalHoldPlacedAt: d.legalHoldPlacedAt || undefined,
       legalHoldReleasedAt: d.legalHoldReleasedAt || undefined,
@@ -2049,7 +2052,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   };
   const addMessage = (msg: Message) => setMessages(prev => [msg, ...prev]);
   const markMessageRead = (id: string) => setMessages(prev => prev.map(m => m.id === id ? { ...m, read: true } : m));
-  const addDocument = (doc: DocumentFile) => setDocuments(prev => [doc, ...prev]);
+  const addDocument = (doc: DocumentFile) => setDocuments(prev => {
+    const next = prev.filter(existing => existing.id !== doc.id);
+    return [doc, ...next];
+  });
   const updateDocument = async (id: string, data: Partial<DocumentFile>) => {
     // optimistic
     setDocuments(prev => prev.map(doc => doc.id === id ? { ...doc, ...data } : doc));

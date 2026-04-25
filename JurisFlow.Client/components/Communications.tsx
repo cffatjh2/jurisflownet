@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Employee, StaffMessage, Client, Matter } from '../types';
 import { Mail, Search, Plus, Send, X, ArrowLeft } from './Icons';
 import { useTranslation } from '../contexts/LanguageContext';
@@ -32,6 +32,8 @@ const Communications: React.FC = () => {
   const [emailAccounts, setEmailAccounts] = useState<ConnectedEmailAccount[]>([]);
   const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
   const [selectedEmailAccountId, setSelectedEmailAccountId] = useState<string | null>(null);
+  const [syncingMailboxId, setSyncingMailboxId] = useState<string | null>(null);
+  const [disconnectingMailboxId, setDisconnectingMailboxId] = useState<string | null>(null);
 
   const [composeData, setComposeData] = useState({ to: '', subject: '', body: '' });
 
@@ -53,6 +55,7 @@ const Communications: React.FC = () => {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientMessages, setClientMessages] = useState<any[]>([]);
   const [clientLoading, setClientLoading] = useState(false);
+  const [clientSending, setClientSending] = useState(false);
   const [clientSearch, setClientSearch] = useState('');
   const [clientCompose, setClientCompose] = useState({ subject: '', body: '', matterId: '' });
   const [clientAttachments, setClientAttachments] = useState<File[]>([]);
@@ -152,26 +155,31 @@ const Communications: React.FC = () => {
     loadThread();
   }, [mode, selectedEmployee, currentEmployeeId]);
 
+  const loadClientThread = useCallback(async (showLoading = true) => {
+    if (!selectedClient) return;
+    if (showLoading) setClientLoading(true);
+    try {
+      const thread = await api.get(`/messages/client?clientId=${encodeURIComponent(selectedClient.id)}`);
+      const safeThread = Array.isArray(thread) ? thread : [];
+      setClientMessages(safeThread);
+
+      const unread = safeThread.filter((m: any) => !m.read && String(m.senderType || '').toLowerCase() !== 'staff');
+      if (unread.length > 0) {
+        void Promise.all(unread.map((m: any) => api.post(`/client/messages/${m.id}/read`, {}).catch(() => null)));
+      }
+    } catch (err) {
+      console.error('Failed to load client messages', err);
+      setClientMessages([]);
+    } finally {
+      if (showLoading) setClientLoading(false);
+    }
+  }, [selectedClient]);
+
   // Load client thread when a client is selected
   useEffect(() => {
     if (mode !== 'client' || !selectedClient) return;
-    const loadClientThread = async () => {
-      setClientLoading(true);
-      try {
-        const thread = await api.get(`/messages/client?clientId=${encodeURIComponent(selectedClient.id)}`);
-        setClientMessages(Array.isArray(thread) ? thread : []);
-
-        const unread = (thread || []).filter((m: any) => !m.read && m.senderType !== 'Staff');
-        await Promise.all(unread.map((m: any) => api.post(`/client/messages/${m.id}/read`, {})));
-      } catch (err) {
-        console.error('Failed to load client messages', err);
-        setClientMessages([]);
-      } finally {
-        setClientLoading(false);
-      }
-    };
-    loadClientThread();
-  }, [mode, selectedClient]);
+    void loadClientThread();
+  }, [mode, selectedClient, loadClientThread]);
 
   const handleConnectMailbox = async (provider: 'gmail' | 'outlook') => {
     try {
@@ -189,13 +197,46 @@ const Communications: React.FC = () => {
       return;
     }
 
+    setSyncingMailboxId(targetAccountId);
     try {
       await api.emails.accounts.sync(targetAccountId);
       await loadEmailAccounts();
       toast.success('Mailbox sync completed.');
     } catch (error) {
       console.error('Mailbox sync error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to sync mailbox.');
+      toast.error(error instanceof Error ? `Mailbox sync failed: ${error.message}` : 'Mailbox sync failed. Client messages are unaffected.');
+    } finally {
+      setSyncingMailboxId(null);
+    }
+  };
+
+  const handleDisconnectMailbox = async (accountId?: string | null) => {
+    const targetAccountId = accountId || selectedEmailAccountId;
+    if (!targetAccountId) {
+      toast.error('Select a connected mailbox first.');
+      return;
+    }
+
+    const targetAccount = emailAccounts.find(account => account.id === targetAccountId);
+    const label = targetAccount?.emailAddress || 'this mailbox';
+    if (!window.confirm(`Disconnect ${label}? Synced emails from this mailbox will be removed from JurisFlow.`)) {
+      return;
+    }
+
+    setDisconnectingMailboxId(targetAccountId);
+    try {
+      await api.emails.accounts.disconnect(targetAccountId);
+      setEmailAccounts(prev => prev.filter(account => account.id !== targetAccountId));
+      if (selectedEmailAccountId === targetAccountId) {
+        setSelectedEmailAccountId(null);
+      }
+      await loadEmailAccounts();
+      toast.success('Mailbox disconnected.');
+    } catch (error) {
+      console.error('Mailbox disconnect error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to disconnect mailbox.');
+    } finally {
+      setDisconnectingMailboxId(null);
     }
   };
 
@@ -217,7 +258,12 @@ const Communications: React.FC = () => {
   });
 
   const clientMatters = selectedClient
-    ? matters.filter((m: Matter) => m.client?.id === selectedClient.id)
+    ? matters.filter((m: Matter) =>
+        m.client?.id === selectedClient.id ||
+        m.clientId === selectedClient.id ||
+        (Array.isArray(m.relatedClientIds) && m.relatedClientIds.includes(selectedClient.id)) ||
+        (Array.isArray(m.relatedClients) && m.relatedClients.some(client => client.id === selectedClient.id))
+      )
     : [];
 
   const sortedDmMessages = [...dmMessages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -314,27 +360,62 @@ const Communications: React.FC = () => {
   const handleSendClientMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!selectedClient) return;
+    if (clientSending) return;
     if (!clientCompose.subject.trim() || !clientCompose.body.trim()) return;
 
-    const attachments = await Promise.all(clientAttachments.map(fileToDto));
-    const payload: any = {
-      clientId: selectedClient.id,
-      subject: clientCompose.subject.trim(),
-      message: clientCompose.body.trim()
-    };
-    if (clientCompose.matterId) payload.matterId = clientCompose.matterId;
-    if (attachments.length > 0) payload.attachments = attachments;
+    const subject = clientCompose.subject.trim();
+    const message = clientCompose.body.trim();
+    const matterId = clientCompose.matterId;
+    const optimisticId = `pending-client-message-${Date.now()}`;
+    const optimisticAttachments = clientAttachments.map(file => ({
+      name: file.name,
+      fileName: file.name,
+      size: file.size,
+      mimeType: file.type
+    }));
+
+    setClientSending(true);
+    setClientMessages(prev => [
+      ...prev,
+      {
+        id: optimisticId,
+        clientId: selectedClient.id,
+        subject,
+        message,
+        read: false,
+        createdAt: new Date().toISOString(),
+        matterId: matterId || undefined,
+        attachments: optimisticAttachments,
+        senderType: 'Staff',
+        senderName: user?.name || 'Firm Staff',
+        pending: true
+      }
+    ]);
 
     try {
+      const attachments = await Promise.all(clientAttachments.map(fileToDto));
+      const payload: any = {
+        clientId: selectedClient.id,
+        subject,
+        message
+      };
+      if (matterId) payload.matterId = matterId;
+      if (attachments.length > 0) payload.attachments = attachments;
+
       const sent = await api.post('/messages/client/send', payload);
       if (sent) {
-        setClientMessages(prev => [sent, ...prev]);
+        setClientMessages(prev => prev.map(msg => msg.id === optimisticId ? sent : msg));
         setClientCompose({ subject: '', body: '', matterId: '' });
         setClientAttachments([]);
+        toast.success('Client message sent.', 2500);
+        void loadClientThread(false);
       }
     } catch (error) {
       console.error('Failed to send client message', error);
-      toast.error('Could not send client message');
+      setClientMessages(prev => prev.filter(msg => msg.id !== optimisticId));
+      toast.error(error instanceof Error ? error.message : 'Could not send client message');
+    } finally {
+      setClientSending(false);
     }
   };
 
@@ -568,11 +649,26 @@ const Communications: React.FC = () => {
                           Email is sent as the connected Gmail or Outlook account, not from platform SMTP.
                         </p>
                         <div className="flex flex-wrap justify-center gap-2">
-                          <button onClick={() => handleSyncMailbox()} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700">
-                            Sync mailbox
+                          <button
+                            onClick={() => handleSyncMailbox()}
+                            disabled={syncingMailboxId === selectedEmailAccountId || disconnectingMailboxId === selectedEmailAccountId}
+                            className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded shadow-sm hover:bg-blue-700 disabled:opacity-60"
+                          >
+                            {syncingMailboxId === selectedEmailAccountId ? 'Syncing...' : 'Sync mailbox'}
                           </button>
-                          <button onClick={() => setShowCompose(true)} className="px-4 py-2 bg-white border border-gray-200 text-xs font-bold text-gray-700 rounded shadow-sm hover:bg-gray-50">
+                          <button
+                            onClick={() => setShowCompose(true)}
+                            disabled={disconnectingMailboxId === selectedEmailAccountId}
+                            className="px-4 py-2 bg-white border border-gray-200 text-xs font-bold text-gray-700 rounded shadow-sm hover:bg-gray-50 disabled:opacity-60"
+                          >
                             Compose
+                          </button>
+                          <button
+                            onClick={() => handleDisconnectMailbox()}
+                            disabled={disconnectingMailboxId === selectedEmailAccountId || syncingMailboxId === selectedEmailAccountId}
+                            className="px-4 py-2 bg-white border border-red-200 text-xs font-bold text-red-600 rounded shadow-sm hover:bg-red-50 disabled:opacity-60"
+                          >
+                            {disconnectingMailboxId === selectedEmailAccountId ? 'Disconnecting...' : 'Disconnect'}
                           </button>
                         </div>
                       </>
@@ -727,7 +823,7 @@ const Communications: React.FC = () => {
                     const attachments = getMessageAttachments(msg);
                     return (
                       <div key={msg.id} className={`flex ${isStaff ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm shadow space-y-2 ${isStaff ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-800'}`}>
+                        <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm shadow space-y-2 ${isStaff ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-800'} ${msg.pending ? 'opacity-75' : ''}`}>
                           <div className="text-[11px] uppercase opacity-80">{msg.subject || 'Message'}</div>
                           <p className="whitespace-pre-wrap">{msg.message}</p>
                           {attachments.length > 0 && (
@@ -745,7 +841,7 @@ const Communications: React.FC = () => {
                             </div>
                           )}
                           <span className="block text-[10px] mt-1 opacity-70">
-                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {msg.pending ? 'Sending...' : new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
                       </div>
@@ -798,10 +894,10 @@ const Communications: React.FC = () => {
                     </div>
                     <button
                       type="submit"
-                      disabled={!clientCompose.subject.trim() || !clientCompose.body.trim()}
+                      disabled={clientSending || !clientCompose.subject.trim() || !clientCompose.body.trim()}
                       className="h-9 px-4 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60 flex items-center gap-2"
                     >
-                      <Send className="w-4 h-4" /> Send
+                      <Send className="w-4 h-4" /> {clientSending ? 'Sending...' : 'Send'}
                     </button>
                   </div>
                 </form>

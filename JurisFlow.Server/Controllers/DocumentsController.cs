@@ -41,6 +41,7 @@ namespace JurisFlow.Server.Controllers
         private readonly IAppFileStorage _fileStorage;
         private readonly AuditLogger _auditLogger;
         private readonly DocumentIndexService _documentIndexService;
+        private readonly DocumentIndexQueue _documentIndexQueue;
         private readonly DocumentEncryptionService _documentEncryptionService;
         private readonly DocumentTextExtractor _textExtractor;
         private readonly TenantContext _tenantContext;
@@ -52,6 +53,7 @@ namespace JurisFlow.Server.Controllers
             IAppFileStorage fileStorage,
             AuditLogger auditLogger,
             DocumentIndexService documentIndexService,
+            DocumentIndexQueue documentIndexQueue,
             DocumentEncryptionService documentEncryptionService,
             DocumentTextExtractor textExtractor,
             TenantContext tenantContext,
@@ -62,6 +64,7 @@ namespace JurisFlow.Server.Controllers
             _fileStorage = fileStorage;
             _auditLogger = auditLogger;
             _documentIndexService = documentIndexService;
+            _documentIndexQueue = documentIndexQueue;
             _documentEncryptionService = documentEncryptionService;
             _textExtractor = textExtractor;
             _tenantContext = tenantContext;
@@ -142,6 +145,20 @@ namespace JurisFlow.Server.Controllers
             }
 
             return normalizedRelativePath;
+        }
+
+        private void QueueDocumentIndex(string documentId)
+        {
+            if (string.IsNullOrWhiteSpace(documentId) || string.IsNullOrWhiteSpace(_tenantContext.TenantId))
+            {
+                return;
+            }
+
+            var job = new DocumentIndexJob(_tenantContext.TenantId, _tenantContext.TenantSlug, documentId);
+            if (!_documentIndexQueue.TryEnqueue(job))
+            {
+                _logger.LogWarning("Document index queue is full; skipping background index for {DocumentId}.", documentId);
+            }
         }
 
         private IQueryable<T> TenantScope<T>(IQueryable<T> query) where T : class
@@ -877,6 +894,7 @@ namespace JurisFlow.Server.Controllers
                 _context.DocumentVersions.Add(restoredVersion);
 
                 await _context.SaveChangesAsync();
+                QueueDocumentIndex(document.Id);
                 await _auditLogger.LogAsync(HttpContext, "document.version.restore", "Document", document.Id, $"VersionId={versionId}");
 
                 return Ok(ToDocumentResponse(document));
@@ -1170,15 +1188,7 @@ namespace JurisFlow.Server.Controllers
                 _context.Documents.Add(document);
                 _context.DocumentVersions.Add(version);
                 await _context.SaveChangesAsync();
-
-                try
-                {
-                    await _documentIndexService.UpsertIndexAsync(document, fileBytes);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Document index update failed for uploaded document {DocumentId}.", document.Id);
-                }
+                QueueDocumentIndex(document.Id);
 
                 await _auditLogger.LogAsync(HttpContext, "document.upload", "Document", document.Id, $"MatterId={normalizedMatterId}, Name={prepared.DisplayName}, Size={file.Length}");
 
@@ -1261,14 +1271,7 @@ namespace JurisFlow.Server.Controllers
                 _context.DocumentVersions.Add(version);
 
                 await _context.SaveChangesAsync();
-                try
-                {
-                    await _documentIndexService.UpsertIndexAsync(document, fileBytes);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Document index update failed for version upload {DocumentId}.", document.Id);
-                }
+                QueueDocumentIndex(document.Id);
 
                 await _auditLogger.LogAsync(HttpContext, "document.version.upload", "Document", document.Id, $"Version={document.Version}");
 

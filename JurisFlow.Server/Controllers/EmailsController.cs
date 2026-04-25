@@ -582,7 +582,7 @@ namespace JurisFlow.Server.Controllers
         // POST: api/emails/accounts/{id}/sync
         [HttpPost("accounts/{id}/sync")]
         [EnableRateLimiting("AdminDangerousOps")]
-        public async Task<IActionResult> SyncAccount(string id, [FromQuery] int limit = 100)
+        public async Task<IActionResult> SyncAccount(string id, [FromQuery] int limit = 25)
         {
             var userId = GetUserId();
             if (string.IsNullOrWhiteSpace(userId))
@@ -590,7 +590,7 @@ namespace JurisFlow.Server.Controllers
                 return Unauthorized();
             }
 
-            limit = Math.Clamp(limit, 1, 200);
+            limit = Math.Clamp(limit, 1, 100);
 
             var account = await TenantScope(_context.EmailAccounts)
                 .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId);
@@ -646,9 +646,38 @@ namespace JurisFlow.Server.Controllers
                     lastSyncAt = account.LastSyncAt
                 });
             }
+            catch (ProviderAuthenticationException ex)
+            {
+                account.IsActive = false;
+                account.SyncEnabled = false;
+                account.SyncError = ex.Message;
+                account.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+                await _auditLogger.LogAsync(HttpContext, "email.account.sync_failed", nameof(EmailAccount), account.Id, $"Provider={account.Provider}; Reason=auth");
+
+                _logger.LogWarning(ex, "Email sync authorization failed for account {AccountId}", account.Id);
+                return StatusCode(StatusCodes.Status409Conflict, new
+                {
+                    message = ex.Message,
+                    requiresReconnect = true
+                });
+            }
+            catch (ProviderSyncException ex)
+            {
+                account.SyncError = ex.Message;
+                account.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+                await _auditLogger.LogAsync(HttpContext, "email.account.sync_failed", nameof(EmailAccount), account.Id, $"Provider={account.Provider}; Reason=provider");
+
+                _logger.LogWarning(ex, "Email sync provider request failed for account {AccountId}", account.Id);
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    message = ex.Message
+                });
+            }
             catch (Exception ex)
             {
-                account.SyncError = "Provider sync failed.";
+                account.SyncError = "Mailbox sync failed. Please try again.";
                 account.UpdatedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
                 await _auditLogger.LogAsync(HttpContext, "email.account.sync_failed", nameof(EmailAccount), account.Id, $"Provider={account.Provider}");
@@ -656,7 +685,7 @@ namespace JurisFlow.Server.Controllers
                 _logger.LogWarning(ex, "Email sync failed for account {AccountId}", account.Id);
                 return StatusCode(StatusCodes.Status502BadGateway, new
                 {
-                    message = "Sync failed."
+                    message = "Mailbox sync failed. Please try again."
                 });
             }
         }
@@ -1025,7 +1054,8 @@ namespace JurisFlow.Server.Controllers
             var refreshToken = secrets?.RefreshToken ?? account.RefreshToken;
 
             if (!string.IsNullOrWhiteSpace(accessToken) &&
-                (!account.TokenExpiresAt.HasValue || account.TokenExpiresAt.Value > DateTime.UtcNow.AddMinutes(2)))
+                account.TokenExpiresAt.HasValue &&
+                account.TokenExpiresAt.Value > DateTime.UtcNow.AddMinutes(2))
             {
                 return (accessToken, refreshToken, account.TokenExpiresAt);
             }
@@ -1048,7 +1078,7 @@ namespace JurisFlow.Server.Controllers
                 account.SyncError = "Email account requires reconnect.";
                 account.UpdatedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync(cancellationToken);
-                throw new InvalidOperationException("Email account requires reconnect.");
+                throw new ProviderAuthenticationException("Email account requires reconnect.");
             }
 
             account.TokenExpiresAt = refreshed.Value.expiresAt;
@@ -1406,12 +1436,25 @@ namespace JurisFlow.Server.Controllers
                     continue;
                 }
 
-                var detailUrl = $"https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}?format=full";
-                var detailDoc = await GetJsonAsync(detailUrl, accessToken, cancellationToken);
-                var parsed = ParseGmailMessage(detailDoc.RootElement);
-                if (parsed != null)
+                try
                 {
-                    result.Add(parsed);
+                    var detailUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" +
+                                    $"{Uri.EscapeDataString(id)}?format=metadata" +
+                                    "&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=Subject&metadataHeaders=Date";
+                    var detailDoc = await GetJsonAsync(detailUrl, accessToken, cancellationToken);
+                    var parsed = ParseGmailMessage(detailDoc.RootElement);
+                    if (parsed != null)
+                    {
+                        result.Add(parsed);
+                    }
+                }
+                catch (ProviderAuthenticationException)
+                {
+                    throw;
+                }
+                catch (ProviderSyncException ex)
+                {
+                    _logger.LogWarning(ex, "Skipping Gmail message {MessageId} during sync.", id);
                 }
             }
 
@@ -1429,7 +1472,18 @@ namespace JurisFlow.Server.Controllers
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Provider API request failed. Url={Url} Status={StatusCode} PayloadLength={PayloadLength}", url, (int)response.StatusCode, payload?.Length ?? 0);
-                throw new InvalidOperationException("Provider API request failed.");
+                var providerName = ResolveProviderNameFromUrl(url);
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    throw new ProviderAuthenticationException($"{providerName} mailbox requires reconnect or read permission approval.");
+                }
+
+                if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
+                {
+                    throw new ProviderSyncException($"{providerName} temporarily rejected sync. Please try again in a minute.");
+                }
+
+                throw new ProviderSyncException($"{providerName} sync request failed ({(int)response.StatusCode}).");
             }
 
             return JsonDocument.Parse(payload);
@@ -1877,6 +1931,35 @@ namespace JurisFlow.Server.Controllers
             }
 
             return new MailAddress(address, displayName.Trim()).ToString();
+        }
+
+        private static string ResolveProviderNameFromUrl(string url)
+        {
+            if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Gmail";
+            }
+
+            if (url.Contains("graph.microsoft.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Outlook";
+            }
+
+            return "Mailbox provider";
+        }
+
+        private sealed class ProviderAuthenticationException : InvalidOperationException
+        {
+            public ProviderAuthenticationException(string message) : base(message)
+            {
+            }
+        }
+
+        private sealed class ProviderSyncException : InvalidOperationException
+        {
+            public ProviderSyncException(string message) : base(message)
+            {
+            }
         }
 
         private sealed class ProviderEmailMessage

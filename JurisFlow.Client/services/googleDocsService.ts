@@ -90,6 +90,9 @@ export const googleDocsService = {
         }
       }
     );
+    if (!response.ok) {
+      throw new Error(`Google Docs export failed with status ${response.status}`);
+    }
     return response.blob();
   }
 };

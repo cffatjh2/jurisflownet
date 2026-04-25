@@ -229,16 +229,20 @@ const fetchAllPages = async <T>(
     return items;
 };
 
-const fetchFile = async (endpoint: string) => {
+const fetchFile = async (endpoint: string, allowRefresh: boolean = true) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const tenantSlug = getTenantSlug();
     const res = await fetch(`${API_URL}${endpoint}`, {
         headers: {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
-        }
+        },
+        cache: 'no-store'
     });
     if (res.status === 401) {
+        if (allowRefresh && await refreshAuthToken()) {
+            return fetchFile(endpoint, false);
+        }
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('auth:unauthorized', { detail: { endpoint } }));
         }
@@ -1043,12 +1047,14 @@ export const api = {
         fetchJson(`/documents/versions/diff?leftVersionId=${encodeURIComponent(leftVersionId)}&rightVersionId=${encodeURIComponent(rightVersionId)}`),
     uploadDocumentVersion: async (documentId: string, file: File) => {
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const tenantSlug = getTenantSlug();
         const formData = new FormData();
         formData.append('file', file);
         const res = await fetch(`${API_URL}/documents/${documentId}/versions`, {
             method: 'POST',
             headers: {
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(tenantSlug ? { 'X-Tenant-Slug': tenantSlug } : {})
             },
             body: formData
         });
@@ -1276,7 +1282,8 @@ export const api = {
                 fetchJson('/emails/accounts/connect/outlook', { method: 'POST', body: JSON.stringify(data) }),
             connectGmail: (data: { email?: string; displayName?: string; accessToken?: string; refreshToken?: string; authorizationCode?: string; redirectUri?: string; state?: string; codeVerifier?: string }) =>
                 fetchJson('/emails/accounts/connect/gmail', { method: 'POST', body: JSON.stringify(data) }),
-            sync: (id: string) => fetchJson(`/emails/accounts/${id}/sync`, { method: 'POST' }),
+            sync: (id: string, limit: number = 25) =>
+                fetchJson(`/emails/accounts/${id}/sync?limit=${encodeURIComponent(String(limit))}`, { method: 'POST' }),
             disconnect: (id: string) => fetchJson(`/emails/accounts/${id}`, { method: 'DELETE' }),
         },
     },

@@ -37,7 +37,12 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("request")]
         public async Task<ActionResult<SignatureRequest>> CreateSignatureRequest([FromBody] CreateSignatureRequestDto dto)
         {
-            var document = await _context.Documents.FindAsync(dto.DocumentId);
+            if (string.IsNullOrWhiteSpace(dto.DocumentId) || string.IsNullOrWhiteSpace(dto.SignerEmail))
+            {
+                return BadRequest(new { message = "DocumentId and signerEmail are required." });
+            }
+
+            var document = await _context.Documents.FirstOrDefaultAsync(d => d.Id == dto.DocumentId);
             if (document == null)
             {
                 return NotFound(new { message = "Document not found" });
@@ -76,6 +81,16 @@ namespace JurisFlow.Server.Controllers
 
             _context.SignatureRequests.Add(signatureRequest);
             await _context.SaveChangesAsync();
+
+            await _outboundEmailService.QueueAsync(new OutboundEmail
+            {
+                ToAddress = signatureRequest.SignerEmail,
+                Subject = $"Signature requested for {document.Name}",
+                BodyText = $"Please review and sign \"{document.Name}\" at {signatureRequest.SigningUrl}. This request expires on {signatureRequest.ExpiresAt:yyyy-MM-dd}.",
+                ScheduledFor = DateTime.UtcNow,
+                RelatedEntityType = "SignatureRequest",
+                RelatedEntityId = signatureRequest.Id
+            });
 
             await _auditLogger.LogAsync(HttpContext, "esign.request.create", "SignatureRequest", signatureRequest.Id, $"Signer={signatureRequest.SignerEmail}, Document={signatureRequest.DocumentId}");
             if (dto.DisclosureProvided == true)

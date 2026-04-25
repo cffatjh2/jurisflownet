@@ -383,9 +383,6 @@ if (invalidCorsOrigins.Count > 0)
     throw new InvalidOperationException(
         $"Invalid CORS origins in configuration: {string.Join(", ", invalidCorsOrigins)}");
 }
-var allowedCorsOriginSet = new HashSet<string>(allowedCorsOrigins, StringComparer.OrdinalIgnoreCase);
-var renderSiblingCorsRule = ResolveRenderSiblingCorsRule(builder.Configuration, allowedCorsOriginSet);
-
 if (builder.Environment.IsProduction())
 {
     EnsureProductionSecurityRequirements(builder.Configuration);
@@ -406,6 +403,9 @@ else if (allowedCorsOrigins.Count == 0)
         "http://127.0.0.1:3000"
     });
 }
+
+var allowedCorsOriginSet = new HashSet<string>(allowedCorsOrigins, StringComparer.OrdinalIgnoreCase);
+var renderSiblingCorsRule = ResolveRenderSiblingCorsRule(builder.Configuration, allowedCorsOriginSet);
 
 builder.Services.AddDbContext<JurisFlowDbContext>(options =>
     ConfigureDatabaseProvider(options, databaseProvider, resolvedConnectionString));
@@ -560,6 +560,8 @@ builder.Services.AddSingleton<StripePaymentService>();
 builder.Services.AddSingleton<LemonSqueezyCheckoutService>();
 builder.Services.AddScoped<PaymentCommandIdempotencyService>();
 builder.Services.AddScoped<PaymentPlanService>();
+builder.Services.AddSingleton<DocumentIndexQueue>();
+builder.Services.AddHostedService<DocumentIndexHostedService>();
 builder.Services.AddScoped<DocumentIndexService>();
 builder.Services.AddScoped<RetentionService>();
 builder.Services.AddSingleton<PasswordPolicyService>();

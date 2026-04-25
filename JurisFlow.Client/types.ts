@@ -733,6 +733,8 @@ export interface DocumentFile {
   matterId?: string;
   content?: string; // optional data URL for inline open/download
   filePath?: string; // server file path for uploaded documents
+  downloadUrl?: string;
+  mimeType?: string;
   description?: string;
   tags?: string[];
   category?: string;
