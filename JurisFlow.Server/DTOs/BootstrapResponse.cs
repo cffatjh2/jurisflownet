@@ -22,6 +22,7 @@ namespace JurisFlow.Server.DTOs
     {
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string DownloadUrl { get; set; } = string.Empty;
         public long FileSize { get; set; }
         public string? MimeType { get; set; }
         public string? MatterId { get; set; }
@@ -43,6 +44,7 @@ namespace JurisFlow.Server.DTOs
             {
                 Id = document.Id,
                 Name = document.Name,
+                DownloadUrl = $"/api/Documents/{document.Id}/download",
                 FileSize = document.FileSize,
                 MimeType = document.MimeType,
                 MatterId = document.MatterId,

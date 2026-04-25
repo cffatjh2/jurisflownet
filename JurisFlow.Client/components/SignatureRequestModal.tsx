@@ -120,10 +120,11 @@ export default function SignatureRequestModal({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4">
+            <div className="flex min-h-full items-start justify-center py-2 md:items-center">
+            <div className="flex max-h-[calc(100vh-1rem)] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
                 {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-50 to-indigo-50">
+                <div className="flex shrink-0 items-center justify-between border-b bg-gradient-to-r from-blue-50 to-indigo-50 p-4">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
                             <FileText className="w-5 h-5 text-blue-600" />
@@ -139,7 +140,7 @@ export default function SignatureRequestModal({
                 </div>
 
                 {/* Form */}
-                <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                <form onSubmit={handleSubmit} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 md:p-6">
                     {/* Document Selection */}
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -268,7 +269,7 @@ export default function SignatureRequestModal({
                 </form>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-3 p-4 border-t bg-slate-50">
+                <div className="flex shrink-0 items-center justify-end gap-3 border-t bg-slate-50 p-4">
                     <button
                         onClick={onClose}
                         className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition"
@@ -288,6 +289,7 @@ export default function SignatureRequestModal({
                         Send for Signature
                     </button>
                 </div>
+            </div>
             </div>
         </div>
     );

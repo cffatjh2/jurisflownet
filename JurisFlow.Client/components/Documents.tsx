@@ -5,7 +5,7 @@ import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
 import { api } from '../services/api';
 import mammoth from 'mammoth';
-import { googleDocsService } from '../services/googleDocsService';
+import { googleDocsService, type GoogleDoc } from '../services/googleDocsService';
 import { toast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { getGoogleClientId } from '../services/googleConfig';
@@ -39,6 +39,7 @@ const Documents: React.FC = () => {
   const [googleDocsAccessToken, setGoogleDocsAccessToken] = useState<string | null>(
     getOAuthAccessToken('google-docs')
   );
+  const [isSyncingGoogleDocs, setIsSyncingGoogleDocs] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkMatterId, setBulkMatterId] = useState<string>('');
   const [editCategory, setEditCategory] = useState<string>('');
@@ -75,6 +76,11 @@ const Documents: React.FC = () => {
     setIsGoogleDocsConnected(!!googleDocsAccessToken);
   }, [googleDocsAccessToken]);
 
+  const GOOGLE_DOC_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const GOOGLE_DOC_ID_TAG_PREFIX = 'source:google-doc-id:';
+  const GOOGLE_DOC_UPDATED_TAG_PREFIX = 'source:google-doc-updated:';
+  const GOOGLE_DOC_LINK_TAG_PREFIX = 'source:google-doc-link:';
+
   const getNormalizedDocumentDate = (dateString?: string | null) => {
     if (!dateString) {
       return new Date().toISOString();
@@ -83,6 +89,72 @@ const Documents: React.FC = () => {
     const date = new Date(dateString);
     return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
   };
+
+  const inferDocumentType = (mimeType?: string): DocumentFile['type'] => {
+    const mime = (mimeType || '').toLowerCase();
+    if (mime.includes('pdf')) return 'pdf';
+    if (mime.includes('word') || mime.includes('officedocument') || mime.includes('msword')) return 'docx';
+    if (mime.includes('text') || mime.includes('csv')) return 'txt';
+    if (mime.includes('image')) return 'img';
+    return 'txt';
+  };
+
+  const formatDocumentSize = (fileSize?: number) =>
+    typeof fileSize === 'number' ? `${(fileSize / 1024 / 1024).toFixed(2)} MB` : undefined;
+
+  const mapApiDocumentToDocumentFile = (doc: any): DocumentFile => ({
+    id: doc.id,
+    name: doc.name,
+    type: inferDocumentType(doc.mimeType),
+    size: formatDocumentSize(doc.fileSize),
+    fileSize: doc.fileSize,
+    updatedAt: doc.updatedAt || doc.createdAt || new Date().toISOString(),
+    matterId: doc.matterId || undefined,
+    filePath: doc.filePath || undefined,
+    downloadUrl: doc.downloadUrl || undefined,
+    mimeType: doc.mimeType || undefined,
+    description: doc.description || undefined,
+    tags: parseTags(doc.tags),
+    category: doc.category || undefined,
+    status: doc.status || undefined,
+    version: doc.version || undefined,
+    uploadedBy: doc.uploadedBy || undefined,
+    legalHoldReason: doc.legalHoldReason || undefined,
+    legalHoldPlacedAt: doc.legalHoldPlacedAt || undefined,
+    legalHoldReleasedAt: doc.legalHoldReleasedAt || undefined,
+    legalHoldPlacedBy: doc.legalHoldPlacedBy || undefined
+  });
+
+  const hasServerDocument = (doc: DocumentFile) => Boolean(doc.downloadUrl || doc.filePath);
+  const isExternalLinkDocument = (doc: DocumentFile) => !hasServerDocument(doc) && !!doc.content && /^https?:\/\//i.test(doc.content);
+  const getDocumentDownloadEndpoint = (doc: DocumentFile) => doc.downloadUrl || (hasServerDocument(doc) ? `/documents/${doc.id}/download` : null);
+  const ensureDocxFileName = (name: string) => /\.[a-z0-9]+$/i.test(name) ? name : `${name}.docx`;
+  const getGoogleDocIdTag = (googleDocId: string) => `${GOOGLE_DOC_ID_TAG_PREFIX}${googleDocId}`;
+  const getGoogleDocUpdatedTag = (updatedAt: string) => `${GOOGLE_DOC_UPDATED_TAG_PREFIX}${updatedAt}`;
+  const getGoogleDocLinkTag = (link?: string) => `${GOOGLE_DOC_LINK_TAG_PREFIX}${link || ''}`;
+
+  const withoutGoogleSyncTags = (tags?: string[]) =>
+    (tags || []).filter(tag =>
+      !tag.startsWith(GOOGLE_DOC_ID_TAG_PREFIX)
+      && !tag.startsWith(GOOGLE_DOC_UPDATED_TAG_PREFIX)
+      && !tag.startsWith(GOOGLE_DOC_LINK_TAG_PREFIX));
+
+  const buildGoogleDocTags = (existingTags: string[] | undefined, googleDocId: string, updatedAt: string, webViewLink?: string) => {
+    const nextTags = [
+      ...withoutGoogleSyncTags(existingTags),
+      getGoogleDocIdTag(googleDocId),
+      getGoogleDocUpdatedTag(updatedAt)
+    ];
+
+    if (webViewLink) {
+      nextTags.push(getGoogleDocLinkTag(webViewLink));
+    }
+
+    return Array.from(new Set(nextTags));
+  };
+
+  const findImportedGoogleDoc = (googleDocId: string) =>
+    documents.find(doc => (doc.tags || []).includes(getGoogleDocIdTag(googleDocId)));
 
   const selectAll = () => {
     if (selectedIds.length === filteredDocs.length) {
@@ -110,27 +182,116 @@ const Documents: React.FC = () => {
   };
 
   const handleGoogleDocsSync = async () => {
-    if (!googleDocsAccessToken) return;
+    if (!googleDocsAccessToken || isSyncingGoogleDocs) return;
 
+    const syncSingleGoogleDoc = async (doc: GoogleDoc) => {
+      const updatedAt = getNormalizedDocumentDate(doc.modifiedTime || doc.createdTime);
+      const existing = findImportedGoogleDoc(doc.id);
+      const nextTags = buildGoogleDocTags(existing?.tags, doc.id, updatedAt, doc.webViewLink);
+      const syncDescription = existing?.description?.trim() || 'Imported from Google Docs';
+
+      if (existing && (existing.tags || []).includes(getGoogleDocUpdatedTag(updatedAt))) {
+        if (documents.some(item => item.id === doc.id && isExternalLinkDocument(item))) {
+          deleteDocument(doc.id);
+        }
+        return 'skipped' as const;
+      }
+
+      const exportedBlob = await googleDocsService.exportDocument(
+        googleDocsAccessToken,
+        doc.id,
+        GOOGLE_DOC_EXPORT_MIME
+      );
+
+      const exportedFile = new File(
+        [exportedBlob],
+        ensureDocxFileName(doc.name),
+        {
+          type: GOOGLE_DOC_EXPORT_MIME,
+          lastModified: Date.parse(updatedAt) || Date.now()
+        }
+      );
+
+      if (existing) {
+        const uploadedVersion = await api.uploadDocumentVersion(existing.id, exportedFile);
+        const updatedMetadata = await api.updateDocument(existing.id, {
+          tags: nextTags,
+          category: existing.category || 'Google Docs',
+          description: syncDescription
+        });
+
+        addDocument(mapApiDocumentToDocumentFile({
+          ...(uploadedVersion || {}),
+          ...(updatedMetadata || {}),
+          id: existing.id,
+          tags: nextTags,
+          category: existing.category || 'Google Docs',
+          description: syncDescription
+        }));
+      } else {
+        const uploadedDoc = await api.uploadDocument(exportedFile, undefined, syncDescription);
+        if (!uploadedDoc) {
+          return 'skipped' as const;
+        }
+
+        const updatedMetadata = await api.updateDocument(uploadedDoc.id, {
+          tags: nextTags,
+          category: 'Google Docs',
+          description: syncDescription
+        });
+
+        addDocument(mapApiDocumentToDocumentFile({
+          ...uploadedDoc,
+          ...(updatedMetadata || {}),
+          tags: nextTags,
+          category: 'Google Docs',
+          description: syncDescription
+        }));
+      }
+
+      if (documents.some(item => item.id === doc.id && isExternalLinkDocument(item))) {
+        deleteDocument(doc.id);
+      }
+
+      return existing ? 'updated' as const : 'created' as const;
+    };
+
+    setIsSyncingGoogleDocs(true);
     try {
       const docs = await googleDocsService.getDocuments(googleDocsAccessToken);
-      docs.forEach(doc => {
-        const updatedAt = getNormalizedDocumentDate(doc.modifiedTime || doc.createdTime);
-        addDocument({
-          id: doc.id,
-          name: doc.name,
-          type: 'docx',
-          size: 'Google Doc',
-          updatedAt,
-          content: doc.webViewLink || ''
-        });
-      });
-      toast.success('Google Docs synced successfully!');
+      const summary = { created: 0, updated: 0, skipped: 0, failed: 0 };
+      const queue = [...docs];
+      const workerCount = Math.min(3, queue.length || 1);
+
+      await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (queue.length > 0) {
+          const nextDoc = queue.shift();
+          if (!nextDoc) {
+            return;
+          }
+
+          try {
+            const outcome = await syncSingleGoogleDoc(nextDoc);
+            summary[outcome] += 1;
+          } catch (error) {
+            summary.failed += 1;
+            console.error('Failed to sync Google Doc', nextDoc.id, error);
+          }
+        }
+      }));
+
+      if (summary.failed > 0) {
+        toast.warning(`Google Docs sync finished: ${summary.created} added, ${summary.updated} updated, ${summary.skipped} unchanged, ${summary.failed} failed.`);
+      } else {
+        toast.success(`Google Docs sync finished: ${summary.created} added, ${summary.updated} updated, ${summary.skipped} unchanged.`);
+      }
     } catch (error) {
       console.error('Google Docs sync error:', error);
       toast.error('Failed to sync Google Docs. Please reconnect.');
       clearOAuthTokens('google-docs');
       setGoogleDocsAccessToken(null);
+    } finally {
+      setIsSyncingGoogleDocs(false);
     }
   };
 
@@ -142,24 +303,7 @@ const Documents: React.FC = () => {
     }
   };
 
-  const buildUploadedDocument = (uploadedDoc: any): DocumentFile => ({
-    id: uploadedDoc.id,
-    name: uploadedDoc.name,
-    type: uploadedDoc.mimeType?.includes('pdf') ? 'pdf' :
-      uploadedDoc.mimeType?.includes('word') ? 'docx' :
-        uploadedDoc.mimeType?.includes('text') ? 'txt' : 'img',
-    size: `${(uploadedDoc.fileSize / 1024 / 1024).toFixed(2)} MB`,
-    updatedAt: uploadedDoc.createdAt,
-    matterId: uploadedDoc.matterId || undefined,
-    filePath: uploadedDoc.filePath,
-    category: uploadedDoc.category || undefined,
-    status: uploadedDoc.status || undefined,
-    version: uploadedDoc.version || undefined,
-    legalHoldReason: uploadedDoc.legalHoldReason || undefined,
-    legalHoldPlacedAt: uploadedDoc.legalHoldPlacedAt || undefined,
-    legalHoldReleasedAt: uploadedDoc.legalHoldReleasedAt || undefined,
-    legalHoldPlacedBy: uploadedDoc.legalHoldPlacedBy || undefined
-  });
+  const buildUploadedDocument = (uploadedDoc: any): DocumentFile => mapApiDocumentToDocumentFile(uploadedDoc);
 
   const finalizeUploadedDocument = (uploadedDoc: any) => {
     const doc = buildUploadedDocument(uploadedDoc);
@@ -269,9 +413,14 @@ const Documents: React.FC = () => {
     }
 
     try {
-      // If file has filePath, load from server
-      if (doc.filePath) {
-        const response = await api.downloadDocument(doc.id);
+      // If file is stored on the server, load it from there.
+      if (hasServerDocument(doc)) {
+        const downloadEndpoint = getDocumentDownloadEndpoint(doc);
+        if (!downloadEndpoint) {
+          throw new Error('Document download failed');
+        }
+
+        const response = await api.downloadFile(downloadEndpoint);
         if (!response) {
           throw new Error('Document download failed');
         }
@@ -327,6 +476,11 @@ const Documents: React.FC = () => {
   };
 
   const handleRequestSignature = (doc: DocumentFile) => {
+    if (!hasServerDocument(doc)) {
+      toast.warning('Sync Google Docs first so the file is imported before requesting a signature.');
+      return;
+    }
+
     setSignatureDocumentId(doc.id);
     setSignatureMatterId(doc.matterId || undefined);
     setShowSignatureModal(true);
@@ -347,7 +501,7 @@ const Documents: React.FC = () => {
   };
 
   const openVersionHistory = async (doc: DocumentFile) => {
-    if (!doc.filePath) {
+    if (!hasServerDocument(doc)) {
       toast.warning('Version history is available for uploaded documents only.');
       return;
     }
@@ -390,7 +544,8 @@ const Documents: React.FC = () => {
       if (updated) {
         updateDocument(versionDoc.id, {
           name: updated.name,
-          filePath: updated.filePath,
+          downloadUrl: updated.downloadUrl,
+          mimeType: updated.mimeType,
           fileSize: updated.fileSize,
           size: updated.fileSize ? `${(updated.fileSize / 1024 / 1024).toFixed(2)} MB` : undefined,
           version: updated.version,
@@ -412,7 +567,8 @@ const Documents: React.FC = () => {
       if (updated) {
         updateDocument(versionDoc.id, {
           name: updated.name,
-          filePath: updated.filePath,
+          downloadUrl: updated.downloadUrl,
+          mimeType: updated.mimeType,
           fileSize: updated.fileSize,
           size: updated.fileSize ? `${(updated.fileSize / 1024 / 1024).toFixed(2)} MB` : undefined,
           version: updated.version,
@@ -555,27 +711,7 @@ const Documents: React.FC = () => {
         if (cancelled) return;
         if (res) {
           // Map to DocumentFile shape
-          const mapped: DocumentFile[] = res.map((d: any) => ({
-            id: d.id,
-            name: d.name,
-            description: d.description,
-            tags: parseTags(d.tags),
-            type: d.mimeType?.includes('pdf') ? 'pdf' :
-              d.mimeType?.includes('word') ? 'docx' :
-                d.mimeType?.includes('text') ? 'txt' : 'img',
-            size: typeof d.fileSize === 'number' ? `${(d.fileSize / 1024 / 1024).toFixed(2)} MB` : undefined,
-            fileSize: d.fileSize,
-            updatedAt: d.updatedAt || d.createdAt,
-            matterId: d.matterId || undefined,
-            filePath: d.filePath,
-            category: d.category || undefined,
-            status: d.status || undefined,
-            version: d.version || undefined,
-            legalHoldReason: d.legalHoldReason || undefined,
-            legalHoldPlacedAt: d.legalHoldPlacedAt || undefined,
-            legalHoldReleasedAt: d.legalHoldReleasedAt || undefined,
-            legalHoldPlacedBy: d.legalHoldPlacedBy || undefined
-          }));
+          const mapped: DocumentFile[] = res.map((d: any) => mapApiDocumentToDocumentFile(d));
           setSearchResults(mapped);
         } else {
           setSearchResults([]);
@@ -631,6 +767,12 @@ const Documents: React.FC = () => {
   }, [documents]);
 
   const handleDelete = async (doc: DocumentFile) => {
+    if (!hasServerDocument(doc)) {
+      deleteDocument(doc.id);
+      toast.success('Unsynced document card removed.');
+      return;
+    }
+
     const ok = await confirm({
       title: 'Delete file',
       message: `Are you sure you want to delete "${doc.name}"?`,
@@ -655,8 +797,13 @@ const Documents: React.FC = () => {
 
   const handleDownload = async (doc: DocumentFile) => {
     try {
-      if (doc.filePath) {
-        const response = await api.downloadDocument(doc.id);
+      if (hasServerDocument(doc)) {
+        const downloadEndpoint = getDocumentDownloadEndpoint(doc);
+        if (!downloadEndpoint) {
+          throw new Error('File download failed');
+        }
+
+        const response = await api.downloadFile(downloadEndpoint);
         if (!response) {
           throw new Error('File download failed');
         }
@@ -665,6 +812,16 @@ const Documents: React.FC = () => {
         const link = document.createElement('a');
         link.href = url;
         link.download = response.filename || doc.name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      } else if (isExternalLinkDocument(doc) && googleDocsAccessToken) {
+        const blob = await googleDocsService.exportDocument(googleDocsAccessToken, doc.id, GOOGLE_DOC_EXPORT_MIME);
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = ensureDocxFileName(doc.name);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -831,8 +988,9 @@ const Documents: React.FC = () => {
           {isGoogleDocsConnected && (
             <button
               onClick={handleGoogleDocsSync}
-              className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700">
-              <FileText className="w-4 h-4" /> Sync Google Docs
+              disabled={isSyncingGoogleDocs}
+              className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+              <FileText className="w-4 h-4" /> {isSyncingGoogleDocs ? 'Syncing Google Docs...' : 'Sync Google Docs'}
             </button>
           )}
           {!isGoogleDocsConnected && (
@@ -851,18 +1009,18 @@ const Documents: React.FC = () => {
       </div>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="mt-5 grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
         {/* Sidebar Tree */}
-        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Scope</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{activeScopeLabel}</p>
+            <p className="mt-1.5 text-base font-semibold text-slate-900">{activeScopeLabel}</p>
             <p className="mt-1 text-sm text-slate-500">{currentMatterDocumentCount} documents in this view</p>
           </div>
           <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 mt-5 px-2">Locations</div>
           <button
             onClick={() => setSelectedMatter(null)}
-            className={`flex items-center justify-between gap-2 px-3 py-3 rounded-2xl text-sm font-medium transition-colors text-left w-full ${selectedMatter === null
+            className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-left w-full ${selectedMatter === null
               ? 'bg-slate-50 border border-primary-200 text-primary-700 shadow-sm'
               : 'hover:bg-slate-50 text-slate-600'
               }`}
@@ -879,7 +1037,7 @@ const Documents: React.FC = () => {
             <button
               key={m.id}
               onClick={() => setSelectedMatter(m.id)}
-              className={`flex items-center justify-between gap-2 px-3 py-3 rounded-2xl text-sm transition-colors text-left truncate w-full ${selectedMatter === m.id
+              className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-sm transition-colors text-left truncate w-full ${selectedMatter === m.id
                 ? 'bg-slate-50 border border-primary-200 text-primary-700 shadow-sm'
                 : 'hover:bg-slate-50 text-slate-600'
                 }`}
@@ -894,11 +1052,11 @@ const Documents: React.FC = () => {
         </div>
 
         {/* File Grid */}
-        <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-          <div className="mb-5 flex flex-col gap-3 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Current View</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">{activeScopeLabel}</h2>
+              <h2 className="mt-1.5 text-lg font-semibold text-slate-900">{activeScopeLabel}</h2>
               <p className="mt-1 text-sm text-slate-500">
                 Showing {filteredDocs.length} of {totalDocuments} documents
                 {searchTerm.length >= 2 ? ` matching "${searchQuery.trim()}"` : ''}.
@@ -961,8 +1119,11 @@ const Documents: React.FC = () => {
                   Upload a file
                 </button>
                 {isGoogleDocsConnected ? (
-                  <button onClick={handleGoogleDocsSync} className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700">
-                    Sync Google Docs
+                  <button
+                    onClick={handleGoogleDocsSync}
+                    disabled={isSyncingGoogleDocs}
+                    className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    {isSyncingGoogleDocs ? 'Syncing Google Docs...' : 'Sync Google Docs'}
                   </button>
                 ) : (
                   <button onClick={handleGoogleDocsConnect} className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700">
@@ -972,12 +1133,12 @@ const Documents: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,260px))] gap-3">
               {filteredDocs.map(doc => (
-                <div key={doc.id} className="group flex h-full flex-col rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg">
-                  <div className="flex flex-col gap-3 mb-3">
-                    <div className="flex justify-between items-start gap-3">
-                      <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                <div key={doc.id} className="group flex h-full min-h-[245px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                  <div className="mb-2.5 flex flex-col gap-2.5">
+                    <div className="flex justify-between items-start gap-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(doc.id)}
@@ -986,39 +1147,43 @@ const Documents: React.FC = () => {
                         />
                         Select
                       </label>
-                      <div className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${getDocumentTypeClasses(doc)}`}>
-                        <FileText className="w-5 h-5" />
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-xl border ${getDocumentTypeClasses(doc)}`}>
+                        <FileText className="w-4 h-4" />
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${getDocumentTypeClasses(doc)}`}>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${getDocumentTypeClasses(doc)}`}>
                         {getDocumentTypeLabel(doc)}
                       </span>
                       {doc.category && (
-                        <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700">{doc.category}</span>
+                        <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{doc.category}</span>
                       )}
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => handleOpen(doc)} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-950">
+                    <div className="flex flex-wrap gap-1.5">
+                      <button onClick={() => handleOpen(doc)} className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-950">
                         Open
                       </button>
-                      <button onClick={() => handleDownload(doc)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                      <button onClick={() => handleDownload(doc)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
                         Download
                       </button>
                       <button
                         onClick={() => handleRequestSignature(doc)}
-                        className="rounded-xl border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                        className="rounded-lg border border-indigo-200 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50"
                       >
                         Signature
                       </button>
                       <button
                         onClick={() => openVersionHistory(doc)}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
                       >
                         Versions
                       </button>
                       <button
                         onClick={() => {
+                          if (!hasServerDocument(doc)) {
+                            toast.warning('Sync Google Docs first so the file is imported before assigning it to a matter.');
+                            return;
+                          }
                           setEditingDoc(doc);
                           setEditMatterId(doc.matterId || '');
                           setEditTags((doc.tags || []).join(', '));
@@ -1026,7 +1191,7 @@ const Documents: React.FC = () => {
                           setEditStatus(doc.status || '');
                           setEditLegalHoldReason(doc.legalHoldReason || '');
                         }}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
                         title="Assign to matter"
                       >
                         Assign
@@ -1034,16 +1199,16 @@ const Documents: React.FC = () => {
                       <button
                         onClick={() => handleDelete(doc)}
                         disabled={doc.status === DocumentStatus.OnLegalHold}
-                        className="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-50 disabled:hover:bg-transparent"
+                        className="flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:hover:bg-transparent"
                         title="Delete"
                       >
                         <Trash2 className="w-3 h-3" /> Delete
                       </button>
                     </div>
                   </div>
-                  <h3 className="line-clamp-2 text-base font-semibold text-slate-900" title={doc.name}>{doc.name}</h3>
-                  <div className="mt-2 flex-1 space-y-2">
-                    <p className="line-clamp-2 text-sm text-slate-500" title={getDocumentSubtitle(doc)}>
+                  <h3 className="line-clamp-2 text-sm font-semibold text-slate-900" title={doc.name}>{doc.name}</h3>
+                  <div className="mt-1.5 flex-1 space-y-1.5">
+                    <p className="line-clamp-2 text-xs text-slate-500" title={getDocumentSubtitle(doc)}>
                       {getDocumentSubtitle(doc)}
                     </p>
                     {doc.matterId && (
@@ -1056,13 +1221,13 @@ const Documents: React.FC = () => {
                         🏷️ {doc.tags.join(', ')}
                       </div>
                     )}
-                    <div className="flex justify-between items-center gap-3 text-xs text-slate-500">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1 text-[11px] text-slate-500">
                       <span className="truncate">{doc.matterId ? getMatterName(doc.matterId) : 'Unassigned'}</span>
                       <span>{doc.size || 'Unknown size'}</span>
-                      <span>{formatDate(doc.updatedAt)}</span>
+                      <span className="col-span-2">{formatDate(doc.updatedAt)}</span>
                     </div>
                     {doc.version && (
-                      <div className="text-[10px] text-slate-400 mt-1">Version v{doc.version}</div>
+                      <div className="mt-1 text-[10px] text-slate-400">Version v{doc.version}</div>
                     )}
                     {(doc.category || doc.status) && (
                       <div className="hidden mt-1 flex items-center gap-1">

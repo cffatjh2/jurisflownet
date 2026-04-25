@@ -111,10 +111,8 @@ namespace JurisFlow.Server.Services
                 await EnsureSupabaseBucketAsync(cancellationToken);
 
                 var client = CreateSupabaseClient();
-                var exists = await ExistsInSupabaseAsync(normalizedPath, cancellationToken);
-                var method = exists ? HttpMethod.Put : HttpMethod.Post;
-
-                using var request = CreateSupabaseRequest(method, BuildObjectRoute("object", normalizedPath));
+                using var request = CreateSupabaseRequest(HttpMethod.Post, BuildObjectRoute("object", normalizedPath));
+                request.Headers.TryAddWithoutValidation("x-upsert", "true");
                 request.Content = BuildBinaryContent(content, contentType);
 
                 using var response = await client.SendAsync(request, cancellationToken);
@@ -139,7 +137,7 @@ namespace JurisFlow.Server.Services
                 await EnsureSupabaseBucketAsync(cancellationToken);
 
                 var client = CreateSupabaseClient();
-                using var request = CreateSupabaseRequest(HttpMethod.Get, BuildObjectRoute("object/authenticated", normalizedPath));
+                using var request = CreateSupabaseRequest(HttpMethod.Get, BuildObjectRoute("object", normalizedPath));
                 using var response = await client.SendAsync(request, cancellationToken);
 
                 if (response.StatusCode == HttpStatusCode.NotFound)

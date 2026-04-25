@@ -52,10 +52,6 @@ public class AppFileStorageTests
             {
                 Content = JsonContent("""{"id":"jurisflow-files"}""")
             },
-            new HttpResponseMessage(HttpStatusCode.BadRequest)
-            {
-                Content = JsonContent("""{"statusCode":"404","error":"not_found","message":"Object not found"}""")
-            },
             new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = JsonContent("""{"Key":"uploads/tenant-test-1/document.pdf"}""")
@@ -65,10 +61,43 @@ public class AppFileStorageTests
 
         await storage.SaveBytesAsync("uploads/tenant-test-1/document.pdf", Encoding.UTF8.GetBytes("hello"), "application/pdf");
 
-        Assert.Equal(3, handler.Requests.Count);
-        var uploadRequest = handler.Requests[2];
+        Assert.Equal(2, handler.Requests.Count);
+        var uploadRequest = handler.Requests[1];
         Assert.Equal(HttpMethod.Post, uploadRequest.Method);
         Assert.Equal("https://example.supabase.co/storage/v1/object/jurisflow-files/uploads/tenant-test-1/document.pdf", uploadRequest.RequestUri?.ToString());
+    }
+
+    [Fact]
+    public async Task ReadBytesAsync_UsesPrivateObjectEndpointForSupabase()
+    {
+        using var env = new FakeWebHostEnvironment();
+        var handler = new QueueingHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent("""{"id":"jurisflow-files"}""")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("hello"))
+            });
+
+        var storage = CreateStorage(env, handler);
+
+        var bytes = await storage.ReadBytesAsync("uploads/tenant-test-1/document.pdf");
+
+        Assert.Equal("hello", Encoding.UTF8.GetString(bytes));
+        Assert.Collection(
+            handler.Requests,
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("https://example.supabase.co/storage/v1/bucket/jurisflow-files", request.RequestUri?.ToString());
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("https://example.supabase.co/storage/v1/object/jurisflow-files/uploads/tenant-test-1/document.pdf", request.RequestUri?.ToString());
+            });
     }
 
     private static AppFileStorage CreateStorage(FakeWebHostEnvironment env, QueueingHttpMessageHandler handler)
