@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useRef } from 'react';
 import { startEmailAccountOAuth } from '../services/emailAccountOAuthService';
 import { getCurrentAppReturnPath } from '../services/returnPath';
+import { useConfirm } from './ConfirmDialog';
 
 type ConnectedEmailAccount = {
   id: string;
@@ -25,6 +26,7 @@ const Communications: React.FC = () => {
   const { t } = useTranslation();
   const { user } = useAuth();
   const { messages, addMessage, markMessageRead, clients, matters } = useData();
+  const { confirm } = useConfirm();
   const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'sent'>('inbox');
   const [showCompose, setShowCompose] = useState(false);
@@ -219,7 +221,14 @@ const Communications: React.FC = () => {
 
     const targetAccount = emailAccounts.find(account => account.id === targetAccountId);
     const label = targetAccount?.emailAddress || 'this mailbox';
-    if (!window.confirm(`Disconnect ${label}? Synced emails from this mailbox will be removed from JurisFlow.`)) {
+    const ok = await confirm({
+      title: 'Disconnect mailbox',
+      message: `Disconnect ${label}? Synced emails from this mailbox will be removed from JurisFlow.`,
+      confirmText: 'Disconnect',
+      cancelText: 'Cancel',
+      variant: 'danger'
+    });
+    if (!ok) {
       return;
     }
 
