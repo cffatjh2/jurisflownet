@@ -1133,48 +1133,51 @@ const Documents: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,260px))] gap-3">
+            <div
+              className="grid justify-start gap-2.5"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(178px, 196px))' }}
+            >
               {filteredDocs.map(doc => (
-                <div key={doc.id} className="group flex h-full min-h-[245px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
-                  <div className="mb-2.5 flex flex-col gap-2.5">
+                <div key={doc.id} className="group flex h-full min-h-[205px] flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                  <div className="mb-2 flex flex-col gap-2">
                     <div className="flex justify-between items-start gap-2">
-                      <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                      <label className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500">
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(doc.id)}
                           onChange={() => toggleSelected(doc.id)}
-                          className="rounded border-slate-300"
+                          className="h-3.5 w-3.5 rounded border-slate-300"
                         />
                         Select
                       </label>
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-xl border ${getDocumentTypeClasses(doc)}`}>
-                        <FileText className="w-4 h-4" />
+                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg border ${getDocumentTypeClasses(doc)}`}>
+                        <FileText className="w-3.5 h-3.5" />
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${getDocumentTypeClasses(doc)}`}>
+                    <div className="flex flex-wrap gap-1">
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${getDocumentTypeClasses(doc)}`}>
                         {getDocumentTypeLabel(doc)}
                       </span>
                       {doc.category && (
-                        <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{doc.category}</span>
+                        <span className="max-w-[120px] truncate rounded-full border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-700">{doc.category}</span>
                       )}
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button onClick={() => handleOpen(doc)} className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-950">
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => handleOpen(doc)} className="rounded-md bg-slate-900 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-950">
                         Open
                       </button>
-                      <button onClick={() => handleDownload(doc)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
+                      <button onClick={() => handleDownload(doc)} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-50">
                         Download
                       </button>
                       <button
                         onClick={() => handleRequestSignature(doc)}
-                        className="rounded-lg border border-indigo-200 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50"
+                        className="rounded-md border border-indigo-200 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-50"
                       >
                         Signature
                       </button>
                       <button
                         onClick={() => openVersionHistory(doc)}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                        className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-50"
                       >
                         Versions
                       </button>
@@ -1191,7 +1194,7 @@ const Documents: React.FC = () => {
                           setEditStatus(doc.status || '');
                           setEditLegalHoldReason(doc.legalHoldReason || '');
                         }}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                        className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-50"
                         title="Assign to matter"
                       >
                         Assign
@@ -1199,16 +1202,16 @@ const Documents: React.FC = () => {
                       <button
                         onClick={() => handleDelete(doc)}
                         disabled={doc.status === DocumentStatus.OnLegalHold}
-                        className="flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:hover:bg-transparent"
+                        className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:hover:bg-transparent"
                         title="Delete"
                       >
-                        <Trash2 className="w-3 h-3" /> Delete
+                        <Trash2 className="h-2.5 w-2.5" /> Delete
                       </button>
                     </div>
                   </div>
-                  <h3 className="line-clamp-2 text-sm font-semibold text-slate-900" title={doc.name}>{doc.name}</h3>
-                  <div className="mt-1.5 flex-1 space-y-1.5">
-                    <p className="line-clamp-2 text-xs text-slate-500" title={getDocumentSubtitle(doc)}>
+                  <h3 className="line-clamp-1 text-[13px] font-semibold text-slate-900" title={doc.name}>{doc.name}</h3>
+                  <div className="mt-1 flex-1 space-y-1">
+                    <p className="line-clamp-1 text-[11px] text-slate-500" title={getDocumentSubtitle(doc)}>
                       {getDocumentSubtitle(doc)}
                     </p>
                     {doc.matterId && (
@@ -1221,13 +1224,13 @@ const Documents: React.FC = () => {
                         🏷️ {doc.tags.join(', ')}
                       </div>
                     )}
-                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
                       <span className="truncate">{doc.matterId ? getMatterName(doc.matterId) : 'Unassigned'}</span>
                       <span>{doc.size || 'Unknown size'}</span>
                       <span className="col-span-2">{formatDate(doc.updatedAt)}</span>
                     </div>
                     {doc.version && (
-                      <div className="mt-1 text-[10px] text-slate-400">Version v{doc.version}</div>
+                      <div className="mt-0.5 text-[9px] text-slate-400">Version v{doc.version}</div>
                     )}
                     {(doc.category || doc.status) && (
                       <div className="hidden mt-1 flex items-center gap-1">
