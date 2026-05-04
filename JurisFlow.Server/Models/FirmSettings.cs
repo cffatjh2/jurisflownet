@@ -17,6 +17,7 @@ namespace JurisFlow.Server.Models
         public string? ZipCode { get; set; }
         public string? Phone { get; set; }
         public string? Website { get; set; }
+        public string? LogoDataUrl { get; set; }
         public string? IntegrationsJson { get; set; }
 
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

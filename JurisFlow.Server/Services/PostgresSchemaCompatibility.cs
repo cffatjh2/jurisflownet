@@ -129,12 +129,14 @@ namespace JurisFlow.Server.Services
                 "ZipCode" text NULL,
                 "Phone" text NULL,
                 "Website" text NULL,
+                "LogoDataUrl" text NULL,
                 "IntegrationsJson" text NULL,
                 "UpdatedAt" timestamp with time zone NOT NULL DEFAULT now(),
                 "TenantId" text NULL
             );
             """,
             """ALTER TABLE IF EXISTS "FirmSettings" ADD COLUMN IF NOT EXISTS "TenantId" text NULL;""",
+            """ALTER TABLE IF EXISTS "FirmSettings" ADD COLUMN IF NOT EXISTS "LogoDataUrl" text NULL;""",
             """
             CREATE TABLE IF NOT EXISTS "Invoices" (
                 "Id" text PRIMARY KEY,

@@ -3855,6 +3855,9 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("LedesFirmId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("LogoDataUrl")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Phone")
                         .HasColumnType("TEXT");
 

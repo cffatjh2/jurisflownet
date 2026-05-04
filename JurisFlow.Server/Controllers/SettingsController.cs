@@ -102,6 +102,7 @@ namespace JurisFlow.Server.Controllers
             settings.ZipCode = dto.ZipCode;
             settings.Phone = dto.Phone;
             settings.Website = dto.Website;
+            settings.LogoDataUrl = dto.LogoDataUrl;
             settings.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();

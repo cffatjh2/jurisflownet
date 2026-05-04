@@ -26,6 +26,7 @@ import GlobalTimer from './GlobalTimer';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DataProvider, useData } from '../contexts/DataContext';
+import { api } from '../services/api';
 
 type ActiveTab =
   | 'dashboard'
@@ -63,6 +64,18 @@ const TAB_ORDER: ActiveTab[] = [
   'employees',
   'trust'
 ];
+
+const COMPANY_LOGO_STORAGE_PREFIX = 'jf_company_logo_data_url';
+const COMPANY_LOGO_MODE_STORAGE_PREFIX = 'jf_company_logo_mode';
+const MAX_COMPANY_LOGO_BYTES = 1024 * 1024;
+
+type CompanyLogoMode = 'placeholder' | 'default';
+
+const getTenantStorageKey = (prefix: string) => {
+  if (typeof window === 'undefined') return prefix;
+  const tenantSlug = localStorage.getItem('tenant_slug') || 'default';
+  return `${prefix}:${tenantSlug}`;
+};
 
 const isActiveTab = (value: unknown): value is ActiveTab =>
   typeof value === 'string' && TAB_ORDER.includes(value as ActiveTab);
@@ -199,6 +212,32 @@ const MainLayout = () => {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [companyLogoDataUrl, setCompanyLogoDataUrl] = useState('');
+  const [companyLogoMode, setCompanyLogoMode] = useState<CompanyLogoMode>('placeholder');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    setCompanyLogoDataUrl(localStorage.getItem(getTenantStorageKey(COMPANY_LOGO_STORAGE_PREFIX)) || '');
+    setCompanyLogoMode(
+      localStorage.getItem(getTenantStorageKey(COMPANY_LOGO_MODE_STORAGE_PREFIX)) === 'default'
+        ? 'default'
+        : 'placeholder'
+    );
+
+    api.settings.getFirm()
+      .then((settings: any) => {
+        const logoDataUrl = typeof settings?.logoDataUrl === 'string' ? settings.logoDataUrl : '';
+        if (!logoDataUrl) return;
+
+        setCompanyLogoDataUrl(logoDataUrl);
+        localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_STORAGE_PREFIX), logoDataUrl);
+        localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_MODE_STORAGE_PREFIX), 'placeholder');
+      })
+      .catch(() => {
+        // The local logo cache still keeps the sidebar usable if firm settings are unavailable.
+      });
+  }, []);
 
   const activateTab = (tab: ActiveTab) => {
     const safeTab = !staffTabEnabled && tab === 'employees' ? 'dashboard' : tab;
@@ -206,6 +245,65 @@ const MainLayout = () => {
     setMountedTabs(prev => (prev.includes(safeTab) ? prev : [...prev, safeTab]));
     setIsMobileNavOpen(false);
     setShowProfileMenu(false);
+  };
+
+  const handleCompanyLogoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      window.alert('Please choose an image file.');
+      return;
+    }
+
+    if (file.size > MAX_COMPANY_LOGO_BYTES) {
+      window.alert('Please choose a logo image under 1 MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl) return;
+
+      setCompanyLogoDataUrl(dataUrl);
+      setCompanyLogoMode('placeholder');
+      localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_STORAGE_PREFIX), dataUrl);
+      localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_MODE_STORAGE_PREFIX), 'placeholder');
+      saveCompanyLogo(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveCompanyLogo = async (logoDataUrl: string | null) => {
+    try {
+      const settings = await api.settings.getFirm();
+      if (!settings?.firmName) return;
+
+      await api.settings.updateFirm({
+        ...settings,
+        logoDataUrl
+      });
+    } catch {
+      // Keep the local logo immediately available even if the firm settings write is denied/offline.
+    }
+  };
+
+  const restoreDefaultLogo = () => {
+    setCompanyLogoDataUrl('');
+    setCompanyLogoMode('default');
+    localStorage.removeItem(getTenantStorageKey(COMPANY_LOGO_STORAGE_PREFIX));
+    localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_MODE_STORAGE_PREFIX), 'default');
+    saveCompanyLogo(null);
+  };
+
+  const showLogoPlaceholder = () => {
+    setCompanyLogoDataUrl('');
+    setCompanyLogoMode('placeholder');
+    localStorage.removeItem(getTenantStorageKey(COMPANY_LOGO_STORAGE_PREFIX));
+    localStorage.setItem(getTenantStorageKey(COMPANY_LOGO_MODE_STORAGE_PREFIX), 'placeholder');
   };
 
   useEffect(() => {
@@ -356,11 +454,68 @@ const MainLayout = () => {
       )}
 
       <aside className={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] flex-col border-r border-slate-700 bg-slate-900 transition-transform duration-200 md:static md:z-20 md:w-64 md:max-w-none ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        <div className="h-16 flex items-center px-6 mb-2">
-          <Scale className="w-6 h-6 text-white mr-3" />
-          <span className="text-xl font-bold text-white tracking-tight">
-            Juris<span className="text-primary-500">Flow</span>
-          </span>
+        <div className="h-16 flex items-center gap-3 px-4 mb-2">
+          <input
+            id="company-logo-upload"
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleCompanyLogoChange}
+          />
+          {companyLogoDataUrl ? (
+            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/70 px-3 py-2">
+              <label htmlFor="company-logo-upload" className="flex min-w-0 flex-1 cursor-pointer items-center">
+                <img src={companyLogoDataUrl} alt="Company logo" className="h-9 max-w-full object-contain" />
+              </label>
+              <button
+                type="button"
+                onClick={restoreDefaultLogo}
+                title="Restore JurisFlow logo"
+                aria-label="Restore JurisFlow logo"
+                className="rounded-md p-1.5 text-gray-400 hover:bg-slate-700 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : companyLogoMode === 'default' ? (
+            <div className="flex min-w-0 flex-1 items-center">
+              <label htmlFor="company-logo-upload" className="flex min-w-0 flex-1 cursor-pointer items-center">
+                <Scale className="w-6 h-6 text-white mr-3" />
+                <span className="truncate text-xl font-bold text-white tracking-tight">
+                  Juris<span className="text-primary-500">Flow</span>
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={showLogoPlaceholder}
+                title="Show logo upload slot"
+                aria-label="Show logo upload slot"
+                className="rounded-md p-1.5 text-gray-400 hover:bg-slate-800 hover:text-white"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <label htmlFor="company-logo-upload" className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-600 bg-slate-800/60 px-3 py-2 text-slate-300 hover:border-slate-500 hover:bg-slate-800">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-slate-400">
+                  <Plus className="h-4 w-4" />
+                </div>
+                <span className="truncate text-sm font-semibold uppercase tracking-wide text-slate-200">
+                  your logo is here
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={restoreDefaultLogo}
+                title="Restore JurisFlow logo"
+                aria-label="Restore JurisFlow logo"
+                className="rounded-md p-1.5 text-gray-400 hover:bg-slate-800 hover:text-white"
+              >
+                <Scale className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setIsMobileNavOpen(false)}

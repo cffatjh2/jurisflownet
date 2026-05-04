@@ -390,7 +390,8 @@ const Settings: React.FC = () => {
     state: '',
     zipCode: '',
     phone: '',
-    website: ''
+    website: '',
+    logoDataUrl: ''
   });
 
   // Billing Settings State
@@ -679,7 +680,8 @@ const Settings: React.FC = () => {
           state: data.state ?? '',
           zipCode: data.zipCode ?? '',
           phone: data.phone ?? '',
-          website: data.website ?? ''
+          website: data.website ?? '',
+          logoDataUrl: data.logoDataUrl ?? ''
         });
       }
     } catch (error) {
@@ -1215,7 +1217,8 @@ const Settings: React.FC = () => {
           state: saved.state ?? firmSettings.state,
           zipCode: saved.zipCode ?? firmSettings.zipCode,
           phone: saved.phone ?? firmSettings.phone,
-          website: saved.website ?? firmSettings.website
+          website: saved.website ?? firmSettings.website,
+          logoDataUrl: saved.logoDataUrl ?? firmSettings.logoDataUrl
         });
       }
       toast.success('Firm settings saved.');

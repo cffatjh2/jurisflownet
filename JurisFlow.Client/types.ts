@@ -2515,6 +2515,7 @@ export interface FirmSettings {
   zipCode: string;
   phone: string;
   website?: string;
+  logoDataUrl?: string;
 }
 
 // Staff Performance Metrics
